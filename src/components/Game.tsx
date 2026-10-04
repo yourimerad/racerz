@@ -5,7 +5,9 @@ import { type Input, NO_INPUT } from "@/game/car";
 import { type Race, createRace, stepRace, standings } from "@/game/race";
 import { formatTime, render } from "@/game/render";
 import { type ThemeId, THEMES, THEME_ORDER } from "@/game/themes";
+import { type Profile, type RaceReport, NEW_PROFILE, formatMoney, settleRace } from "@/game/garage";
 import DebugPanel from "./DebugPanel";
+import Lobby from "./Lobby";
 import styles from "./Game.module.css";
 
 const KEYS: Record<string, keyof Input> = {
@@ -30,9 +32,18 @@ export default function Game() {
   const [records, setRecords] = useState<Partial<Record<ThemeId, number>>>({});
   const record = records[mode] ?? null;
   const [debug, setDebug] = useState(false);
+  // Money, cars, skins and tiers: session only.
+  const [profile, setProfile] = useState<Profile>(NEW_PROFILE);
+  const profileRef = useRef(profile);
+  const [report, setReport] = useState<RaceReport | null>(null);
+  useEffect(() => {
+    profileRef.current = profile;
+  }, [profile]);
 
   const start = useCallback(() => {
-    raceRef.current = createRace(mode);
+    const p = profileRef.current;
+    const car = p.cars[p.selected] ?? { level: 1, skin: "factory" as const };
+    raceRef.current = createRace(mode, { model: p.selected, skin: car.skin, level: car.level });
     inputRef.current = { ...NO_INPUT };
     setScreen("race");
   }, [mode]);
@@ -98,6 +109,12 @@ export default function Game() {
         const best = race.cars[0].bestLap;
         const id = race.theme.id;
         if (best !== null) setRecords((r) => (best < (r[id] ?? Infinity) ? { ...r, [id]: best } : r));
+        const player = race.cars[0];
+        const place = standings(race).indexOf(player) + 1;
+        const settled = settleRace(profileRef.current, place, player.offTime / Math.max(1, player.finishTime ?? race.time), player.hits);
+        profileRef.current = settled.profile;
+        setProfile(settled.profile);
+        setReport(settled.report);
         // Let the other cars run a bit before showing the podium.
         setTimeout(() => {
           if (raceRef.current !== race) return; // restarted with R meanwhile
@@ -142,34 +159,7 @@ export default function Game() {
       )}
 
       {screen === "menu" && (
-        <div className={styles.overlay}>
-          <h1 className={styles.title}>RACERZ</h1>
-          <p>Course 2D — 3 tours contre 3 pilotes.</p>
-          <div className={styles.modes} role="radiogroup" aria-label="Environnement">
-            {THEME_ORDER.map((id, i) => (
-              <button
-                key={id}
-                role="radio"
-                aria-checked={mode === id}
-                className={mode === id ? `${styles.mode} ${styles.modeOn}` : styles.mode}
-                style={{ "--accent": THEMES[id].colors.accent } as React.CSSProperties}
-                onClick={() => setMode(id)}
-              >
-                <span className={styles.modeEmoji}>{THEMES[id].emoji}</span>
-                <span>{THEMES[id].name}</span>
-                <kbd>{i + 1}</kbd>
-              </button>
-            ))}
-          </div>
-          <ul className={styles.help}>
-            <li><kbd>↑</kbd>/<kbd>W</kbd>/<kbd>Z</kbd> accélérer · <kbd>↓</kbd>/<kbd>S</kbd> freiner</li>
-            <li><kbd>←</kbd><kbd>→</kbd> / <kbd>A</kbd><kbd>Q</kbd><kbd>D</kbd> tourner · <kbd>Espace</kbd> frein à main (drift)</li>
-            <li>Restez sur l&apos;asphalte : le hors-piste ralentit (et la lave encore plus).</li>
-            <li><kbd>1</kbd>–<kbd>4</kbd> choisir le mode · <kbd>R</kbd> recommencer · <kbd>H</kbd> panneau debug</li>
-          </ul>
-          {record !== null && <p>Record du tour ({THEMES[mode].name}) : {formatTime(record)}</p>}
-          <button className={styles.cta} onClick={start}>Démarrer (Entrée / Espace)</button>
-        </div>
+        <Lobby profile={profile} setProfile={setProfile} mode={mode} setMode={setMode} record={record} onStart={start} />
       )}
 
       {screen === "results" && (
@@ -185,10 +175,28 @@ export default function Game() {
               </li>
             ))}
           </ol>
+          {report && (
+            <div className={styles.report}>
+              <div className={styles.earned}>+{formatMoney(report.earned)}</div>
+              <ul>
+                {report.checks.map((c) => (
+                  <li key={c.label} className={c.ok ? styles.ok : styles.ko}>{c.ok ? "✔" : "✘"} {c.label}</li>
+                ))}
+              </ul>
+              <p>
+                {report.levelUp !== null
+                  ? `🎉 Niveau ${report.levelUp} atteint !`
+                  : report.palier
+                    ? "Palier gagné !"
+                    : "Pas de palier cette fois."}{" "}
+                Solde : {formatMoney(profile.money)}
+              </p>
+            </div>
+          )}
           {record !== null && <p>Record du tour ({THEMES[mode].name}) : {formatTime(record)}</p>}
           <div className={styles.actions}>
             <button className={styles.cta} onClick={start}>Rejouer (Entrée)</button>
-            <button className={`${styles.cta} ${styles.ghost}`} onClick={() => setScreen("menu")}>Changer de mode</button>
+            <button className={`${styles.cta} ${styles.ghost}`} onClick={() => setScreen("menu")}>Lobby / changer de mode</button>
           </div>
         </div>
       )}

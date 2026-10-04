@@ -18,6 +18,9 @@ export type Theme = {
     kerbA: string;
     kerbB: string;
     kerbWidth: number;
+    /** Barrier band: base and alternating segments. */
+    barrierA: string;
+    barrierB: string;
     dash: string;
     minimap: string;
     accent: string;
@@ -37,7 +40,7 @@ export const THEMES: Record<ThemeId, Theme> = {
     name: "Désert",
     emoji: "🏜️",
     colors: {
-      ground: "#c9a466", offtrack: "#dcbc7f", asphalt: "#8c8175", kerbA: "#ece0c8", kerbB: "#b8754e", kerbWidth: 18,
+      ground: "#c9a466", offtrack: "#dcbc7f", asphalt: "#8c8175", kerbA: "#ece0c8", kerbB: "#b8754e", kerbWidth: 18, barrierA: "#5a3d22", barrierB: "#c99a5b",
       dash: "rgba(255,245,225,0.35)", minimap: "rgba(255,236,200,0.75)", accent: "#ffb347", skid: "90,65,40",
     },
     scene: SCENES.desert,
@@ -50,7 +53,7 @@ export const THEMES: Record<ThemeId, Theme> = {
     name: "Campagne",
     emoji: "🌾",
     colors: {
-      ground: "#2f6b3a", offtrack: "#3a7d44", asphalt: "#4a4e57", kerbA: "#f1f1f1", kerbB: "#d62828", kerbWidth: 18,
+      ground: "#2f6b3a", offtrack: "#3a7d44", asphalt: "#4a4e57", kerbA: "#f1f1f1", kerbB: "#d62828", kerbWidth: 18, barrierA: "#b8bec7", barrierB: "#6b717a",
       dash: "rgba(255,255,255,0.55)", minimap: "rgba(255,255,255,0.6)", accent: "#ffd166", skid: "20,20,20",
     },
     scene: SCENES.countryside,
@@ -62,7 +65,7 @@ export const THEMES: Record<ThemeId, Theme> = {
     name: "Pôle Nord",
     emoji: "🐧",
     colors: {
-      ground: "#dfe9f1", offtrack: "#eef4f9", asphalt: "#9fcbe6", kerbA: "#ffffff", kerbB: "#d2e4f1", kerbWidth: 30,
+      ground: "#dfe9f1", offtrack: "#eef4f9", asphalt: "#9fcbe6", kerbA: "#ffffff", kerbB: "#d2e4f1", kerbWidth: 30, barrierA: "#ffffff", barrierB: "#a9c8e0",
       dash: "rgba(255,255,255,0.7)", minimap: "rgba(120,180,230,0.85)", accent: "#8fd3ff", skid: "70,110,150",
     },
     scene: SCENES.northpole,
@@ -75,7 +78,7 @@ export const THEMES: Record<ThemeId, Theme> = {
     name: "Volcan",
     emoji: "🌋",
     colors: {
-      ground: "#1c1514", offtrack: "#2b2321", asphalt: "#3b3534", kerbA: "#26201f", kerbB: "#ff5a1f", kerbWidth: 18,
+      ground: "#1c1514", offtrack: "#2b2321", asphalt: "#3b3534", kerbA: "#26201f", kerbB: "#ff5a1f", kerbWidth: 18, barrierA: "#141011", barrierB: "#ff6a2a",
       dash: "rgba(255,170,120,0.55)", minimap: "rgba(255,140,90,0.75)", accent: "#ff7a3d", skid: "10,8,8",
     },
     scene: SCENES.volcano,

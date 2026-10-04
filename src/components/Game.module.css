@@ -42,3 +42,33 @@
 .debug input { width: 100%; accent-color: #9ef; }
 .debug output { text-align: right; color: #fff; }
 .debug button { margin-top: 6px; width: 100%; padding: 5px; border: 1px solid #9ef8; border-radius: 6px; background: transparent; color: #9ef; cursor: pointer; }
+.lobby { justify-content: flex-start; overflow-y: auto; gap: 10px; padding: 18px 20px 28px; }
+.lobbyHead { width: min(1180px, 100%); display: flex; align-items: center; justify-content: space-between; }
+.logo { font-size: 44px; font-weight: 900; font-style: italic; color: #ffd166; text-shadow: 4px 4px 0 #d62828; }
+.money { font: 700 22px var(--font-geist-mono), monospace; background: #0006; padding: 8px 16px; border-radius: 999px; border: 1px solid #ffd16688; }
+.lobbyGrid { width: min(1180px, 100%); display: grid; grid-template-columns: 1fr 1.25fr; gap: 16px; text-align: left; }
+@media (max-width: 900px) { .lobbyGrid { grid-template-columns: 1fr; } }
+.panel { background: #0005; border: 1px solid #fff2; border-radius: 16px; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+.panel h2 { font-size: 18px; letter-spacing: 0.04em; text-transform: uppercase; color: #ffd166; }
+.sub { font-size: 13px; opacity: 0.8; }
+.cars { display: flex; flex-direction: column; gap: 10px; }
+.carCard { display: grid; grid-template-columns: 64px 1fr auto; align-items: center; gap: 12px; padding: 8px 12px; border-radius: 12px; border: 2px solid #fff2; background: #0004; }
+.carOn { border-color: #ffd166; box-shadow: 0 0 14px #ffd16655; }
+.carInfo { display: flex; flex-direction: column; gap: 3px; font-size: 13px; }
+.carInfo strong { font-size: 15px; }
+.preview { display: block; }
+.stat { display: grid; grid-template-columns: 70px 1fr; align-items: center; gap: 6px; font-size: 11px; opacity: 0.9; }
+.bar { height: 6px; border-radius: 3px; background: #fff2; overflow: hidden; }
+.bar span { display: block; height: 100%; background: linear-gradient(90deg, #06d6a0, #ffd166); }
+.small { padding: 8px 12px; border-radius: 999px; border: 0; background: #e63946; color: #fff; font-weight: 700; cursor: pointer; white-space: nowrap; }
+.small:disabled { background: #fff2; color: #fffa; cursor: default; }
+.skins { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.skin { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 4px; border-radius: 12px; border: 2px solid #fff2; background: #0004; color: #fff; cursor: pointer; font-size: 12px; font-weight: 600; }
+.skin small { opacity: 0.75; font-weight: 500; }
+.skin:disabled { opacity: 0.45; cursor: default; }
+.skinOn { border-color: #06d6a0; }
+.report { background: #0006; border-radius: 12px; padding: 10px 18px; min-width: 300px; }
+.report ul { list-style: none; padding: 0; margin: 6px 0; text-align: left; font-size: 14px; }
+.earned { font: 800 30px var(--font-geist-mono), monospace; color: #ffd166; }
+.ok { color: #06d6a0; }
+.ko { color: #ff8a8a; }

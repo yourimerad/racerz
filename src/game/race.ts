@@ -1,4 +1,5 @@
 import { type Car, type Input, type Surface, NO_INPUT, CAR_RADIUS, PHYS, stepCar, slipOf, speedOf } from "./car";
+import { type ModelId, type SkinId, MODELS, carStats, skinOf } from "./garage";
 import type { Scene } from "./scenery";
 import { type Theme, type ThemeId, THEMES, sceneFor } from "./themes";
 import { type Track, buildTrack, locate } from "./track";
@@ -21,6 +22,8 @@ export type Race = {
   skids: Skid[];
 };
 
+export type PlayerCar = { model: ModelId; skin: SkinId; level: number };
+
 const ROSTER = [
   { name: "Toi", color: "#e63946", skill: 1 },
   { name: "Blaze", color: "#f4a261", skill: 0.93 },
@@ -28,7 +31,7 @@ const ROSTER = [
   { name: "Nitro", color: "#457b9d", skill: 0.87 },
 ];
 
-export function createRace(themeId: ThemeId): Race {
+export function createRace(themeId: ThemeId, player: PlayerCar): Race {
   const track = buildTrack();
   const theme = THEMES[themeId];
   const n = track.path.length;
@@ -39,8 +42,13 @@ export function createRace(themeId: ThemeId): Race {
     const p = track.path[idx], t = track.tangents[idx];
     const side = slot % 2 === 0 ? -1 : 1;
     const pos = add(p, scale(vec(-t.y, t.x), side * track.width * 0.22));
+    const isPlayer = i === 0;
+    const stats = isPlayer ? carStats(player.model, player.level) : { speed: r.skill, accel: 1, grip: 1 };
+    const skin = isPlayer ? skinOf(player.model, player.skin) : { name: r.name, body: r.color, accent: r.color };
     return {
-      id: i, name: r.name, color: r.color, isPlayer: i === 0, skill: r.skill,
+      id: i, name: isPlayer ? `Toi (${MODELS[player.model].name})` : r.name, color: skin.body, isPlayer,
+      model: isPlayer ? player.model : "gt", skin, skill: stats.speed, accelMul: stats.accel, gripMul: stats.grip,
+      offTime: 0, hits: 0, hitCooldown: 0,
       pos, vel: vec(0, 0), angle: Math.atan2(t.y, t.x),
       progress: idx - n, lastIndex: idx, lap: 0, lapStart: 0, bestLap: null, finishTime: null, surface: "track",
     };
@@ -101,10 +109,28 @@ function surfaceAt(race: Race, p: Vec, dist: number): Surface {
   return "offtrack";
 }
 
-function updateProgress(race: Race, car: Car) {
+/** Barriers run along both edges at track.barrier from the centerline: push back and bounce. */
+function hitBarrier(race: Race, car: Car, index: number, dist: number) {
+  const limit = race.track.barrier - CAR_RADIUS * 0.7;
+  if (dist <= limit) return;
+  const p = race.track.path[index];
+  const n = scale(sub(car.pos, p), 1 / dist);
+  car.pos = add(p, scale(n, limit));
+  const vn = dot(car.vel, n);
+  if (vn <= 0) return;
+  car.vel = scale(sub(car.vel, scale(n, vn * 1.3)), 0.95);
+  if (vn > 80 && car.hitCooldown <= 0) {
+    car.hits++;
+    car.hitCooldown = 0.5;
+  }
+}
+
+function updateProgress(race: Race, car: Car, dt: number) {
   const n = race.track.path.length;
   const loc = locate(race.track, car.pos);
-  car.surface = surfaceAt(race, car.pos, loc.dist);
+  hitBarrier(race, car, loc.index, loc.dist);
+  car.surface = surfaceAt(race, car.pos, Math.min(loc.dist, race.track.barrier));
+  if (race.phase === "racing" && car.finishTime === null && car.surface !== "track") car.offTime += dt;
   let delta = loc.index - car.lastIndex;
   if (delta > n / 2) delta -= n;
   if (delta < -n / 2) delta += n;
@@ -142,6 +168,7 @@ export function stepRace(race: Race, playerInput: Input, dt: number) {
     }
     const before = car.pos;
     stepCar(car, input, dt, race.theme.phys);
+    car.hitCooldown -= dt;
     containCar(race, car);
     if (slipOf(car) > 140 || (input.brake && speedOf(car) > 300)) {
       const back = scale(fromAngle(car.angle), -14);
@@ -150,7 +177,7 @@ export function stepRace(race: Race, playerInput: Input, dt: number) {
   }
   for (let i = 0; i < race.cars.length; i++)
     for (let j = i + 1; j < race.cars.length; j++) collide(race.cars[i], race.cars[j]);
-  for (const car of race.cars) updateProgress(race, car);
+  for (const car of race.cars) updateProgress(race, car, dt);
 
   for (const s of race.skids) s.life -= dt * 0.25;
   race.skids = race.skids.filter((s) => s.life > 0).slice(-600);

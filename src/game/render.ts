@@ -1,4 +1,5 @@
-import { CAR_LENGTH, CAR_WIDTH, speedOf } from "./car";
+import { speedOf } from "./car";
+import { drawCarSprite } from "./carArt";
 import type { FxView } from "./fx";
 import { staticLayer, tracePath } from "./layer";
 import { type Race, TOTAL_LAPS, standings } from "./race";
@@ -10,26 +11,6 @@ export function formatTime(t: number | null): string {
   const m = Math.floor(t / 60);
   const s = t - m * 60;
   return `${m}:${s.toFixed(3).padStart(6, "0")}`;
-}
-
-function drawCar(ctx: CanvasRenderingContext2D, x: number, y: number, angle: number, color: string) {
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate(angle);
-  ctx.fillStyle = "rgba(0,0,0,0.3)";
-  ctx.fillRect(-CAR_LENGTH / 2 + 3, -CAR_WIDTH / 2 + 3, CAR_LENGTH, CAR_WIDTH);
-  ctx.fillStyle = "#111";
-  for (const [wx, wy] of [[-12, -12], [12, -12], [-12, 12], [12, 12]]) ctx.fillRect(wx - 5, wy - 3, 10, 6);
-  ctx.fillStyle = color;
-  ctx.beginPath();
-  ctx.roundRect(-CAR_LENGTH / 2, -CAR_WIDTH / 2, CAR_LENGTH, CAR_WIDTH, 6);
-  ctx.fill();
-  ctx.fillStyle = "rgba(20,30,50,0.85)";
-  ctx.fillRect(2, -CAR_WIDTH / 2 + 4, 9, CAR_WIDTH - 8);
-  ctx.fillRect(-14, -CAR_WIDTH / 2 + 5, 6, CAR_WIDTH - 10);
-  ctx.fillStyle = "rgba(255,255,255,0.8)";
-  ctx.fillRect(-4, -2, 6, 4);
-  ctx.restore();
 }
 
 function drawMinimap(ctx: CanvasRenderingContext2D, race: Race, w: number) {
@@ -145,7 +126,7 @@ export function render(ctx: CanvasRenderingContext2D, race: Race, w: number, h: 
     ctx.stroke();
   }
 
-  for (const car of race.cars) drawCar(ctx, car.pos.x, car.pos.y, car.angle, car.color);
+  for (const car of race.cars) drawCarSprite(ctx, car.model, car.skin, car.pos.x, car.pos.y, car.angle);
   theme.fx.air?.(ctx, scene, view);
   ctx.restore();
 

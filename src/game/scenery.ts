@@ -2,7 +2,7 @@ import { locate, type Track } from "./track";
 import { vec } from "./vec";
 
 // Static scenery for each environment mode. Everything is generated from a fixed seed,
-// so a mode always looks the same, and every prop is kept clear of the asphalt.
+// so a mode always looks the same; props stay beyond the barriers, lava stops at the kerbs.
 
 type Ctx = CanvasRenderingContext2D;
 export type Rng = () => number;
@@ -33,11 +33,17 @@ export function mulberry32(seed: number): Rng {
 }
 
 const TAU = Math.PI * 2;
-/** Clearance between a prop's radius and the track edge (kerbs included). */
-const MARGIN = 30;
+/** Gap kept between anything and the barriers / kerbs. */
+const MARGIN = 14;
 const range = (rng: Rng, a: number, b: number) => a + rng() * (b - a);
 
+/** Props stay beyond the barriers. */
 function isClear(track: Track, x: number, y: number, r: number) {
+  return locate(track, vec(x, y)).dist > track.barrier + MARGIN + r;
+}
+
+/** Lava may reach into the runoff, right up to the kerbs. */
+function lavaClear(track: Track, x: number, y: number, r: number) {
   return locate(track, vec(x, y)).dist > track.width / 2 + MARGIN + r;
 }
 
@@ -666,7 +672,7 @@ function volcano(track: Track): Scene {
   for (let i = 0; i < 900 && lava.length < 26; i++) {
     const a = rng() * TAU, dd = Math.sqrt(rng()) * (crater.r - 40), r = range(rng, 24, 62);
     const x = crater.x + Math.cos(a) * dd, y = crater.y + Math.sin(a) * dd;
-    if (dd + r < crater.r - 20 && isClear(track, x, y, r)) lava.push({ x, y, r });
+    if (dd + r < crater.r - 20 && lavaClear(track, x, y, r)) lava.push({ x, y, r });
   }
   // Lava rivers: meandering chains of discs that stop before reaching the track.
   for (let k = 0; k < 4; k++) {
@@ -675,7 +681,7 @@ function volcano(track: Track): Scene {
     let { x, y } = start, a = rng() * TAU;
     for (let s = 0; s < 30; s++) {
       const r = range(rng, 20, 32);
-      if (!isClear(track, x, y, r) || x < b.minX || x > b.maxX || y < b.minY || y > b.maxY) break;
+      if (!lavaClear(track, x, y, r) || x < b.minX || x > b.maxX || y < b.minY || y > b.maxY) break;
       lava.push({ x, y, r });
       a += range(rng, -0.5, 0.5);
       x += Math.cos(a) * 30;

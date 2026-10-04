@@ -6,6 +6,8 @@ export type Track = {
   /** Unit tangent at each sample. */
   tangents: Vec[];
   width: number;
+  /** Distance from the centerline to the barriers on both sides (runoff between kerb and barrier). */
+  barrier: number;
   bounds: { minX: number; minY: number; maxX: number; maxY: number };
 };
 
@@ -45,6 +47,7 @@ export function buildTrack(width = 190): Track {
     path,
     tangents,
     width,
+    barrier: width / 2 + 55,
     bounds: { minX: Math.min(...xs) - m, minY: Math.min(...ys) - m, maxX: Math.max(...xs) + m, maxY: Math.max(...ys) + m },
   };
 }

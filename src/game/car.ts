@@ -1,3 +1,4 @@
+import type { ModelId, Skin } from "./garage";
 import { type Vec, vec, add, scale, dot, fromAngle, clamp } from "./vec";
 
 export type Input = { throttle: boolean; brake: boolean; left: boolean; right: boolean; handbrake: boolean };
@@ -11,8 +12,12 @@ export type Car = {
   pos: Vec;
   vel: Vec;
   angle: number;
-  /** AI top-speed multiplier (player = 1). */
+  model: ModelId;
+  skin: Skin;
+  /** Top-speed multiplier (AI difficulty, or the player's car and level). */
   skill: number;
+  accelMul: number;
+  gripMul: number;
   // Race bookkeeping (see race.ts).
   progress: number;
   lastIndex: number;
@@ -21,6 +26,10 @@ export type Car = {
   bestLap: number | null;
   finishTime: number | null;
   surface: Surface;
+  /** Seconds spent off the asphalt, and barrier impacts (clean-race check). */
+  offTime: number;
+  hits: number;
+  hitCooldown: number;
 };
 
 export const CAR_LENGTH = 40;
@@ -72,7 +81,7 @@ export function stepCar(car: Car, input: Input, dt: number, mods: PhysMods) {
   const maxMul = s === "track" ? 1 : PHYS.grassMax * (s === "lava" ? mods.lavaMax : mods.offMax);
   const maxSpeed = PHYS.maxSpeed * car.skill * maxMul;
 
-  if (input.throttle) vF += PHYS.accel * dt * (vF < maxSpeed ? 1 : 0);
+  if (input.throttle) vF += PHYS.accel * car.accelMul * dt * (vF < maxSpeed ? 1 : 0);
   if (input.brake) vF -= (vF > 0 ? PHYS.brake : PHYS.reverseAccel) * dt;
   vF -= vF * drag * dt;
   if (vF > maxSpeed) vF += (maxSpeed - vF) * Math.min(1, 3 * dt);
@@ -84,7 +93,7 @@ export function stepCar(car: Car, input: Input, dt: number, mods: PhysMods) {
   const turnPenalty = 1 - 0.35 * clamp(Math.abs(vF) / PHYS.maxSpeed, 0, 1);
   car.angle += steer * PHYS.turnRate * authority * turnPenalty * dt * (input.handbrake ? 1.35 : 1);
 
-  vL *= Math.exp(-(input.handbrake ? PHYS.driftGrip : PHYS.grip) * gripMul * dt);
+  vL *= Math.exp(-(input.handbrake ? PHYS.driftGrip : PHYS.grip) * gripMul * car.gripMul * dt);
   if (input.handbrake) vF -= vF * 0.8 * dt;
 
   const nf = fromAngle(car.angle);
