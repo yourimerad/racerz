@@ -52,7 +52,10 @@ export default function Lobby({ profile, setProfile, mode, setMode, record, onSt
   return (
     <div className={`${styles.overlay} ${styles.lobby}`}>
       <header className={styles.lobbyHead}>
-        <h1 className={styles.logo}>RACERZ</h1>
+        <div>
+          <h1 className={styles.logo}>RACERZ</h1>
+          <p className={styles.credit}>créé par Andrea Tranchant</p>
+        </div>
         <div className={styles.money}>💰 {formatMoney(profile.money)}</div>
       </header>
 

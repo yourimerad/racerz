@@ -61,7 +61,7 @@ export type Profile = {
   skins: SkinId[];
 };
 
-export const NEW_PROFILE: Profile = { money: 0, cars: { gt: { level: 1, paliers: 0, skin: "factory" } }, selected: "gt", skins: ["factory"] };
+export const NEW_PROFILE: Profile = { money: 1_000_000, cars: { gt: { level: 1, paliers: 0, skin: "factory" } }, selected: "gt", skins: ["factory"] };
 
 export const PAYOUTS = [20_000, 1_500, 1_000]; // 1st, 2nd, 3rd
 export const PALIERS_PER_LEVEL = 5;
@@ -75,7 +75,7 @@ export function carStats(model: ModelId, level: number) {
   return { speed: m.speed * (1 + 0.02 * l), accel: m.accel * (1 + 0.03 * l), grip: m.grip };
 }
 
-export const formatMoney = (n: number) => `${n.toLocaleString("fr-FR")} cr`;
+export const formatMoney = (n: number) => `${n.toLocaleString("fr-FR")} €`;
 
 export type RaceReport = {
   place: number;

@@ -72,3 +72,4 @@
 .earned { font: 800 30px var(--font-geist-mono), monospace; color: #ffd166; }
 .ok { color: #06d6a0; }
 .ko { color: #ff8a8a; }
+.credit { font-size: 14px; font-style: italic; opacity: 0.85; margin-top: 2px; }
