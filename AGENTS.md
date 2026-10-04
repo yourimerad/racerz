@@ -12,6 +12,7 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 Jeu web de course 2D (canvas) sur circuit, déployé sur Vercel (projet `solidz/racerz`, prod : https://racerz-jet.vercel.app).
 
-- `src/game/` — logique pure, sans React : `track.ts` (circuit Catmull-Rom fermé, `locate`), `car.ts` (physique arcade), `race.ts` (grille, IA, collisions, tours/classement), `render.ts` (dessin canvas + HUD + minimap).
-- `src/components/Game.tsx` — boucle à pas fixe (120 Hz), clavier/tactile, écrans menu/résultats ; record du tour dans `localStorage`.
+- `src/game/` — logique pure, sans React : `track.ts` (circuit Catmull-Rom fermé, `locate`), `car.ts` (`PHYS` de base + `PhysMods` par surface `track|offtrack|lava`), `race.ts` (grille, IA adaptée à l'adhérence, collisions, surface, tours/classement), `render.ts` (caméra, HUD, minimap, panneau debug).
+- 4 modes d'environnement (désert, campagne, pôle Nord, volcan) : `themes.ts` (table `THEMES` : couleurs, multiplicateurs de physique par-dessus `PHYS`, décor, effets), `scenery.ts` (décor déterministe mulberry32, toujours à `dist > width/2 + 30 + r` de la piste ; mares de lave du volcan), `layer.ts` (couche fixe sol+piste+décor peinte une fois par mode sur un canvas hors écran), `fx.ts` (animé par frame : lave, braises, fumée, flocons, poussière, nuages).
+- `src/components/Game.tsx` — boucle à pas fixe (120 Hz), clavier/tactile, menu (choix du mode, touches 1–4), résultats (rejouer / changer de mode), H = debug ; record du tour par mode dans `localStorage`.
 - Progression = index d'échantillon de la ligne médiane, déroulé ; un tour = `path.length` échantillons.

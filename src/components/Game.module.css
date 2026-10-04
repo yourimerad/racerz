@@ -19,3 +19,16 @@
 .pad { display: flex; gap: 14px; pointer-events: auto; }
 .pad button { width: 72px; height: 72px; border-radius: 50%; border: 2px solid #fff6; background: #0005; color: #fff; font-size: 26px; touch-action: none; }
 @media (pointer: coarse) { .touch { display: flex; } }
+.modes { display: grid; grid-template-columns: repeat(4, minmax(120px, 1fr)); gap: 12px; margin: 6px 0; }
+@media (max-width: 640px) { .modes { grid-template-columns: repeat(2, 1fr); } }
+.mode {
+  display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 14px 10px; border-radius: 14px;
+  border: 2px solid #fff3; background: #0004; color: #fff; font-size: 16px; font-weight: 700; cursor: pointer;
+}
+.mode kbd { font-size: 11px; opacity: 0.6; font-family: var(--font-geist-mono), monospace; }
+.mode:hover { border-color: #fff8; }
+.modeOn { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 25%, #0006); box-shadow: 0 0 18px color-mix(in srgb, var(--accent) 60%, transparent); }
+.modeEmoji { font-size: 34px; line-height: 1; }
+.actions { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+.ghost { background: transparent; border: 2px solid #fff8; }
+.ghost:hover { background: #fff2; }

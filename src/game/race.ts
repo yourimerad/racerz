@@ -1,4 +1,6 @@
-import { type Car, type Input, NO_INPUT, CAR_RADIUS, stepCar, slipOf, speedOf } from "./car";
+import { type Car, type Input, type Surface, NO_INPUT, CAR_RADIUS, PHYS, stepCar, slipOf, speedOf } from "./car";
+import type { Scene } from "./scenery";
+import { type Theme, type ThemeId, THEMES, sceneFor } from "./themes";
 import { type Track, buildTrack, locate } from "./track";
 import { type Vec, vec, add, sub, scale, len, dot, angleDiff, clamp, fromAngle } from "./vec";
 
@@ -10,6 +12,8 @@ export type Skid = { a: Vec; b: Vec; life: number };
 
 export type Race = {
   track: Track;
+  theme: Theme;
+  scene: Scene;
   cars: Car[];
   phase: Phase;
   /** Seconds since the green light (negative during countdown). */
@@ -24,8 +28,9 @@ const ROSTER = [
   { name: "Nitro", color: "#457b9d", skill: 0.87 },
 ];
 
-export function createRace(): Race {
+export function createRace(themeId: ThemeId): Race {
   const track = buildTrack();
+  const theme = THEMES[themeId];
   const n = track.path.length;
   const cars: Car[] = ROSTER.map((r, i) => {
     // 2-wide staggered grid behind the line; player starts at the back.
@@ -37,31 +42,36 @@ export function createRace(): Race {
     return {
       id: i, name: r.name, color: r.color, isPlayer: i === 0, skill: r.skill,
       pos, vel: vec(0, 0), angle: Math.atan2(t.y, t.x),
-      progress: idx - n, lastIndex: idx, lap: 0, lapStart: 0, bestLap: null, finishTime: null, onTrack: true,
+      progress: idx - n, lastIndex: idx, lap: 0, lapStart: 0, bestLap: null, finishTime: null, surface: "track",
     };
   });
-  return { track, cars, phase: "countdown", time: -COUNTDOWN, skids: [] };
+  return { track, theme, scene: sceneFor(theme, track), cars, phase: "countdown", time: -COUNTDOWN, skids: [] };
 }
 
 function aiInput(race: Race, car: Car): Input {
   const { track } = race;
   const n = track.path.length;
+  const grip = race.theme.phys.trackGrip;
   const speed = speedOf(car);
-  const look = 10 + Math.floor(Math.max(0, speed) / 40);
-  // Each bot holds a slightly different racing line.
-  const lane = ((car.id % 3) - 1) * track.width * 0.15;
+  // Low grip: look further ahead and slow down much more for bends.
+  const look = Math.round((10 + Math.max(0, speed) / 40) * (1 + (1 - grip) * 0.8));
+  const lane = ((car.id % 3) - 1) * track.width * 0.15 * grip;
   const i = (car.lastIndex + look) % n;
   const t = track.tangents[i];
   const target = add(track.path[i], scale(vec(-t.y, t.x), lane));
   const to = sub(target, car.pos);
-  const diff = angleDiff(car.angle, Math.atan2(to.y, to.x));
-  // Brake ahead of sharp corners.
+  const bearing = Math.atan2(to.y, to.x);
+  // On ice, steer the velocity rather than the nose so the slide is caught early.
+  const velDir = len(car.vel) > 60 ? Math.atan2(car.vel.y, car.vel.x) : car.angle;
+  const diff = angleDiff(car.angle, bearing) + angleDiff(velDir, bearing) * (1 - grip) * 0.8;
   const far = track.tangents[(car.lastIndex + look * 2) % n];
   const bend = Math.abs(angleDiff(Math.atan2(t.y, t.x), Math.atan2(far.y, far.x)));
-  const tooFast = speed > 520 * car.skill * (1 - clamp(bend, 0, 1.2) * 0.45);
+  const cornerK = 0.45 + (1 - grip) * 0.55;
+  const limit = PHYS.maxSpeed * car.skill * Math.max(0.3, 1 - clamp(bend, 0, 1.2) * cornerK) * (car.surface === "track" ? 1 : 0.6);
+  const tooFast = speed > limit;
   return {
     throttle: !tooFast && Math.abs(diff) < 1.2,
-    brake: tooFast && speed > 200,
+    brake: tooFast && speed > limit + 40,
     left: diff < -0.04,
     right: diff > 0.04,
     handbrake: false,
@@ -85,10 +95,16 @@ function collide(a: Car, b: Car) {
   }
 }
 
+function surfaceAt(race: Race, p: Vec, dist: number): Surface {
+  if (dist < race.track.width / 2) return "track";
+  for (const l of race.scene.lava) if ((l.x - p.x) ** 2 + (l.y - p.y) ** 2 < (l.r * 0.9) ** 2) return "lava";
+  return "offtrack";
+}
+
 function updateProgress(race: Race, car: Car) {
   const n = race.track.path.length;
   const loc = locate(race.track, car.pos);
-  car.onTrack = loc.dist < race.track.width / 2;
+  car.surface = surfaceAt(race, car.pos, loc.dist);
   let delta = loc.index - car.lastIndex;
   if (delta > n / 2) delta -= n;
   if (delta < -n / 2) delta += n;
@@ -125,7 +141,7 @@ export function stepRace(race: Race, playerInput: Input, dt: number) {
       else input = aiInput(race, car);
     }
     const before = car.pos;
-    stepCar(car, input, dt);
+    stepCar(car, input, dt, race.theme.phys);
     containCar(race, car);
     if (slipOf(car) > 140 || (input.brake && speedOf(car) > 300)) {
       const back = scale(fromAngle(car.angle), -14);

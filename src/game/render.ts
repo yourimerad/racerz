@@ -1,6 +1,7 @@
 import { CAR_LENGTH, CAR_WIDTH, speedOf } from "./car";
+import type { FxView } from "./fx";
+import { staticLayer, tracePath } from "./layer";
 import { type Race, TOTAL_LAPS, standings } from "./race";
-import type { Track } from "./track";
 
 const VIEW_SIZE = 1000; // world units visible across the smaller screen dimension
 
@@ -9,62 +10,6 @@ export function formatTime(t: number | null): string {
   const m = Math.floor(t / 60);
   const s = t - m * 60;
   return `${m}:${s.toFixed(3).padStart(6, "0")}`;
-}
-
-function tracePath(ctx: CanvasRenderingContext2D, track: Track) {
-  ctx.beginPath();
-  track.path.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
-  ctx.closePath();
-}
-
-let grassPattern: CanvasPattern | null = null;
-function grass(ctx: CanvasRenderingContext2D): CanvasPattern | string {
-  if (grassPattern) return grassPattern;
-  const c = document.createElement("canvas");
-  c.width = c.height = 64;
-  const g = c.getContext("2d");
-  if (!g) return "#3a7d44";
-  g.fillStyle = "#3a7d44";
-  g.fillRect(0, 0, 64, 64);
-  g.fillStyle = "#357240";
-  g.fillRect(0, 0, 32, 32);
-  g.fillRect(32, 32, 32, 32);
-  grassPattern = ctx.createPattern(c, "repeat");
-  return grassPattern ?? "#3a7d44";
-}
-
-function drawTrack(ctx: CanvasRenderingContext2D, track: Track) {
-  ctx.lineJoin = ctx.lineCap = "round";
-  // Kerbs: alternating red/white band just outside the asphalt.
-  tracePath(ctx, track);
-  ctx.lineWidth = track.width + 18;
-  ctx.strokeStyle = "#f1f1f1";
-  ctx.stroke();
-  ctx.setLineDash([30, 30]);
-  ctx.strokeStyle = "#d62828";
-  ctx.stroke();
-  ctx.setLineDash([]);
-  ctx.lineWidth = track.width;
-  ctx.strokeStyle = "#4a4e57";
-  ctx.stroke();
-  ctx.lineWidth = 4;
-  ctx.setLineDash([40, 40]);
-  ctx.strokeStyle = "rgba(255,255,255,0.55)";
-  ctx.stroke();
-  ctx.setLineDash([]);
-
-  // Checkered start/finish line at sample 0.
-  const p = track.path[0], t = track.tangents[0];
-  ctx.save();
-  ctx.translate(p.x, p.y);
-  ctx.rotate(Math.atan2(t.y, t.x));
-  const sq = 12, rows = Math.ceil(track.width / sq);
-  for (let c = 0; c < 2; c++)
-    for (let r = 0; r < rows; r++) {
-      ctx.fillStyle = (r + c) % 2 ? "#111" : "#fff";
-      ctx.fillRect(c * sq - sq, -track.width / 2 + r * sq, sq, sq);
-    }
-  ctx.restore();
 }
 
 function drawCar(ctx: CanvasRenderingContext2D, x: number, y: number, angle: number, color: string) {
@@ -102,7 +47,7 @@ function drawMinimap(ctx: CanvasRenderingContext2D, race: Race, w: number) {
   ctx.scale(s, s);
   tracePath(ctx, track);
   ctx.lineWidth = track.width * 0.6;
-  ctx.strokeStyle = "rgba(255,255,255,0.6)";
+  ctx.strokeStyle = race.theme.colors.minimap;
   ctx.stroke();
   for (const car of race.cars) {
     ctx.fillStyle = car.color;
@@ -122,6 +67,7 @@ function drawHud(ctx: CanvasRenderingContext2D, race: Race, w: number, h: number
   ctx.font = "600 15px ui-monospace, monospace";
   ctx.textBaseline = "top";
   const lines = [
+    `MODE ${race.theme.name}`,
     `POS  ${pos}/${race.cars.length}`,
     `TOUR ${lap}/${TOTAL_LAPS}`,
     `TEMPS ${formatTime(race.phase === "countdown" ? null : player.finishTime ?? race.time - player.lapStart)}`,
@@ -131,15 +77,22 @@ function drawHud(ctx: CanvasRenderingContext2D, race: Race, w: number, h: number
   ctx.beginPath();
   ctx.roundRect(12, 12, 210, lines.length * 22 + 14, 10);
   ctx.fill();
-  ctx.fillStyle = "#fff";
-  lines.forEach((l, i) => ctx.fillText(l, 24, 20 + i * 22));
+  lines.forEach((l, i) => {
+    ctx.fillStyle = i === 0 ? race.theme.colors.accent : "#fff";
+    ctx.fillText(l, 24, 20 + i * 22);
+  });
 
   const kmh = Math.round(Math.abs(speedOf(player)) * 0.45);
   ctx.textAlign = "right";
   ctx.textBaseline = "bottom";
+  ctx.fillStyle = "#fff";
+  ctx.lineWidth = 4;
+  ctx.strokeStyle = "rgba(0,0,0,0.55)";
   ctx.font = "700 44px ui-monospace, monospace";
+  ctx.strokeText(String(kmh), w - 70, h - 18);
   ctx.fillText(String(kmh), w - 70, h - 18);
   ctx.font = "600 14px ui-monospace, monospace";
+  ctx.strokeText("km/h", w - 22, h - 26);
   ctx.fillText("km/h", w - 22, h - 26);
 
   if (race.phase === "countdown" || (race.time >= 0 && race.time < 0.8)) {
@@ -151,16 +104,46 @@ function drawHud(ctx: CanvasRenderingContext2D, race: Race, w: number, h: number
     ctx.strokeStyle = "rgba(0,0,0,0.6)";
     const label = race.time < 0 ? String(n) : "GO!";
     ctx.strokeText(label, w / 2, h / 2 - 80);
-    ctx.fillStyle = race.time < 0 ? "#ffd166" : "#06d6a0";
+    ctx.fillStyle = race.time < 0 ? race.theme.colors.accent : "#06d6a0";
     ctx.fillText(label, w / 2, h / 2 - 80);
   }
   ctx.restore();
 }
 
-export function render(ctx: CanvasRenderingContext2D, race: Race, w: number, h: number) {
+const SURFACE_LABEL = { track: "piste", offtrack: "hors-piste", lava: "lave" } as const;
+
+function drawDebug(ctx: CanvasRenderingContext2D, race: Race, h: number) {
+  const m = race.theme.phys;
+  const player = race.cars[0];
+  const lines = [
+    `mode      ${race.theme.name}`,
+    `piste     adhérence ×${m.trackGrip}`,
+    `hors-piste adh ×${m.offGrip} traînée ×${m.offDrag} vmax ×${m.offMax}`,
+    `lave      traînée ×${m.lavaDrag} vmax ×${m.lavaMax}`,
+    `surface   ${SURFACE_LABEL[player.surface]}`,
+    `décor     ${race.scene.lava.length} mares de lave`,
+  ];
+  ctx.save();
+  ctx.font = "12px ui-monospace, monospace";
+  ctx.textBaseline = "top";
+  const top = h - lines.length * 17 - 30;
+  ctx.fillStyle = "rgba(0,0,0,0.6)";
+  ctx.fillRect(12, top - 8, 340, lines.length * 17 + 16);
+  ctx.fillStyle = "#9ef";
+  lines.forEach((l, i) => ctx.fillText(l, 22, top + i * 17));
+  ctx.restore();
+}
+
+export function render(ctx: CanvasRenderingContext2D, race: Race, w: number, h: number, debug: boolean) {
+  const { theme, scene, track } = race;
   const player = race.cars[0];
   const zoom = Math.min(w, h) / VIEW_SIZE;
-  ctx.fillStyle = "#2f6b3a";
+  const view: FxView = {
+    t: race.time + 10, cam: player.pos, zoom, sw: w, sh: h,
+    minX: player.pos.x - w / 2 / zoom, maxX: player.pos.x + w / 2 / zoom,
+    minY: player.pos.y - h / 2 / zoom, maxY: player.pos.y + h / 2 / zoom,
+  };
+  ctx.fillStyle = theme.colors.ground;
   ctx.fillRect(0, 0, w, h);
 
   ctx.save();
@@ -168,19 +151,18 @@ export function render(ctx: CanvasRenderingContext2D, race: Race, w: number, h: 
   ctx.scale(zoom, zoom);
   ctx.translate(-player.pos.x, -player.pos.y);
 
-  const b = race.track.bounds;
-  ctx.fillStyle = grass(ctx);
-  ctx.fillRect(b.minX, b.minY, b.maxX - b.minX, b.maxY - b.minY);
-  ctx.strokeStyle = "#8d6e63";
+  const b = track.bounds;
+  ctx.drawImage(staticLayer(theme, track, scene), b.minX, b.minY, b.maxX - b.minX, b.maxY - b.minY);
+  ctx.strokeStyle = "rgba(0,0,0,0.35)";
   ctx.lineWidth = 12;
   ctx.strokeRect(b.minX, b.minY, b.maxX - b.minX, b.maxY - b.minY);
 
-  drawTrack(ctx, race.track);
+  theme.fx.ground?.(ctx, scene, view);
 
   ctx.lineCap = "round";
   ctx.lineWidth = 6;
   for (const s of race.skids) {
-    ctx.strokeStyle = `rgba(20,20,20,${0.35 * s.life})`;
+    ctx.strokeStyle = `rgba(${theme.colors.skid},${0.35 * s.life})`;
     ctx.beginPath();
     ctx.moveTo(s.a.x, s.a.y);
     ctx.lineTo(s.b.x, s.b.y);
@@ -188,8 +170,11 @@ export function render(ctx: CanvasRenderingContext2D, race: Race, w: number, h: 
   }
 
   for (const car of race.cars) drawCar(ctx, car.pos.x, car.pos.y, car.angle, car.color);
+  theme.fx.air?.(ctx, scene, view);
   ctx.restore();
 
+  theme.fx.screen?.(ctx, view);
   drawMinimap(ctx, race, w);
   drawHud(ctx, race, w, h);
+  if (debug) drawDebug(ctx, race, h);
 }
