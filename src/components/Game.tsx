@@ -5,6 +5,7 @@ import { type Input, NO_INPUT } from "@/game/car";
 import { type Race, createRace, stepRace, standings } from "@/game/race";
 import { formatTime, render } from "@/game/render";
 import { type ThemeId, THEMES, THEME_ORDER } from "@/game/themes";
+import DebugPanel from "./DebugPanel";
 import styles from "./Game.module.css";
 
 const KEYS: Record<string, keyof Input> = {
@@ -15,7 +16,6 @@ const KEYS: Record<string, keyof Input> = {
   Space: "handbrake",
 };
 const STEP = 1 / 120;
-const bestKey = (mode: ThemeId) => `racerz:best-lap:${mode}`;
 
 type Result = { name: string; color: string; time: number | null; isPlayer: boolean };
 
@@ -25,15 +25,11 @@ export default function Game() {
   const inputRef = useRef<Input>({ ...NO_INPUT });
   const [screen, setScreen] = useState<"menu" | "race" | "results">("menu");
   const [results, setResults] = useState<Result[]>([]);
-  const [record, setRecord] = useState<number | null>(null);
   const [mode, setMode] = useState<ThemeId>("countryside");
-  const debugRef = useRef(false);
-
-  useEffect(() => {
-    const v = Number(localStorage.getItem(bestKey(mode)));
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- per-mode record from localStorage
-    setRecord(v > 0 ? v : null);
-  }, [mode]);
+  // Best lap per mode, kept for the session only.
+  const [records, setRecords] = useState<Partial<Record<ThemeId, number>>>({});
+  const record = records[mode] ?? null;
+  const [debug, setDebug] = useState(false);
 
   const start = useCallback(() => {
     raceRef.current = createRace(mode);
@@ -43,15 +39,20 @@ export default function Game() {
 
   useEffect(() => {
     const set = (e: KeyboardEvent, down: boolean) => {
-      const k = KEYS[e.code];
-      if (!k) {
-        if (!down) return;
-        if (e.code === "Enter" && screen !== "race") start();
-        if (e.code === "KeyH") debugRef.current = !debugRef.current;
+      if (down && !e.repeat) {
+        // Enter/Space start from the menu or results (Space is the handbrake while racing).
+        if ((e.code === "Enter" || e.code === "Space") && screen !== "race") {
+          e.preventDefault();
+          start();
+          return;
+        }
+        if (e.code === "KeyR" && screen !== "menu") return start();
+        if (e.code === "KeyH") return setDebug((d) => !d);
         const digit = /^(Digit|Numpad)([1-4])$/.exec(e.code);
-        if (digit && screen === "menu") setMode(THEME_ORDER[Number(digit[2]) - 1]);
-        return;
+        if (digit && screen === "menu") return setMode(THEME_ORDER[Number(digit[2]) - 1]);
       }
+      const k = KEYS[e.code];
+      if (!k) return;
       e.preventDefault();
       inputRef.current = { ...inputRef.current, [k]: down };
     };
@@ -90,19 +91,16 @@ export default function Game() {
         stepRace(race, inputRef.current, STEP);
         acc -= STEP;
       }
-      render(ctx, race, canvas.clientWidth, canvas.clientHeight, debugRef.current);
+      render(ctx, race, canvas.clientWidth, canvas.clientHeight);
 
       if (race.phase === "finished" && !resultsShown) {
         resultsShown = true;
         const best = race.cars[0].bestLap;
-        const key = bestKey(race.theme.id);
-        const prev = Number(localStorage.getItem(key)) || Infinity;
-        if (best !== null && best < prev) {
-          localStorage.setItem(key, String(best));
-          setRecord(best);
-        }
+        const id = race.theme.id;
+        if (best !== null) setRecords((r) => (best < (r[id] ?? Infinity) ? { ...r, [id]: best } : r));
         // Let the other cars run a bit before showing the podium.
         setTimeout(() => {
+          if (raceRef.current !== race) return; // restarted with R meanwhile
           setResults(standings(race).map((c) => ({ name: c.name, color: c.color, time: c.finishTime, isPlayer: c.isPlayer })));
           setScreen("results");
         }, 2500);
@@ -128,6 +126,7 @@ export default function Game() {
   return (
     <div className={styles.root}>
       <canvas ref={canvasRef} className={styles.canvas} />
+      {debug && <DebugPanel raceRef={raceRef} mode={mode} />}
 
       {screen === "race" && (
         <div className={styles.touch}>
@@ -166,10 +165,10 @@ export default function Game() {
             <li><kbd>↑</kbd>/<kbd>W</kbd>/<kbd>Z</kbd> accélérer · <kbd>↓</kbd>/<kbd>S</kbd> freiner</li>
             <li><kbd>←</kbd><kbd>→</kbd> / <kbd>A</kbd><kbd>Q</kbd><kbd>D</kbd> tourner · <kbd>Espace</kbd> frein à main (drift)</li>
             <li>Restez sur l&apos;asphalte : le hors-piste ralentit (et la lave encore plus).</li>
-            <li><kbd>1</kbd>–<kbd>4</kbd> choisir le mode · <kbd>H</kbd> panneau debug</li>
+            <li><kbd>1</kbd>–<kbd>4</kbd> choisir le mode · <kbd>R</kbd> recommencer · <kbd>H</kbd> panneau debug</li>
           </ul>
           {record !== null && <p>Record du tour ({THEMES[mode].name}) : {formatTime(record)}</p>}
-          <button className={styles.cta} onClick={start}>Démarrer (Entrée)</button>
+          <button className={styles.cta} onClick={start}>Démarrer (Entrée / Espace)</button>
         </div>
       )}
 

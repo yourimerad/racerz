@@ -41,6 +41,7 @@ export const PHYS = {
   grip: 9,
   driftGrip: 1.6,
 };
+export const PHYS_DEFAULTS = { ...PHYS };
 
 export type Surface = "track" | "offtrack" | "lava";
 

@@ -32,3 +32,13 @@
 .actions { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
 .ghost { background: transparent; border: 2px solid #fff8; }
 .ghost:hover { background: #fff2; }
+.debug {
+  position: absolute; left: 12px; bottom: 12px; z-index: 5; width: 370px; max-height: calc(100% - 180px); overflow: auto;
+  padding: 10px 12px; border-radius: 10px; background: rgba(0, 0, 0, 0.72); color: #9ef;
+  font: 12px/1.6 var(--font-geist-mono), ui-monospace, monospace;
+}
+.debug hr { border: 0; border-top: 1px solid #fff2; margin: 6px 0; }
+.debug label { display: grid; grid-template-columns: 150px 1fr 44px; align-items: center; gap: 6px; }
+.debug input { width: 100%; accent-color: #9ef; }
+.debug output { text-align: right; color: #fff; }
+.debug button { margin-top: 6px; width: 100%; padding: 5px; border: 1px solid #9ef8; border-radius: 6px; background: transparent; color: #9ef; cursor: pointer; }

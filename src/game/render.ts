@@ -110,31 +110,7 @@ function drawHud(ctx: CanvasRenderingContext2D, race: Race, w: number, h: number
   ctx.restore();
 }
 
-const SURFACE_LABEL = { track: "piste", offtrack: "hors-piste", lava: "lave" } as const;
-
-function drawDebug(ctx: CanvasRenderingContext2D, race: Race, h: number) {
-  const m = race.theme.phys;
-  const player = race.cars[0];
-  const lines = [
-    `mode      ${race.theme.name}`,
-    `piste     adhérence ×${m.trackGrip}`,
-    `hors-piste adh ×${m.offGrip} traînée ×${m.offDrag} vmax ×${m.offMax}`,
-    `lave      traînée ×${m.lavaDrag} vmax ×${m.lavaMax}`,
-    `surface   ${SURFACE_LABEL[player.surface]}`,
-    `décor     ${race.scene.lava.length} mares de lave`,
-  ];
-  ctx.save();
-  ctx.font = "12px ui-monospace, monospace";
-  ctx.textBaseline = "top";
-  const top = h - lines.length * 17 - 30;
-  ctx.fillStyle = "rgba(0,0,0,0.6)";
-  ctx.fillRect(12, top - 8, 340, lines.length * 17 + 16);
-  ctx.fillStyle = "#9ef";
-  lines.forEach((l, i) => ctx.fillText(l, 22, top + i * 17));
-  ctx.restore();
-}
-
-export function render(ctx: CanvasRenderingContext2D, race: Race, w: number, h: number, debug: boolean) {
+export function render(ctx: CanvasRenderingContext2D, race: Race, w: number, h: number) {
   const { theme, scene, track } = race;
   const player = race.cars[0];
   const zoom = Math.min(w, h) / VIEW_SIZE;
@@ -176,5 +152,4 @@ export function render(ctx: CanvasRenderingContext2D, race: Race, w: number, h: 
   theme.fx.screen?.(ctx, view);
   drawMinimap(ctx, race, w);
   drawHud(ctx, race, w, h);
-  if (debug) drawDebug(ctx, race, h);
 }
