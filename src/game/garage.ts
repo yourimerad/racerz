@@ -159,11 +159,11 @@ export function selectCar(p: Profile, id: ModelId): Profile {
 }
 
 function isModelId(x: unknown): x is ModelId {
-  return typeof x === "string" && x in MODELS;
+  return typeof x === "string" && Object.hasOwn(MODELS, x);
 }
 
 function isSkinId(x: unknown): x is SkinId {
-  return x === "factory" || (typeof x === "string" && x in SKINS);
+  return x === "factory" || (typeof x === "string" && Object.hasOwn(SKINS, x));
 }
 
 /**
