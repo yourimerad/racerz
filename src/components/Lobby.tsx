@@ -3,8 +3,8 @@
 import { useEffect, useRef } from "react";
 import { drawCarSprite } from "@/game/carArt";
 import {
-  type ModelId, type Profile, type SkinId, CLEAN_MAX_HITS, CLEAN_MAX_OFF, MODEL_ORDER, MODELS, PALIERS_PER_LEVEL, PAYOUTS, SKINS, SKIN_ORDER,
-  buyCar, buySkin, carStats, equipSkin, formatMoney, selectCar, skinOf,
+  type ModelId, type Profile, type SkinId, type StatKey, CLEAN_MAX_HITS, CLEAN_MAX_OFF, MODEL_ORDER, MODELS, PALIERS_PER_LEVEL, PAYOUTS, SKINS,
+  SKIN_ORDER, STAT_RANGE, buyCar, buySkin, carStats, equipSkin, formatMoney, selectCar, skinOf,
 } from "@/game/garage";
 import { formatTime } from "@/game/render";
 import { type ThemeId, THEMES, THEME_ORDER } from "@/game/themes";
@@ -26,9 +26,10 @@ function CarPreview({ model, skin, size = 3 }: { model: ModelId; skin: SkinId; s
   return <canvas ref={ref} className={styles.preview} style={{ width: 30 * size, height: 48 * size }} />;
 }
 
-function StatBar({ label, value }: { label: string; value: number }) {
-  // 1.0 = base GT; bars span 0.9 → 1.5.
-  const pct = Math.max(4, Math.min(100, ((value - 0.9) / 0.6) * 100));
+function StatBar({ label, stat, value }: { label: string; stat: StatKey; value: number }) {
+  // Range derived from MODELS (see STAT_RANGE), so each car's bars reflect its real place in the lineup.
+  const { min, max } = STAT_RANGE[stat];
+  const pct = Math.max(4, Math.min(100, ((value - min) / (max - min)) * 100));
   return (
     <div className={styles.stat}>
       <span>{label}</span>
@@ -73,6 +74,7 @@ export default function Lobby({ profile, setProfile, mode, setMode, record, onSt
                   <CarPreview model={id} skin={owned?.skin ?? "factory"} size={2} />
                   <div className={styles.carInfo}>
                     <strong>{m.name}</strong>
+                    <span className={styles.tagline}>{m.tagline}</span>
                     {owned ? (
                       <span>
                         Niv. {owned.level} · paliers {"●".repeat(owned.paliers)}{"○".repeat(PALIERS_PER_LEVEL - owned.paliers)}
@@ -80,9 +82,9 @@ export default function Lobby({ profile, setProfile, mode, setMode, record, onSt
                     ) : (
                       <span>{formatMoney(m.price)}</span>
                     )}
-                    <StatBar label="Vitesse" value={st.speed} />
-                    <StatBar label="Accél." value={st.accel} />
-                    <StatBar label="Adhérence" value={st.grip} />
+                    <StatBar label="Vitesse" stat="speed" value={st.speed} />
+                    <StatBar label="Accél." stat="accel" value={st.accel} />
+                    <StatBar label="Adhérence" stat="grip" value={st.grip} />
                   </div>
                   {owned ? (
                     <button className={styles.small} disabled={profile.selected === id} onClick={() => setProfile(selectCar(profile, id))}>

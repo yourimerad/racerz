@@ -7,6 +7,8 @@ export type SkinId = "factory" | "pearl" | "electric" | "mantis" | "arancio" | "
 export type CarModel = {
   id: ModelId;
   name: string;
+  /** Short hook shown under the name in the garage card. */
+  tagline: string;
   price: number;
   /** Multipliers on PHYS for top speed, acceleration and grip. */
   speed: number;
@@ -25,13 +27,16 @@ export type Skin = {
 };
 
 export const MODELS: Record<ModelId, CarModel> = {
-  gt: { id: "gt", name: "Racerz GT", price: 0, speed: 1, accel: 1, grip: 1, factory: { name: "Usine", body: "#e63946", accent: "#9d1c27" } },
+  gt: {
+    id: "gt", name: "Racerz GT", tagline: "Polyvalente", price: 0, speed: 1, accel: 1, grip: 1,
+    factory: { name: "Usine", body: "#e63946", accent: "#9d1c27" },
+  },
   aventador: {
-    id: "aventador", name: "Lamborghini Aventador SVJ", price: 60_000, speed: 1.07, accel: 1.12, grip: 1.05,
+    id: "aventador", name: "Lamborghini Aventador SVJ", tagline: "Puissante et stable", price: 60_000, speed: 1.16, accel: 1.2, grip: 1.12,
     factory: { name: "Noir mat", body: "#1d1d20", accent: "#3a3a40", matte: true },
   },
   f8: {
-    id: "f8", name: "Ferrari F8 Spider", price: 150_000, speed: 1.12, accel: 1.15, grip: 1.1,
+    id: "f8", name: "Ferrari F8 Spider", tagline: "La plus rapide, mais glissante", price: 150_000, speed: 1.24, accel: 1.3, grip: 0.8,
     factory: { name: "Rosso Corsa", body: "#d40000", accent: "#8a0000" },
   },
 };
@@ -74,6 +79,22 @@ export function carStats(model: ModelId, level: number) {
   const m = MODELS[model], l = level - 1;
   return { speed: m.speed * (1 + 0.02 * l), accel: m.accel * (1 + 0.03 * l), grip: m.grip };
 }
+
+export type StatKey = "speed" | "accel" | "grip";
+
+/**
+ * Display range per stat, derived from MODELS: from the weakest base car (level 1) to the
+ * strongest at MAX_LEVEL, with a small margin below so the weakest value stays visible.
+ */
+export const STAT_RANGE: Record<StatKey, { min: number; max: number }> = (() => {
+  const ids = Object.keys(MODELS) as ModelId[];
+  const range = (key: StatKey) => {
+    const lo = Math.min(...ids.map((id) => carStats(id, 1)[key]));
+    const hi = Math.max(...ids.map((id) => carStats(id, MAX_LEVEL)[key]));
+    return { min: lo - (hi - lo) * 0.12, max: hi };
+  };
+  return { speed: range("speed"), accel: range("accel"), grip: range("grip") };
+})();
 
 export const formatMoney = (n: number) => `${n.toLocaleString("fr-FR")} €`;
 
