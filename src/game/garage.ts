@@ -158,6 +158,9 @@ export function selectCar(p: Profile, id: ModelId): Profile {
   return p.cars[id] ? { ...p, selected: id } : p;
 }
 
+// Object.hasOwn (not `in`, which also matches inherited Object.prototype keys
+// like "constructor"/"toString"/"__proto__" — a prototype-pollution hole for
+// data read from localStorage) so only real MODELS/SKINS ids pass.
 function isModelId(x: unknown): x is ModelId {
   return typeof x === "string" && Object.hasOwn(MODELS, x);
 }
@@ -245,6 +248,18 @@ export function getServerPlayerProfile(): Profile {
 export function subscribePlayerProfile(listener: () => void) {
   playerProfileListeners.add(listener);
   return () => playerProfileListeners.delete(listener);
+}
+
+// Registered once at module load (not per-subscriber): another tab writing
+// the same key must invalidate our cache too, so the last write never just
+// wins silently and a purchase made elsewhere isn't lost on this tab's next save.
+if (typeof window !== "undefined") {
+  window.addEventListener("storage", (e) => {
+    if (e.key === STORAGE_KEY) {
+      cachedPlayerProfile = null;
+      for (const l of playerProfileListeners) l();
+    }
+  });
 }
 
 /** Persists the player profile and notifies subscribers. Never used for the debug profile. */

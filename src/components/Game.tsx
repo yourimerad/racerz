@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { type Input, NO_INPUT } from "@/game/car";
 import {
-  SECRET_WORD, advanceSecretBuffer, debugModeFromUrl, getDebugMode, getServerDebugMode, setDebugMode, subscribeDebugMode, toggleDebugMode,
+  SECRET_WORD, advanceSecretBuffer, debugModeFromUrl, getDebugMode, getDebugPanelOpen, getServerDebugMode, getServerDebugPanelOpen,
+  setDebugMode, subscribeDebugMode, subscribeDebugPanel, toggleDebugMode, toggleDebugPanel,
 } from "@/game/debug";
 import { type Race, createRace, stepRace, standings } from "@/game/race";
 import { formatTime, render } from "@/game/render";
@@ -42,7 +43,9 @@ export default function Game() {
   // "debug" secret sequence (see below). External store to read it without any
   // hydration mismatch on this statically prerendered page.
   const debugMode = useSyncExternalStore(subscribeDebugMode, getDebugMode, getServerDebugMode);
-  const [debugPanelOpen, setDebugPanelOpen] = useState(false);
+  // Lives in the debug store itself (not local state) so turning debug mode
+  // off always closes the panel too, instead of leaving it open for next time.
+  const debugPanelOpen = useSyncExternalStore(subscribeDebugPanel, getDebugPanelOpen, getServerDebugPanelOpen);
   const secretBufferRef = useRef("");
   useEffect(() => {
     if (debugModeFromUrl()) setDebugMode(true);
@@ -59,6 +62,9 @@ export default function Game() {
   // Which profile was active when the current race started (toggling mid-race must not matter).
   const raceIsDebugRef = useRef(false);
   const [report, setReport] = useState<RaceReport | null>(null);
+  // Balance right after settlement, so the results screen keeps showing it
+  // even if the player toggles debug mode (and so switches `profile`) afterwards.
+  const [settledBalance, setSettledBalance] = useState<number | null>(null);
   useEffect(() => {
     debugProfileRef.current = debugProfile;
   }, [debugProfile]);
@@ -83,7 +89,7 @@ export default function Game() {
           return;
         }
         if (e.code === "KeyR" && screen !== "menu") return start();
-        if (debugMode && e.code === "KeyH") return setDebugPanelOpen((d) => !d);
+        if (debugMode && e.code === "KeyH") return toggleDebugPanel();
         const digit = /^(Digit|Numpad)([1-4])$/.exec(e.code);
         if (digit && screen === "menu") return setMode(THEME_ORDER[Number(digit[2]) - 1]);
         // Hidden unlock: typing "debug" toggles debug mode for the session, on any screen.
@@ -153,6 +159,7 @@ export default function Game() {
           savePlayerProfile(settled.profile);
         }
         setReport(settled.report);
+        setSettledBalance(settled.profile.money);
         // Let the other cars run a bit before showing the podium.
         setTimeout(() => {
           if (raceRef.current !== race) return; // restarted with R meanwhile
@@ -229,7 +236,7 @@ export default function Game() {
                   : report.palier
                     ? "Palier gagné !"
                     : "Pas de palier cette fois."}{" "}
-                Solde : {formatMoney(profile.money)}
+                Solde : {formatMoney(settledBalance ?? profile.money)}
               </p>
             </div>
           )}

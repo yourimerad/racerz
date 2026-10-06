@@ -4,6 +4,9 @@
 // hydration mismatch on this statically prerendered page.
 
 let active = false;
+// The panel is part of the same store so switching debug mode off always
+// closes it too: it never reopens on its own next time debug mode unlocks.
+let panelOpen = false;
 const listeners = new Set<() => void>();
 
 function emit() {
@@ -14,6 +17,9 @@ export function subscribeDebugMode(listener: () => void) {
   listeners.add(listener);
   return () => listeners.delete(listener);
 }
+
+/** Same store as subscribeDebugMode: either flag changing notifies both. */
+export const subscribeDebugPanel = subscribeDebugMode;
 
 export function getDebugMode() {
   return active;
@@ -27,11 +33,27 @@ export function getServerDebugMode() {
 export function setDebugMode(v: boolean) {
   if (v === active) return;
   active = v;
+  if (!active) panelOpen = false;
   emit();
 }
 
 export function toggleDebugMode() {
   setDebugMode(!active);
+}
+
+export function getDebugPanelOpen() {
+  return panelOpen;
+}
+
+export function getServerDebugPanelOpen() {
+  return false;
+}
+
+/** No-op while debug mode is locked, so it can never leave a stale open state. */
+export function toggleDebugPanel() {
+  if (!active) return;
+  panelOpen = !panelOpen;
+  emit();
 }
 
 /** True if the current URL unlocks debug mode (?debug=1). */
