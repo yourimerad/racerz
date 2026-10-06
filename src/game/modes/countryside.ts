@@ -1,20 +1,73 @@
 import type { Fx } from "../fx";
-import { drift, hash } from "../fx";
-import { disc, ellipse, isClear, mulberry32, range, scatter, scatterNear, shadow, TAU, type Circle, type Scene } from "../scenery";
-import type { Track, TrackLayout } from "../track";
+import { dot, drift, hash, visible } from "../fx";
+import {
+  disc, ellipse, isClear, mulberry32, onTrackPoint, range, scatter, scatterNear, shadow, softBlob, TAU,
+  type Circle, type Rng, type Scene,
+} from "../scenery";
+import type { CoverLayout, Track, TrackLayout } from "../track";
 
-// Countryside: same circuit as the other modes for now (see docs/decisions.md for the planned
-// forest passage). Patchwork fields, hedges, a farm with cows and hay bales.
+// Countryside "campagne" circuit, campaign-style: zone A (start/finish, grandstands & pits) ->
+// a forest road with two canopy-covered stretches -> zone B (a village circuit, hay bales and a
+// marquee) -> back to zone A across fields and a farm. Zones are contiguous stretches of
+// control-point units (see ZONE_* below, same unit as CoverLayout); sample indices are derived
+// from track.path.length at scene-build time, so they stay exact regardless of the shared
+// SAMPLES_PER_SEGMENT constant in track.ts.
 
 type Ctx = CanvasRenderingContext2D;
+type Prop = Circle & { a: number };
+
+const CANOPY: CoverLayout[] = [{ from: 3.5, to: 4.6 }, { from: 5.2, to: 6.4 }];
 
 export const layout: TrackLayout = {
   points: [
-    [400, 1100], [400, 600], [650, 300], [1100, 280], [1400, 560], [1750, 420],
-    [2250, 330], [2700, 560], [2780, 1050], [2450, 1380], [1950, 1250],
-    [1550, 1560], [1050, 1760], [600, 1620],
+    [900, 1830], [1350, 1800], [1800, 1830], [2200, 1750],
+    [2550, 1500], [2750, 1050], [2650, 580], [2300, 280],
+    [1850, 160], [1410, 400], [950, 150], [550, 300],
+    [280, 750], [260, 1250], [330, 1650], [500, 1800],
   ],
+  covers: CANOPY,
 };
+
+// Zones, in control-point units. Half-open [from, to) and wrap past 0 like CoverLayout does.
+const ZONE_A = { from: 15, to: 19 }; // point15 -> 0 -> ... -> 3: start/finish straight, grandstands & pits
+const FOREST = { from: 3, to: 7 }; // point3 -> ... -> 7: forest road, two canopy passages
+const ZONE_B = { from: 7, to: 11 }; // point7 -> ... -> 11: village circuit
+const FARM = { from: 11, to: 15 }; // point11 -> ... -> 15: fields and a farm, back to zone A
+
+function idxOf(u: number, spp: number, n: number) {
+  return ((Math.round(u * spp) % n) + n) % n;
+}
+function zoneIndices(spp: number, n: number, zone: { from: number; to: number }) {
+  const start = idxOf(zone.from, spp, n), end = idxOf(zone.to, spp, n);
+  const len = start <= end ? end - start : n - start + end;
+  return { start, end, len };
+}
+/** Sample indices through a zone, `step` apart, excluding the end (shared with the next zone). */
+function stepThrough(spp: number, n: number, zone: { from: number; to: number }, step: number): number[] {
+  const { start, len } = zoneIndices(spp, n, zone);
+  const out: number[] = [];
+  for (let k = 0; k < len; k += step) out.push((start + k) % n);
+  return out;
+}
+
+function hits(occ: Circle[], x: number, y: number, r: number) {
+  return occ.some((o) => (o.x - x) ** 2 + (o.y - y) ** 2 < (o.r + r) ** 2);
+}
+
+/** Trees along both sides of a stretch of road, just beyond the barrier. */
+function belt(track: Track, rng: Rng, occ: Circle[], idxs: number[], rMin: number, rMax: number, padMin: number, padMax: number): Circle[] {
+  const out: Circle[] = [];
+  for (const i of idxs)
+    for (const side of [-1, 1] as const) {
+      const r = range(rng, rMin, rMax);
+      const p = onTrackPoint(track, i, side * (track.barrier + range(rng, padMin, padMax) + r));
+      if (!isClear(track, p.x, p.y, r) || hits(occ, p.x, p.y, r)) continue;
+      const c = { x: p.x, y: p.y, r };
+      out.push(c);
+      occ.push(c);
+    }
+  return out;
+}
 
 const FIELD_COLORS = [
   { fill: "#6aa84f", stripe: "rgba(255,255,255,0.06)" },
@@ -107,16 +160,241 @@ function farm(ctx: Ctx, f: Circle) {
   disc(ctx, f.x + 66, f.y - 74, 5, "#d7dce0");
 }
 
+// ---------- zone A: start/finish straight, grandstands, pit building, tires, banners ----------
+
+function grandstand(ctx: Ctx, c: Prop) {
+  ctx.save();
+  ctx.translate(c.x, c.y);
+  ctx.rotate(c.a);
+  const w = c.r * 2.3, h = c.r * 1.25;
+  ctx.fillStyle = "rgba(0,0,0,0.3)";
+  ctx.fillRect(-w / 2 + 8, -h / 2 + 10, w, h);
+  for (let i = 0; i < 5; i++) {
+    ctx.fillStyle = i % 2 ? "#1d3557" : "#274472";
+    ctx.fillRect(-w / 2, -h / 2 + (i * h) / 5, w, h / 5 + 1);
+  }
+  for (let i = 0; i < 16; i++) {
+    const px = -w / 2 + 10 + (i % 8) * (w / 8), py = -h / 2 + 5 + Math.floor(i / 8) * (h / 2.2);
+    disc(ctx, px, py, 2.6, i % 3 === 0 ? "#e63946" : i % 3 === 1 ? "#f1faee" : "#457b9d");
+  }
+  ctx.fillStyle = "#0d1b2a";
+  ctx.fillRect(-w / 2 - 6, -h / 2 - 10, w + 12, 10);
+  ctx.strokeStyle = "rgba(255,255,255,0.6)";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(-w / 2, -h / 2, w, h);
+  ctx.restore();
+}
+
+function pitBuilding(ctx: Ctx, c: Prop) {
+  ctx.save();
+  ctx.translate(c.x, c.y);
+  ctx.rotate(c.a);
+  const w = c.r * 2.1, h = c.r * 1.05;
+  ctx.fillStyle = "rgba(0,0,0,0.3)";
+  ctx.fillRect(-w / 2 + 8, -h / 2 + 8, w, h);
+  ctx.fillStyle = "#e9ecef";
+  ctx.fillRect(-w / 2, -h / 2, w, h);
+  for (let i = 0; i < 4; i++) {
+    ctx.fillStyle = i % 2 ? "#d62828" : "#1d3557";
+    ctx.fillRect(-w / 2 + 6 + i * (w / 4), -h / 2 + h * 0.3, w / 4 - 10, h * 0.6);
+  }
+  ctx.strokeStyle = "rgba(0,0,0,0.35)";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(-w / 2, -h / 2, w, h);
+  ctx.fillStyle = "#1d3557";
+  ctx.fillRect(-6, -h / 2 - 20, 12, 20);
+  ctx.restore();
+}
+
+function tireStack(ctx: Ctx, c: Circle) {
+  shadow(ctx, c.x + 3, c.y + 3, c.r);
+  for (let i = 0; i < 3; i++) disc(ctx, c.x, c.y - i * c.r * 0.35, c.r * (1 - i * 0.12), "#1a1a1a");
+  for (let i = 0; i < 3; i++) disc(ctx, c.x, c.y - i * c.r * 0.35, c.r * (1 - i * 0.12) * 0.55, "#2e2e2e");
+}
+
+function banner(ctx: Ctx, c: Prop) {
+  ctx.save();
+  ctx.translate(c.x, c.y);
+  ctx.rotate(c.a);
+  ctx.fillStyle = "#6b4f30";
+  ctx.fillRect(-3, -4, 6, c.r * 2.2);
+  const w = c.r * 2.6;
+  ctx.fillStyle = "#ffd166";
+  ctx.fillRect(-w / 2, -c.r * 2.1, w, c.r * 0.7);
+  ctx.strokeStyle = "rgba(0,0,0,0.35)";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(-w / 2, -c.r * 2.1, w, c.r * 0.7);
+  for (let i = 0; i < 4; i++) disc(ctx, -w / 2 + (i + 0.5) * (w / 4), -c.r * 1.75, 4, "#1d3557");
+  ctx.restore();
+}
+
+// ---------- zone B: village circuit, hay bales & a marquee ----------
+
+function chapiteau(ctx: Ctx, c: Circle) {
+  shadow(ctx, c.x + 6, c.y + 8, c.r * 1.05, c.r * 0.8);
+  for (let i = 0; i < 10; i++) {
+    const a0 = (i / 10) * TAU, a1 = ((i + 1) / 10) * TAU;
+    ctx.beginPath();
+    ctx.moveTo(c.x, c.y - c.r * 1.15);
+    ctx.arc(c.x, c.y, c.r, a0, a1);
+    ctx.closePath();
+    ctx.fillStyle = i % 2 ? "#e63946" : "#f1faee";
+    ctx.fill();
+  }
+  disc(ctx, c.x, c.y - c.r * 1.15, c.r * 0.08, "#ffd166");
+  ctx.strokeStyle = "rgba(0,0,0,0.25)";
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.arc(c.x, c.y, c.r, 0, TAU);
+  ctx.stroke();
+}
+
+function villageStand(ctx: Ctx, c: Prop) {
+  ctx.save();
+  ctx.translate(c.x, c.y);
+  ctx.rotate(c.a);
+  const w = c.r * 2, h = c.r * 0.9;
+  ctx.fillStyle = "rgba(0,0,0,0.28)";
+  ctx.fillRect(-w / 2 + 6, -h / 2 + 8, w, h);
+  for (let i = 0; i < 3; i++) {
+    ctx.fillStyle = i % 2 ? "#8a6a45" : "#a4824f";
+    ctx.fillRect(-w / 2, -h / 2 + (i * h) / 3, w, h / 3 + 1);
+  }
+  ctx.fillStyle = "#6b4226";
+  ctx.fillRect(-w / 2 - 4, -h / 2 - 8, w + 8, 8);
+  ctx.strokeStyle = "rgba(255,255,255,0.4)";
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(-w / 2, -h / 2, w, h);
+  ctx.restore();
+}
+
+// ---------- forest: dense trees, canopy entrances ----------
+
+function archPillar(ctx: Ctx, c: Circle) {
+  shadow(ctx, c.x + 5, c.y + 6, c.r * 0.9, c.r * 0.7);
+  ctx.fillStyle = "#4a3421";
+  ctx.beginPath();
+  ctx.roundRect(c.x - c.r * 0.35, c.y - c.r * 0.9, c.r * 0.7, c.r * 1.8, c.r * 0.3);
+  ctx.fill();
+  disc(ctx, c.x, c.y - c.r * 0.9, c.r, "#2f5d27");
+  disc(ctx, c.x - c.r * 0.3, c.y - c.r * 1.1, c.r * 0.6, "#3e7a35");
+}
+
+/** The canopy ceiling over one covered stretch: leafy clusters with a few light gaps. */
+function canopyRoof(ctx: Ctx, track: Track, rng: Rng, cover: CoverLayout, spp: number, n: number) {
+  const { start, len } = zoneIndices(spp, n, cover);
+  for (let k = -3; k <= len + 3; k += 5) {
+    const i = ((start + k) % n + n) % n;
+    for (let s = 0; s < 3; s++) {
+      const lateral = (s - 1) * (track.barrier * 0.7) + range(rng, -40, 40);
+      const p = onTrackPoint(track, i, lateral);
+      const r = range(rng, 55, 100);
+      const gap = rng() < 0.1;
+      disc(
+        ctx, p.x + range(rng, -20, 20), p.y + range(rng, -20, 20), r,
+        gap
+          ? "rgba(255,230,170,0.22)"
+          : `rgba(${18 + Math.floor(rng() * 18)},${55 + Math.floor(rng() * 35)},${18 + Math.floor(rng() * 15)},0.94)`,
+      );
+    }
+  }
+}
+
 export function scene(track: Track): Scene {
   const rng = mulberry32(2001);
+  const n = track.path.length;
+  const spp = n / layout.points.length;
   const b = track.bounds;
   const occ: Circle[] = [];
-  const farms = scatter(track, rng, occ, 1, 170, 170);
-  const cows = farms.length ? scatterNear(track, rng, occ, 2, farms[0], 120, 30) : [];
-  const trees = scatter(track, rng, occ, 70, 18, 30);
-  const bales = scatter(track, rng, occ, 16, 9, 12);
 
-  // Patchwork: a jittered grid of quads.
+  // Zone A: grandstands, pit building, tire stacks and banners along the start/finish straight.
+  const grandstands: Prop[] = [], pits: Prop[] = [], tires: Circle[] = [], banners: Prop[] = [];
+  stepThrough(spp, n, ZONE_A, 20).forEach((i, k) => {
+    const side = k % 2 === 0 ? 1 : (-1 as 1 | -1);
+    if (k % 4 === 0) {
+      const p = onTrackPoint(track, i, side * (track.barrier + 94));
+      const c = { x: p.x, y: p.y, r: 60, a: p.a };
+      if (isClear(track, c.x, c.y, c.r) && !hits(occ, c.x, c.y, c.r)) { grandstands.push(c); occ.push(c); }
+    } else if (k % 4 === 2) {
+      const p = onTrackPoint(track, i, side * (track.barrier + 80));
+      const c = { x: p.x, y: p.y, r: 46, a: p.a };
+      if (isClear(track, c.x, c.y, c.r) && !hits(occ, c.x, c.y, c.r)) { pits.push(c); occ.push(c); }
+    } else {
+      const p = onTrackPoint(track, i, -side * (track.barrier + 48));
+      const c = { x: p.x, y: p.y, r: 14 };
+      if (isClear(track, c.x, c.y, c.r) && !hits(occ, c.x, c.y, c.r)) { tires.push(c); occ.push(c); }
+    }
+  });
+  stepThrough(spp, n, ZONE_A, 11).forEach((i) => {
+    const side = i % 2 === 0 ? 1 : (-1 as 1 | -1);
+    const p = onTrackPoint(track, i, side * (track.barrier + 50));
+    const c = { x: p.x, y: p.y, r: 16, a: p.a };
+    if (isClear(track, c.x, c.y, c.r) && !hits(occ, c.x, c.y, c.r)) { banners.push(c); occ.push(c); }
+  });
+
+  // Zone B: a village circuit — a marquee, a couple of rustic stands, hay-bale clusters.
+  const chapiteaux: Circle[] = [], villageStands: Prop[] = [], villageBales: Circle[] = [];
+  stepThrough(spp, n, ZONE_B, 24).forEach((i, k) => {
+    const side = k % 2 === 0 ? 1 : (-1 as 1 | -1);
+    if (k === 0) {
+      const p = onTrackPoint(track, i, side * (track.barrier + 110));
+      const c = { x: p.x, y: p.y, r: 80 };
+      if (isClear(track, c.x, c.y, c.r) && !hits(occ, c.x, c.y, c.r)) { chapiteaux.push(c); occ.push(c); }
+    } else if (k % 2 === 1) {
+      const p = onTrackPoint(track, i, side * (track.barrier + 70));
+      const c = { x: p.x, y: p.y, r: 46, a: p.a };
+      if (isClear(track, c.x, c.y, c.r) && !hits(occ, c.x, c.y, c.r)) { villageStands.push(c); occ.push(c); }
+    } else {
+      for (let o = -1; o <= 1; o++) {
+        const r = range(rng, 9, 12);
+        const p = onTrackPoint(track, (i + o + n) % n, side * (track.barrier + 26 + r));
+        if (!isClear(track, p.x, p.y, r) || hits(occ, p.x, p.y, r)) continue;
+        const c = { x: p.x, y: p.y, r };
+        villageBales.push(c);
+        occ.push(c);
+      }
+    }
+  });
+
+  // Forest: dense trees on both sides, plus marked entrances/exits at the two canopy passages.
+  const forestTrees = belt(track, rng, occ, stepThrough(spp, n, FOREST, 5), 16, 28, 10, 70);
+  const archPillars: Circle[] = [];
+  for (const cover of CANOPY) {
+    const { start, end } = zoneIndices(spp, n, cover);
+    for (const idx of [start, end])
+      for (const side of [-1, 1] as const) {
+        const p = onTrackPoint(track, idx, side * (track.barrier + 70));
+        if (isClear(track, p.x, p.y, 24)) archPillars.push({ x: p.x, y: p.y, r: 24 });
+      }
+  }
+  const forestIdxs = stepThrough(spp, n, FOREST, 4);
+  const leftEdge = forestIdxs.map((i) => onTrackPoint(track, i, track.barrier + 210));
+  const rightEdge = forestIdxs.map((i) => onTrackPoint(track, i, -(track.barrier + 210)));
+
+  // A handful of light-shaft sources under the canopy, animated in fx.ground (reusing Scene.vents,
+  // a plain Circle[] slot — volcano uses it for smoke, here it marks dappled-light spots).
+  const lightGaps: Circle[] = [];
+  for (const cover of CANOPY) {
+    const { start, len } = zoneIndices(spp, n, cover);
+    for (const k of [0.2, 0.5, 0.8]) {
+      const p = onTrackPoint(track, (start + Math.round(len * k)) % n, range(rng, -1, 1) * track.width * 0.3);
+      lightGaps.push({ x: p.x, y: p.y, r: 36 });
+    }
+  }
+
+  // Farm: back to zone A across the fields, through a farm placed in the return stretch.
+  const fz = zoneIndices(spp, n, FARM);
+  const farmIdx = (fz.start + Math.floor(fz.len / 2)) % n;
+  const fp = onTrackPoint(track, farmIdx, (farmIdx % 2 === 0 ? 1 : -1) * (track.barrier + 204));
+  const farms: Circle[] = isClear(track, fp.x, fp.y, 170) ? [{ x: fp.x, y: fp.y, r: 170 }] : [];
+  if (farms.length) occ.push(farms[0]);
+  const cows = farms.length ? scatterNear(track, rng, occ, 2, farms[0], 120, 30) : [];
+
+  // Generic countryside filler: a few more trees and bales, beyond what the forest/village already placed.
+  const trees = scatter(track, rng, occ, 55, 18, 30);
+  const bales = scatter(track, rng, occ, 10, 9, 12);
+
+  // Patchwork fields: a jittered grid of quads (unchanged from the previous single-circuit layout).
   const cw = 300, ch = 240;
   const cols = Math.ceil((b.maxX - b.minX) / cw) + 1, rows = Math.ceil((b.maxY - b.minY) / ch) + 1;
   const vtx = Array.from({ length: cols + 1 }, (_, i) =>
@@ -164,7 +442,7 @@ export function scene(track: Track): Scene {
 
   return {
     lava: [],
-    vents: [],
+    vents: lightGaps,
     under(ctx) {
       for (const f of fields) {
         ctx.save();
@@ -187,6 +465,53 @@ export function scene(track: Track): Scene {
         ctx.stroke();
         ctx.restore();
       }
+      // Forest floor: darker undergrowth painted over the patchwork, under the whole forest road.
+      ctx.beginPath();
+      leftEdge.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+      for (let i = rightEdge.length - 1; i >= 0; i--) ctx.lineTo(rightEdge[i].x, rightEdge[i].y);
+      ctx.closePath();
+      ctx.fillStyle = "#23401f";
+      ctx.fill();
+      const d = mulberry32(2005);
+      for (let i = 0; i < 46; i++) {
+        const idx = forestIdxs[Math.floor(d() * forestIdxs.length)];
+        const p = onTrackPoint(track, idx, range(d, -1, 1) * (track.barrier + 190));
+        softBlob(ctx, p.x, p.y, range(d, 40, 90), range(d, 30, 60), range(d, 0, Math.PI), "10,30,10", 0.35);
+      }
+    },
+    onTrack(ctx) {
+      // Darken the asphalt under the canopy (the leaves themselves are in the overhead layer).
+      ctx.lineCap = "round";
+      for (const cover of CANOPY) {
+        const { start, len } = zoneIndices(spp, n, cover);
+        ctx.beginPath();
+        for (let k = 0; k <= len; k++) {
+          const p = track.path[(start + k) % n];
+          if (k) ctx.lineTo(p.x, p.y);
+          else ctx.moveTo(p.x, p.y);
+        }
+        ctx.lineWidth = track.width;
+        ctx.strokeStyle = "rgba(5,10,5,0.4)";
+        ctx.stroke();
+      }
+      // Zone B: a village circuit painted with its own kerb colours, over the shared white/red ones.
+      const zb = zoneIndices(spp, n, ZONE_B);
+      ctx.lineJoin = "round";
+      for (const side of [-1, 1] as const) {
+        ctx.beginPath();
+        for (let k = 0; k <= zb.len; k++) {
+          const p = onTrackPoint(track, (zb.start + k) % n, side * (track.width / 2 + 9));
+          if (k) ctx.lineTo(p.x, p.y);
+          else ctx.moveTo(p.x, p.y);
+        }
+        ctx.lineWidth = 18;
+        ctx.strokeStyle = "#2a4d8f";
+        ctx.stroke();
+        ctx.setLineDash([22, 26]);
+        ctx.strokeStyle = "#f1c40f";
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
     },
     over(ctx) {
       const d = mulberry32(2002);
@@ -205,12 +530,39 @@ export function scene(track: Track): Scene {
       for (const f of farms) farm(ctx, f);
       for (const c of cows) cow(ctx, c, d() * TAU);
       for (const bl of bales) bale(ctx, bl);
+      for (const g of grandstands) grandstand(ctx, g);
+      for (const p of pits) pitBuilding(ctx, p);
+      for (const t of tires) tireStack(ctx, t);
+      for (const bn of banners) banner(ctx, bn);
+      for (const c of chapiteaux) chapiteau(ctx, c);
+      for (const v of villageStands) villageStand(ctx, v);
+      for (const vb of villageBales) bale(ctx, vb);
+      for (const t of forestTrees) tree(ctx, t);
+      for (const p of archPillars) archPillar(ctx, p);
       for (const t of trees) tree(ctx, t);
+    },
+    overhead(ctx) {
+      const rng2 = mulberry32(2010);
+      for (const cover of CANOPY) canopyRoof(ctx, track, rng2, cover, spp, n);
     },
   };
 }
 
 export const fx: Fx = {
+  ground(ctx, scene, v) {
+    // Dappled light flickering through the canopy gaps (scene.vents reused for the gap spots).
+    ctx.globalCompositeOperation = "lighter";
+    for (let i = 0; i < scene.vents.length; i++) {
+      const c = scene.vents[i];
+      if (!visible(c, v, 150)) continue;
+      const flicker = 0.5 + 0.5 * Math.sin(v.t * 2.3 + hash(i, 5) * 10);
+      const g = ctx.createRadialGradient(c.x, c.y, 0, c.x, c.y, c.r * 2.2);
+      g.addColorStop(0, `rgba(255,244,200,${(0.1 + 0.1 * flicker).toFixed(3)})`);
+      g.addColorStop(1, "rgba(255,244,200,0)");
+      dot(ctx, c.x, c.y, c.r * 2.2, g);
+    }
+    ctx.globalCompositeOperation = "source-over";
+  },
   screen(ctx, v) {
     // One fill per cloud so overlapping puffs merge instead of stacking alpha.
     const puffs = (x: number, y: number, s: number, i: number, fill: string) => {
