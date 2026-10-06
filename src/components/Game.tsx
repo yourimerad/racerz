@@ -7,6 +7,7 @@ import { formatTime, render } from "@/game/render";
 import { type ThemeId, THEMES, THEME_ORDER } from "@/game/themes";
 import { type Profile, type RaceReport, NEW_PROFILE, formatMoney, settleRace } from "@/game/garage";
 import DebugPanel from "./DebugPanel";
+import Fireworks from "./Fireworks";
 import Lobby from "./Lobby";
 import styles from "./Game.module.css";
 
@@ -162,9 +163,11 @@ export default function Game() {
         <Lobby profile={profile} setProfile={setProfile} mode={mode} setMode={setMode} record={record} onStart={start} />
       )}
 
+      {screen === "results" && report?.place === 1 && <Fireworks />}
+
       {screen === "results" && (
         <div className={styles.overlay}>
-          <h2 className={styles.title}>Arrivée</h2>
+          <h2 className={styles.title}>{report?.place === 1 ? "Victoire !" : "Arrivée"}</h2>
           <p>{THEMES[mode].emoji} {THEMES[mode].name}</p>
           <ol className={styles.podium}>
             {results.map((r) => (
