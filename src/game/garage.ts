@@ -1,7 +1,7 @@
 // Player progression: cars, skins, race payouts and upgrade tiers ("paliers").
 // Kept in memory for the session (no persistence).
 
-export type ModelId = "gt" | "aventador" | "f8";
+export type ModelId = "gt" | "mx5" | "p911" | "aventador" | "f8";
 export type SkinId = "factory" | "pearl" | "electric" | "mantis" | "arancio" | "stripes" | "carbon" | "gold";
 
 export type CarModel = {
@@ -31,6 +31,14 @@ export const MODELS: Record<ModelId, CarModel> = {
     id: "gt", name: "Racerz GT", tagline: "Polyvalente", price: 0, speed: 1, accel: 1, grip: 1,
     factory: { name: "Usine", body: "#e63946", accent: "#9d1c27" },
   },
+  mx5: {
+    id: "mx5", name: "Mazda MX-5", tagline: "Agile, très accrocheuse", price: 5_000, speed: 1.04, accel: 1.02, grip: 1.3,
+    factory: { name: "Jaune Sunburst", body: "#f5c518", accent: "#b8860b" },
+  },
+  p911: {
+    id: "p911", name: "Porsche 911 Carrera", tagline: "Équilibrée et efficace", price: 20_000, speed: 1.1, accel: 1.12, grip: 1.18,
+    factory: { name: "Argent GT", body: "#c3c6ca", accent: "#7f848a" },
+  },
   aventador: {
     id: "aventador", name: "Lamborghini Aventador SVJ", tagline: "Puissante et stable", price: 60_000, speed: 1.16, accel: 1.2, grip: 1.12,
     factory: { name: "Noir mat", body: "#1d1d20", accent: "#3a3a40", matte: true },
@@ -40,7 +48,7 @@ export const MODELS: Record<ModelId, CarModel> = {
     factory: { name: "Rosso Corsa", body: "#d40000", accent: "#8a0000" },
   },
 };
-export const MODEL_ORDER: ModelId[] = ["gt", "aventador", "f8"];
+export const MODEL_ORDER: ModelId[] = ["gt", "mx5", "p911", "aventador", "f8"];
 
 export const SKINS: Record<Exclude<SkinId, "factory">, Skin & { price: number }> = {
   pearl: { name: "Blanc nacré", body: "#f2f0ea", accent: "#c9c4b8", price: 4_000 },

@@ -184,7 +184,77 @@ function f8(ctx: Ctx, skin: Skin) {
   }
 }
 
-const ART: Record<ModelId, (ctx: Ctx, skin: Skin) => void> = { gt, aventador, f8 };
+/** Mazda MX-5: small rounded roadster, long hood, open two-seat cockpit with roll hoops, round headlights, short tail. */
+function mx5(ctx: Ctx, skin: Skin) {
+  wheels(ctx, 10, -9, 10, 9, 6);
+  const body = [
+    [L, -4], [16, -7], [10, -9], [0, -9.5], [-8, -9], [-14, -8], [-18, -5], [-L, -2],
+    [-L, 2], [-18, 5], [-14, 8], [-8, 9], [0, 9.5], [10, 9], [16, 7], [L, 4],
+  ];
+  poly(ctx, body);
+  paint(ctx, skin);
+  // Low windscreen ahead of the open cockpit.
+  ctx.fillStyle = "rgba(15,20,30,0.85)";
+  ctx.beginPath();
+  ctx.roundRect(5, -7, 3, 14, 1.5);
+  ctx.fill();
+  // Open cockpit: two seats side by side, with small roll hoops behind each.
+  ctx.fillStyle = "#1a1a1a";
+  ctx.beginPath();
+  ctx.roundRect(-7, -8, 11, 16, 3);
+  ctx.fill();
+  ctx.fillStyle = "#c8a27a";
+  for (const y of [-4.8, 1.2]) {
+    ctx.beginPath();
+    ctx.roundRect(-4, y, 7, 3.6, 1.5);
+    ctx.fill();
+  }
+  ctx.fillStyle = skin.matte ? "#2a2a2c" : skin.accent;
+  ctx.beginPath();
+  ctx.ellipse(-6.5, -3, 1.6, 2.2, 0, 0, Math.PI * 2);
+  ctx.ellipse(-6.5, 3, 1.6, 2.2, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Round/oval headlights up front, short integrated rear with small taillights.
+  ctx.fillStyle = "#fff6d8";
+  ctx.beginPath();
+  ctx.ellipse(15.5, -5.5, 2, 1.6, 0, 0, Math.PI * 2);
+  ctx.ellipse(15.5, 5.5, 2, 1.6, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#ff2a1a";
+  ctx.fillRect(-L + 0.5, -4.5, 1.4, 3);
+  ctx.fillRect(-L + 0.5, 1.5, 1.4, 3);
+}
+
+/** Porsche 911 Carrera: bulging front fenders with round headlights, fastback roofline, wide rear haunches, ducktail spoiler, rear light bar. */
+function p911(ctx: Ctx, skin: Skin) {
+  wheels(ctx, 12, -12, 11, 10, 6);
+  const body = [
+    [L, -3], [16, -6], [12, -8.5], [6, -8], [-2, -7.5], [-8, -8], [-14, -9.5], [-18, -7.5], [-L, -4],
+    [-L, 4], [-18, 7.5], [-14, 9.5], [-8, 8], [-2, 7.5], [6, 8], [12, 8.5], [16, 6], [L, 3],
+  ];
+  poly(ctx, body);
+  paint(ctx, skin);
+  // Fastback canopy, narrowing toward the rear-biased cabin (the engine sits behind the rear axle).
+  ctx.fillStyle = "rgba(12,15,22,0.92)";
+  poly(ctx, [[9, -4], [5, -6], [-3, -5], [-5, 0], [-3, 5], [5, 6], [9, 4]]);
+  ctx.fill();
+  ctx.fillStyle = "rgba(120,140,170,0.3)";
+  poly(ctx, [[9, -4], [7, -5], [7, 5], [9, 4]]);
+  ctx.fill();
+  // Round headlights set in the bulging front fenders.
+  ctx.fillStyle = "#fff6d8";
+  ctx.beginPath();
+  ctx.ellipse(16, -6, 1.8, 1.8, 0, 0, Math.PI * 2);
+  ctx.ellipse(16, 6, 1.8, 1.8, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Small ducktail spoiler over the wide rear haunches, then the rear light bar.
+  ctx.fillStyle = skin.matte ? "#1a1a1c" : skin.accent;
+  ctx.fillRect(-17, -8, 3, 16);
+  ctx.fillStyle = "#ff2a1a";
+  ctx.fillRect(-L + 0.5, -6.5, 1.4, 13);
+}
+
+const ART: Record<ModelId, (ctx: Ctx, skin: Skin) => void> = { gt, mx5, p911, aventador, f8 };
 
 export function drawCarSprite(ctx: Ctx, model: ModelId, skin: Skin, x: number, y: number, angle: number) {
   ctx.save();
