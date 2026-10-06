@@ -77,7 +77,7 @@ function simulateAllAi(themeId: ThemeId): { ok: true; avgLap: number } | { ok: f
   const lastProgress = race.cars.map((c) => c.progress);
   const lastProgressTime = race.cars.map(() => 0);
   while (race.time < MAX_SIM_TIME && race.cars.some((c) => c.finishTime === null)) {
-    stepRace(race, aiInput(race, race.cars[0]), DT);
+    stepRace(race, aiInput(race, race.cars[0], DT, false), DT);
     for (const car of race.cars) {
       if (car.progress > lastProgress[car.id] + 0.01) {
         lastProgress[car.id] = car.progress;

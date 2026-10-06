@@ -1,6 +1,6 @@
 import { type Car, type Input, type Surface, NO_INPUT, CAR_RADIUS, PHYS, stepCar, slipOf, speedOf } from "./car";
 import { type ModelId, type SkinId, MODELS, carStats, skinOf } from "./garage";
-import type { Scene } from "./scenery";
+import { type Rng, type Scene, mulberry32 } from "./scenery";
 import { type Theme, type ThemeId, THEMES, sceneFor } from "./themes";
 import { isCovered, locate, trackFor, type Track } from "./track";
 import { type Vec, vec, add, sub, scale, len, dot, angleDiff, clamp, fromAngle } from "./vec";
@@ -10,6 +10,10 @@ const COUNTDOWN = 3;
 
 export type Phase = "countdown" | "racing" | "finished";
 export type Skid = { a: Vec; b: Vec; life: number };
+
+/** Per-bot random-mistake state (see `aiInput`), indexed by `car.id`. */
+export type MistakeKind = "lateBrake" | "liftOff" | "wideLine" | "twitch";
+export type AiState = { mistake: MistakeKind | null; until: number; cooldown: number; sign: number; count: number };
 
 export type Race = {
   track: Track;
@@ -22,21 +26,32 @@ export type Race = {
   skids: Skid[];
   /** Opacity of the covered-section overhead layer over the player (1 outside, ~0.3 inside). */
   overheadOpacity: number;
+  /** Seeded PRNG for this race (bot mistakes); same seed + same inputs replay identically. */
+  rng: Rng;
+  /** Random-mistake bookkeeping per car, indexed by `car.id`. */
+  ai: AiState[];
 };
 
 export type PlayerCar = { model: ModelId; skin: SkinId; level: number };
 
 const ROSTER = [
-  { name: "Toi", color: "#e63946", skill: 1 },
-  { name: "Blaze", color: "#f4a261", skill: 0.93 },
-  { name: "Volt", color: "#2a9d8f", skill: 0.9 },
-  { name: "Nitro", color: "#457b9d", skill: 0.87 },
+  { name: "Toi", color: "#e63946" },
+  { name: "Blaze", color: "#f4a261" },
+  { name: "Volt", color: "#2a9d8f" },
+  { name: "Nitro", color: "#457b9d" },
 ];
 
-export function createRace(themeId: ThemeId, player: PlayerCar): Race {
+/**
+ * Builds a race. `seed` drives the reproducible bot-mistake PRNG (see `aiInput`); omit it
+ * for a random race (that's what Game.tsx does). The 3 bots' pace comes from
+ * `theme.bots` (desert easiest … volcano hardest), spread symmetrically so they keep
+ * distinct rhythms.
+ */
+export function createRace(themeId: ThemeId, player: PlayerCar, seed?: number): Race {
   const theme = THEMES[themeId];
   const track = trackFor(themeId, theme.layout);
   const n = track.path.length;
+  const { pace, spread } = theme.bots;
   const cars: Car[] = ROSTER.map((r, i) => {
     // 2-wide staggered grid behind the line; player starts at the back.
     const slot = ROSTER.length - 1 - i;
@@ -45,7 +60,9 @@ export function createRace(themeId: ThemeId, player: PlayerCar): Race {
     const side = slot % 2 === 0 ? -1 : 1;
     const pos = add(p, scale(vec(-t.y, t.x), side * track.width * 0.22));
     const isPlayer = i === 0;
-    const stats = isPlayer ? carStats(player.model, player.level) : { speed: r.skill, accel: 1, grip: 1 };
+    // Bots: 3 distinct rhythms symmetric around the mode's pace (+1, 0, -1 * spread).
+    const botSkill = pace + (2 - i) * spread;
+    const stats = isPlayer ? carStats(player.model, player.level) : { speed: botSkill, accel: 1, grip: 1 };
     const skin = isPlayer ? skinOf(player.model, player.skin) : { name: r.name, body: r.color, accent: r.color };
     return {
       id: i, name: isPlayer ? `Toi (${MODELS[player.model].name})` : r.name, color: skin.body, isPlayer,
@@ -55,18 +72,66 @@ export function createRace(themeId: ThemeId, player: PlayerCar): Race {
       progress: idx - n, lastIndex: idx, lap: 0, lapStart: 0, bestLap: null, finishTime: null, surface: "track",
     };
   });
-  return { track, theme, scene: sceneFor(theme, track), cars, phase: "countdown", time: -COUNTDOWN, skids: [], overheadOpacity: 1 };
+  const rng = mulberry32(seed ?? ((Math.random() * 2 ** 32) >>> 0));
+  const ai: AiState[] = cars.map(() => ({ mistake: null, until: 0, cooldown: 0, sign: 1, count: 0 }));
+  return { track, theme, scene: sceneFor(theme, track), cars, phase: "countdown", time: -COUNTDOWN, skids: [], overheadOpacity: 1, rng, ai };
 }
 
-/** AI steering/throttle. Exported so the track-check script can run an all-AI race (car 0 included). */
-export function aiInput(race: Race, car: Car): Input {
+const MISTAKE_KINDS: MistakeKind[] = ["lateBrake", "liftOff", "wideLine", "twitch"];
+/** [min, max] seconds a mistake lasts, once triggered. */
+const MISTAKE_DURATION: Record<MistakeKind, [number, number]> = {
+  lateBrake: [0.35, 0.7],
+  liftOff: [0.4, 0.9],
+  wideLine: [0.5, 1.0],
+  twitch: [0.15, 0.3],
+};
+
+/** Roll a new mistake for `car` if its cooldown has elapsed and it's safe to do so. */
+function rollMistake(race: Race, car: Car, state: AiState, dt: number) {
+  if (race.time < state.cooldown) return;
+  // Never pile a mistake on top of an off-track excursion or a fresh barrier bounce:
+  // that's how a bot would get stuck or chain barrier hits.
+  if (car.surface !== "track" || car.hitCooldown > 0) return;
+  const rate = race.theme.bots.errors / 60; // nominal mistakes per second
+  if (race.rng() >= rate * dt) return;
+  const kind = MISTAKE_KINDS[Math.floor(race.rng() * MISTAKE_KINDS.length)];
+  const [lo, hi] = MISTAKE_DURATION[kind];
+  state.mistake = kind;
+  state.until = race.time + lo + race.rng() * (hi - lo);
+  state.sign = race.rng() < 0.5 ? -1 : 1;
+  state.count++;
+}
+
+/**
+ * Drives a car (bots; also car 0 in the track-check and bot-sim scripts): aim a lookahead point on the centerline, brake for corners
+ * scaled by grip, and throttle/brake/steer toward it. Exported so `scripts/sim-bots.ts`
+ * can also drive an error-free "proxy" car to benchmark each car model.
+ *
+ * `allowMistakes` (default true) gates the random-mistake system driven by
+ * `race.theme.bots.errors` and `race.rng` (see `rollMistake`); pass false for a perfect
+ * driver (the simulation proxy).
+ */
+export function aiInput(race: Race, car: Car, dt: number, allowMistakes = true): Input {
   const { track } = race;
   const n = track.path.length;
   const grip = race.theme.phys.trackGrip;
   const speed = speedOf(car);
+
+  const state = race.ai[car.id];
+  if (allowMistakes && state) {
+    if (state.mistake && race.time > state.until) {
+      state.mistake = null;
+      state.cooldown = race.time + 1.5 + race.rng() * 1.5;
+    }
+    if (!state.mistake) rollMistake(race, car, state, dt);
+  }
+  const mistake = allowMistakes ? state?.mistake ?? null : null;
+
   // Low grip: look further ahead and slow down much more for bends.
   const look = Math.round((10 + Math.max(0, speed) / 40) * (1 + (1 - grip) * 0.8));
-  const lane = ((car.id % 3) - 1) * track.width * 0.15 * grip;
+  const baseLane = ((car.id % 3) - 1) * track.width * 0.15 * grip;
+  // "wideLine": briefly aim further out, as if missing the apex.
+  const lane = mistake === "wideLine" ? baseLane + state!.sign * track.width * 0.22 : baseLane;
   const i = (car.lastIndex + look) % n;
   const t = track.tangents[i];
   const target = add(track.path[i], scale(vec(-t.y, t.x), lane));
@@ -74,15 +139,18 @@ export function aiInput(race: Race, car: Car): Input {
   const bearing = Math.atan2(to.y, to.x);
   // On ice, steer the velocity rather than the nose so the slide is caught early.
   const velDir = len(car.vel) > 60 ? Math.atan2(car.vel.y, car.vel.x) : car.angle;
-  const diff = angleDiff(car.angle, bearing) + angleDiff(velDir, bearing) * (1 - grip) * 0.8;
+  let diff = angleDiff(car.angle, bearing) + angleDiff(velDir, bearing) * (1 - grip) * 0.8;
+  // "twitch": a brief, self-correcting flinch on the wheel.
+  if (mistake === "twitch") diff += state!.sign * 0.9;
   const far = track.tangents[(car.lastIndex + look * 2) % n];
   const bend = Math.abs(angleDiff(Math.atan2(t.y, t.x), Math.atan2(far.y, far.x)));
   const cornerK = 0.45 + (1 - grip) * 0.55;
   const limit = PHYS.maxSpeed * car.skill * Math.max(0.3, 1 - clamp(bend, 0, 1.2) * cornerK) * (car.surface === "track" ? 1 : 0.6);
   const tooFast = speed > limit;
   return {
-    throttle: !tooFast && Math.abs(diff) < 1.2,
-    brake: tooFast && speed > limit + 40,
+    // "liftOff": brief lift, no risk. "lateBrake": brake late and run wide instead.
+    throttle: !tooFast && Math.abs(diff) < 1.2 && mistake !== "liftOff",
+    brake: tooFast && speed > limit + 40 && mistake !== "lateBrake",
     left: diff < -0.04,
     right: diff > 0.04,
     handbrake: false,
@@ -157,7 +225,11 @@ function containCar(race: Race, car: Car) {
   if (car.pos.y < b.minY || car.pos.y > b.maxY) { car.pos.y = clamp(car.pos.y, b.minY, b.maxY); car.vel.y *= -0.4; }
 }
 
-export function stepRace(race: Race, playerInput: Input, dt: number) {
+/**
+ * `playerIsAi` lets `scripts/sim-bots.ts` drive the player slot with the mistake-free
+ * AI (a "proxy" of a given car model) instead of `playerInput`; Game.tsx never sets it.
+ */
+export function stepRace(race: Race, playerInput: Input, dt: number, playerIsAi = false) {
   race.time += dt;
   if (race.phase === "countdown" && race.time >= 0) race.phase = "racing";
 
@@ -165,9 +237,9 @@ export function stepRace(race: Race, playerInput: Input, dt: number) {
   for (const car of race.cars) {
     let input = NO_INPUT;
     if (live) {
-      if (car.isPlayer) input = playerInput;
+      if (car.isPlayer) input = playerIsAi ? aiInput(race, car, dt, false) : playerInput;
       else if (car.finishTime !== null) input = { ...NO_INPUT, brake: speedOf(car) > 0 };
-      else input = aiInput(race, car);
+      else input = aiInput(race, car, dt);
     }
     const before = car.pos;
     stepCar(car, input, dt, race.theme.phys);

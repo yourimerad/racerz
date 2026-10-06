@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "check:tracks": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/resolve-ts.mjs scripts/check-tracks.ts"
+    "check:tracks": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/resolve-ts.mjs scripts/check-tracks.ts",
+    "sim": "node --no-warnings --import ./scripts/ts-loader.mjs scripts/sim-bots.ts"
   },
   "dependencies": {
     "next": "16.3.8",
