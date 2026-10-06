@@ -27,11 +27,11 @@ export type Skin = {
 export const MODELS: Record<ModelId, CarModel> = {
   gt: { id: "gt", name: "Racerz GT", price: 0, speed: 1, accel: 1, grip: 1, factory: { name: "Usine", body: "#e63946", accent: "#9d1c27" } },
   aventador: {
-    id: "aventador", name: "Lamborghini Aventador SVJ", price: 32_500, speed: 1.07, accel: 1.12, grip: 1.05,
+    id: "aventador", name: "Lamborghini Aventador SVJ", price: 60_000, speed: 1.07, accel: 1.12, grip: 1.05,
     factory: { name: "Noir mat", body: "#1d1d20", accent: "#3a3a40", matte: true },
   },
   f8: {
-    id: "f8", name: "Ferrari F8 Spider", price: 300_000, speed: 1.12, accel: 1.15, grip: 1.1,
+    id: "f8", name: "Ferrari F8 Spider", price: 150_000, speed: 1.12, accel: 1.15, grip: 1.1,
     factory: { name: "Rosso Corsa", body: "#d40000", accent: "#8a0000" },
   },
 };
@@ -61,9 +61,9 @@ export type Profile = {
   skins: SkinId[];
 };
 
-export const NEW_PROFILE: Profile = { money: 1_000_000, cars: { gt: { level: 1, paliers: 0, skin: "factory" } }, selected: "gt", skins: ["factory"] };
+export const NEW_PROFILE: Profile = { money: 2_000, cars: { gt: { level: 1, paliers: 0, skin: "factory" } }, selected: "gt", skins: ["factory"] };
 
-export const PAYOUTS = [20_000, 1_500, 1_000]; // 1st, 2nd, 3rd
+export const PAYOUTS = [5_000, 2_500, 1_000]; // 1st, 2nd, 3rd
 export const PALIERS_PER_LEVEL = 5;
 export const MAX_LEVEL = 10;
 /** A won race only earns a tier when it was driven cleanly. */
