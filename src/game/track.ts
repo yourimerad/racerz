@@ -1,5 +1,8 @@
 import { type Vec, vec, sub, len, dot } from "./vec";
 
+/** A sample-index range on the closed path; `end < start` means the range wraps past index 0. */
+export type CoverRange = { start: number; end: number };
+
 export type Track = {
   /** Closed centerline, densely sampled. Index 0 is the start/finish line. */
   path: Vec[];
@@ -9,16 +12,22 @@ export type Track = {
   /** Distance from the centerline to the barriers on both sides (runoff between kerb and barrier). */
   barrier: number;
   bounds: { minX: number; minY: number; maxX: number; maxY: number };
+  /** Covered sections (tunnels, crater, canyon…), as sample-index ranges. */
+  covers: CoverRange[];
 };
 
-// Hand-designed circuit, clockwise. The first point is the start/finish line.
-const CONTROL_POINTS: [number, number][] = [
-  [400, 1100], [400, 600], [650, 300], [1100, 280], [1400, 560], [1750, 420],
-  [2250, 330], [2700, 560], [2780, 1050], [2450, 1380], [1950, 1250],
-  [1550, 1560], [1050, 1760], [600, 1620],
-];
+/** A covered section, in control-point units (e.g. 3.5 = halfway between points 3 and 4). */
+export type CoverLayout = { from: number; to: number };
+
+/** Per-mode circuit: its own control points, optional width and covered sections. */
+export type TrackLayout = {
+  points: [number, number][];
+  width?: number;
+  covers?: CoverLayout[];
+};
 
 const SAMPLES_PER_SEGMENT = 40;
+const DEFAULT_WIDTH = 190;
 
 function catmullRom(p0: Vec, p1: Vec, p2: Vec, p3: Vec, t: number): Vec {
   const t2 = t * t;
@@ -28,8 +37,14 @@ function catmullRom(p0: Vec, p1: Vec, p2: Vec, p3: Vec, t: number): Vec {
   return vec(f(p0.x, p1.x, p2.x, p3.x), f(p0.y, p1.y, p2.y, p3.y));
 }
 
-export function buildTrack(width = 190): Track {
-  const pts = CONTROL_POINTS.map(([x, y]) => vec(x, y));
+/** Convert a control-point unit (may be fractional) to a sample index, wrapped into [0, total). */
+function toSampleIndex(control: number, samplesPerSegment: number, total: number): number {
+  return ((Math.round(control * samplesPerSegment) % total) + total) % total;
+}
+
+export function buildTrack(layout: TrackLayout): Track {
+  const width = layout.width ?? DEFAULT_WIDTH;
+  const pts = layout.points.map(([x, y]) => vec(x, y));
   const n = pts.length;
   const path: Vec[] = [];
   for (let i = 0; i < n; i++) {
@@ -43,13 +58,33 @@ export function buildTrack(width = 190): Track {
   });
   const xs = path.map((p) => p.x), ys = path.map((p) => p.y);
   const m = width * 2;
+  const covers: CoverRange[] = (layout.covers ?? []).map((c) => ({
+    start: toSampleIndex(c.from, SAMPLES_PER_SEGMENT, path.length),
+    end: toSampleIndex(c.to, SAMPLES_PER_SEGMENT, path.length),
+  }));
   return {
     path,
     tangents,
     width,
     barrier: width / 2 + 55,
     bounds: { minX: Math.min(...xs) - m, minY: Math.min(...ys) - m, maxX: Math.max(...xs) + m, maxY: Math.max(...ys) + m },
+    covers,
   };
+}
+
+/** Whether sample `index` falls under a covered section (handles ranges that wrap past 0). */
+export function isCovered(track: Track, index: number): boolean {
+  const n = track.path.length;
+  const i = ((index % n) + n) % n;
+  return track.covers.some((c) => (c.start <= c.end ? i >= c.start && i <= c.end : i >= c.start || i <= c.end));
+}
+
+const tracks = new Map<string, Track>();
+/** The layout is deterministic, so each mode's track is built once and reused. */
+export function trackFor(id: string, layout: TrackLayout): Track {
+  let t = tracks.get(id);
+  if (!t) tracks.set(id, (t = buildTrack(layout)));
+  return t;
 }
 
 /** Nearest centerline sample and signed lateral offset (positive = right of travel direction). */

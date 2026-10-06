@@ -1,7 +1,7 @@
 import { speedOf } from "./car";
 import { drawCarSprite } from "./carArt";
 import type { FxView } from "./fx";
-import { staticLayer, tracePath } from "./layer";
+import { overheadLayer, staticLayer, tracePath } from "./layer";
 import { type Race, TOTAL_LAPS, standings } from "./race";
 
 const VIEW_SIZE = 1000; // world units visible across the smaller screen dimension
@@ -30,6 +30,25 @@ function drawMinimap(ctx: CanvasRenderingContext2D, race: Race, w: number) {
   ctx.lineWidth = track.width * 0.6;
   ctx.strokeStyle = race.theme.colors.minimap;
   ctx.stroke();
+
+  // Covered sections (tunnels, crater…): darker and dashed over the base line.
+  ctx.lineCap = "round";
+  ctx.lineWidth = track.width * 0.6;
+  ctx.strokeStyle = "rgba(0,0,0,0.6)";
+  ctx.setLineDash([track.width * 0.25, track.width * 0.25]);
+  for (const cover of track.covers) {
+    ctx.beginPath();
+    const n = track.path.length;
+    const len = cover.start <= cover.end ? cover.end - cover.start : n - cover.start + cover.end;
+    for (let k = 0; k <= len; k++) {
+      const p = track.path[(cover.start + k) % n];
+      if (k) ctx.lineTo(p.x, p.y);
+      else ctx.moveTo(p.x, p.y);
+    }
+    ctx.stroke();
+  }
+  ctx.setLineDash([]);
+
   for (const car of race.cars) {
     ctx.fillStyle = car.color;
     ctx.beginPath();
@@ -128,6 +147,15 @@ export function render(ctx: CanvasRenderingContext2D, race: Race, w: number, h: 
 
   for (const car of race.cars) drawCarSprite(ctx, car.model, car.skin, car.pos.x, car.pos.y, car.angle);
   theme.fx.air?.(ctx, scene, view);
+
+  // Covered-section ceiling: fades out over the player (race.overheadOpacity) so they can
+  // still see their car and the road while a bot elsewhere stays hidden under it.
+  const overhead = overheadLayer(theme, track, scene);
+  if (overhead) {
+    ctx.globalAlpha = race.overheadOpacity;
+    ctx.drawImage(overhead, b.minX, b.minY, b.maxX - b.minX, b.maxY - b.minY);
+    ctx.globalAlpha = 1;
+  }
   ctx.restore();
 
   theme.fx.screen?.(ctx, view);

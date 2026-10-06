@@ -2,7 +2,7 @@ import { type Car, type Input, type Surface, NO_INPUT, CAR_RADIUS, PHYS, stepCar
 import { type ModelId, type SkinId, MODELS, carStats, skinOf } from "./garage";
 import type { Scene } from "./scenery";
 import { type Theme, type ThemeId, THEMES, sceneFor } from "./themes";
-import { type Track, buildTrack, locate } from "./track";
+import { isCovered, locate, trackFor, type Track } from "./track";
 import { type Vec, vec, add, sub, scale, len, dot, angleDiff, clamp, fromAngle } from "./vec";
 
 export const TOTAL_LAPS = 3;
@@ -20,6 +20,8 @@ export type Race = {
   /** Seconds since the green light (negative during countdown). */
   time: number;
   skids: Skid[];
+  /** Opacity of the covered-section overhead layer over the player (1 outside, ~0.3 inside). */
+  overheadOpacity: number;
 };
 
 export type PlayerCar = { model: ModelId; skin: SkinId; level: number };
@@ -32,8 +34,8 @@ const ROSTER = [
 ];
 
 export function createRace(themeId: ThemeId, player: PlayerCar): Race {
-  const track = buildTrack();
   const theme = THEMES[themeId];
+  const track = trackFor(themeId, theme.layout);
   const n = track.path.length;
   const cars: Car[] = ROSTER.map((r, i) => {
     // 2-wide staggered grid behind the line; player starts at the back.
@@ -53,10 +55,11 @@ export function createRace(themeId: ThemeId, player: PlayerCar): Race {
       progress: idx - n, lastIndex: idx, lap: 0, lapStart: 0, bestLap: null, finishTime: null, surface: "track",
     };
   });
-  return { track, theme, scene: sceneFor(theme, track), cars, phase: "countdown", time: -COUNTDOWN, skids: [] };
+  return { track, theme, scene: sceneFor(theme, track), cars, phase: "countdown", time: -COUNTDOWN, skids: [], overheadOpacity: 1 };
 }
 
-function aiInput(race: Race, car: Car): Input {
+/** AI steering/throttle. Exported so the track-check script can run an all-AI race (car 0 included). */
+export function aiInput(race: Race, car: Car): Input {
   const { track } = race;
   const n = track.path.length;
   const grip = race.theme.phys.trackGrip;
@@ -181,6 +184,10 @@ export function stepRace(race: Race, playerInput: Input, dt: number) {
 
   for (const s of race.skids) s.life -= dt * 0.25;
   race.skids = race.skids.filter((s) => s.life > 0).slice(-600);
+
+  // Fade the overhead layer when the player is under a covered section (~0.25s either way).
+  const target = isCovered(race.track, race.cars[0].lastIndex) ? 0.3 : 1;
+  race.overheadOpacity += (target - race.overheadOpacity) * Math.min(1, dt / 0.25);
 
   if (race.phase === "racing" && race.cars[0].finishTime !== null) race.phase = "finished";
 }

@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "check:tracks": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/resolve-ts.mjs scripts/check-tracks.ts"
   },
   "dependencies": {
     "next": "16.3.8",

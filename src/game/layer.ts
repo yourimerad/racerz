@@ -3,10 +3,25 @@ import type { Theme } from "./themes";
 import type { Track } from "./track";
 
 // The static part of the world (ground, track, props) is painted once per mode into an
-// offscreen canvas, then blitted every frame with the camera transform.
+// offscreen canvas, then blitted every frame with the camera transform. A mode that defines
+// Scene.overhead gets a second, transparent offscreen layer (the covered-section ceiling),
+// painted with the exact same transform and blitted after the cars.
 
 type Layer = { id: string; canvas: HTMLCanvasElement };
 let cached: Layer | null = null; // one mode at a time keeps memory bounded
+let cachedOverhead: Layer | null = null;
+
+/**
+ * Canvas size and scale for a track's offscreen layers (pure, no DOM access — also used by
+ * scripts/check-tracks.ts to verify the scale without a canvas).
+ */
+export function layerSize(track: Track) {
+  const b = track.bounds;
+  const w = b.maxX - b.minX, h = b.maxY - b.minY;
+  // ~14 Mpx max: sharp enough on HiDPI screens, under mobile canvas limits.
+  const s = Math.min(1.5, Math.sqrt(14e6 / (w * h)));
+  return { w, h, s, b };
+}
 
 function tracePath(ctx: CanvasRenderingContext2D, track: Track) {
   ctx.beginPath();
@@ -90,10 +105,7 @@ function drawBarriers(ctx: CanvasRenderingContext2D, track: Track, c: Theme["col
 
 export function staticLayer(theme: Theme, track: Track, scene: Scene): HTMLCanvasElement {
   if (cached?.id === theme.id) return cached.canvas;
-  const b = track.bounds;
-  const w = b.maxX - b.minX, h = b.maxY - b.minY;
-  // ~14 Mpx max: sharp enough on HiDPI screens, under mobile canvas limits.
-  const s = Math.min(1.5, Math.sqrt(14e6 / (w * h)));
+  const { w, h, s, b } = layerSize(track);
   const canvas = document.createElement("canvas");
   canvas.width = Math.ceil(w * s);
   canvas.height = Math.ceil(h * s);
@@ -110,6 +122,27 @@ export function staticLayer(theme: Theme, track: Track, scene: Scene): HTMLCanva
   drawBarriers(ctx, track, theme.colors, canvas.width, canvas.height, s);
   scene.over(ctx);
   cached = { id: theme.id, canvas };
+  return canvas;
+}
+
+/**
+ * Ceiling of a mode's covered sections, painted once into its own transparent offscreen
+ * layer (same transform/resolution as the static layer). Returns null when the mode has no
+ * `scene.overhead`, so a mode without covered sections costs no extra canvas memory.
+ */
+export function overheadLayer(theme: Theme, track: Track, scene: Scene): HTMLCanvasElement | null {
+  if (!scene.overhead) return null;
+  if (cachedOverhead?.id === theme.id) return cachedOverhead.canvas;
+  const { w, h, s, b } = layerSize(track);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.ceil(w * s);
+  canvas.height = Math.ceil(h * s);
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return canvas;
+  ctx.scale(s, s);
+  ctx.translate(-b.minX, -b.minY);
+  scene.overhead(ctx);
+  cachedOverhead = { id: theme.id, canvas };
   return canvas;
 }
 
