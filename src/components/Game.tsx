@@ -8,7 +8,10 @@ import {
 import { type Race, createRace, stepRace, standings } from "@/game/race";
 import { formatTime, render } from "@/game/render";
 import { type ThemeId, THEMES, THEME_ORDER } from "@/game/themes";
-import { type Profile, type RaceReport, DEBUG_PROFILE, NEW_PROFILE, formatMoney, settleRace } from "@/game/garage";
+import {
+  type Profile, type RaceReport, DEBUG_PROFILE, formatMoney, getPlayerProfile, getServerPlayerProfile, savePlayerProfile, settleRace,
+  subscribePlayerProfile,
+} from "@/game/garage";
 import DebugPanel from "./DebugPanel";
 import Fireworks from "./Fireworks";
 import Lobby from "./Lobby";
@@ -44,20 +47,18 @@ export default function Game() {
   useEffect(() => {
     if (debugModeFromUrl()) setDebugMode(true);
   }, []);
-  // Money, cars, skins and tiers: session only. Debug mode plays with its own
-  // separate profile so purchases/earnings there never leak into the player's.
-  const [playerProfile, setPlayerProfile] = useState<Profile>(NEW_PROFILE);
+  // Money, cars and skins. The player profile is persisted to localStorage
+  // (external store, read without hydration mismatch); debug mode plays with
+  // its own in-memory profile so purchases/earnings there never leak into the
+  // player's, and vice versa.
+  const playerProfile = useSyncExternalStore(subscribePlayerProfile, getPlayerProfile, getServerPlayerProfile);
   const [debugProfile, setDebugProfile] = useState<Profile>(DEBUG_PROFILE);
-  const playerProfileRef = useRef(playerProfile);
   const debugProfileRef = useRef(debugProfile);
   const profile = debugMode ? debugProfile : playerProfile;
-  const setProfile = debugMode ? setDebugProfile : setPlayerProfile;
+  const setProfile = debugMode ? setDebugProfile : savePlayerProfile;
   // Which profile was active when the current race started (toggling mid-race must not matter).
   const raceIsDebugRef = useRef(false);
   const [report, setReport] = useState<RaceReport | null>(null);
-  useEffect(() => {
-    playerProfileRef.current = playerProfile;
-  }, [playerProfile]);
   useEffect(() => {
     debugProfileRef.current = debugProfile;
   }, [debugProfile]);
@@ -65,7 +66,7 @@ export default function Game() {
   const start = useCallback(() => {
     const isDebugRace = getDebugMode();
     raceIsDebugRef.current = isDebugRace;
-    const p = (isDebugRace ? debugProfileRef : playerProfileRef).current;
+    const p = isDebugRace ? debugProfileRef.current : getPlayerProfile();
     const car = p.cars[p.selected] ?? { level: 1, skin: "factory" as const };
     raceRef.current = createRace(mode, { model: p.selected, skin: car.skin, level: car.level });
     inputRef.current = { ...NO_INPUT };
@@ -142,11 +143,15 @@ export default function Game() {
         const player = race.cars[0];
         const place = standings(race).indexOf(player) + 1;
         // Settle the profile that was active at race start, not whatever is active now.
-        const activeRef = raceIsDebugRef.current ? debugProfileRef : playerProfileRef;
-        const setActive = raceIsDebugRef.current ? setDebugProfile : setPlayerProfile;
-        const settled = settleRace(activeRef.current, place, player.offTime / Math.max(1, player.finishTime ?? race.time), player.hits);
-        activeRef.current = settled.profile;
-        setActive(settled.profile);
+        const isDebugRace = raceIsDebugRef.current;
+        const current = isDebugRace ? debugProfileRef.current : getPlayerProfile();
+        const settled = settleRace(current, place, player.offTime / Math.max(1, player.finishTime ?? race.time), player.hits);
+        if (isDebugRace) {
+          debugProfileRef.current = settled.profile;
+          setDebugProfile(settled.profile);
+        } else {
+          savePlayerProfile(settled.profile);
+        }
         setReport(settled.report);
         // Let the other cars run a bit before showing the podium.
         setTimeout(() => {

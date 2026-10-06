@@ -1,5 +1,5 @@
 // Player progression: cars, skins, race payouts and upgrade tiers ("paliers").
-// Kept in memory for the session (no persistence).
+// The player profile is persisted to localStorage (debug mode's profile is not).
 
 export type ModelId = "gt" | "mx5" | "p911" | "aventador" | "f8";
 export type SkinId = "factory" | "pearl" | "electric" | "mantis" | "arancio" | "stripes" | "carbon" | "gold";
@@ -156,4 +156,100 @@ export function equipSkin(p: Profile, id: SkinId): Profile {
 
 export function selectCar(p: Profile, id: ModelId): Profile {
   return p.cars[id] ? { ...p, selected: id } : p;
+}
+
+function isModelId(x: unknown): x is ModelId {
+  return typeof x === "string" && x in MODELS;
+}
+
+function isSkinId(x: unknown): x is SkinId {
+  return x === "factory" || (typeof x === "string" && x in SKINS);
+}
+
+/**
+ * Sanitizes whatever a localStorage read might produce: corrupted JSON, an old
+ * shape, or ids from models/skins that no longer exist (or don't exist yet).
+ * Unknown ids are dropped; valid ones are accepted automatically against the
+ * live MODELS/SKINS tables, so future additions need no change here.
+ */
+export function parseProfile(raw: unknown): Profile {
+  if (typeof raw !== "object" || raw === null) return NEW_PROFILE;
+  const r = raw as Record<string, unknown>;
+
+  const money = Number.isInteger(r.money) && (r.money as number) >= 0 ? (r.money as number) : NEW_PROFILE.money;
+
+  const skins: SkinId[] = ["factory"];
+  if (Array.isArray(r.skins)) {
+    for (const s of r.skins) {
+      if (isSkinId(s) && s !== "factory" && !skins.includes(s)) skins.push(s);
+    }
+  }
+
+  const cars: Partial<Record<ModelId, OwnedCar>> = { gt: { level: 1, paliers: 0, skin: "factory" } };
+  if (typeof r.cars === "object" && r.cars !== null) {
+    for (const [id, owned] of Object.entries(r.cars as Record<string, unknown>)) {
+      if (!isModelId(id) || typeof owned !== "object" || owned === null) continue;
+      const o = owned as Record<string, unknown>;
+      const level = Number.isInteger(o.level) && (o.level as number) >= 1 && (o.level as number) <= MAX_LEVEL ? (o.level as number) : 1;
+      const paliers = Number.isInteger(o.paliers) && (o.paliers as number) >= 0 && (o.paliers as number) < PALIERS_PER_LEVEL ? (o.paliers as number) : 0;
+      const skin = isSkinId(o.skin) && skins.includes(o.skin) ? o.skin : "factory";
+      cars[id] = { level, paliers, skin };
+    }
+  }
+
+  const selected = isModelId(r.selected) && cars[r.selected] ? r.selected : "gt";
+
+  return { money, cars, selected, skins };
+}
+
+const STORAGE_KEY = "racerz.profile.v1";
+
+function readStoredProfile(): Profile {
+  if (typeof window === "undefined") return NEW_PROFILE;
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    return raw ? parseProfile(JSON.parse(raw)) : NEW_PROFILE;
+  } catch {
+    // Corrupted JSON, private browsing, or storage disabled: start fresh.
+    return NEW_PROFILE;
+  }
+}
+
+function writeStoredProfile(p: Profile) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(p));
+  } catch {
+    // Quota exceeded or storage disabled: fall back to in-memory only.
+  }
+}
+
+let cachedPlayerProfile: Profile | null = null;
+const playerProfileListeners = new Set<() => void>();
+
+/**
+ * The player profile as an external store backed by localStorage, so
+ * Game.tsx can read it with useSyncExternalStore and avoid any hydration
+ * mismatch on the statically prerendered page (the server always sees
+ * `getServerPlayerProfile`, never the real storage).
+ */
+export function getPlayerProfile(): Profile {
+  if (cachedPlayerProfile === null) cachedPlayerProfile = readStoredProfile();
+  return cachedPlayerProfile;
+}
+
+export function getServerPlayerProfile(): Profile {
+  return NEW_PROFILE;
+}
+
+export function subscribePlayerProfile(listener: () => void) {
+  playerProfileListeners.add(listener);
+  return () => playerProfileListeners.delete(listener);
+}
+
+/** Persists the player profile and notifies subscribers. Never used for the debug profile. */
+export function savePlayerProfile(p: Profile) {
+  cachedPlayerProfile = p;
+  writeStoredProfile(p);
+  for (const l of playerProfileListeners) l();
 }
