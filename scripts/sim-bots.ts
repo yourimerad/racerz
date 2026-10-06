@@ -1,7 +1,7 @@
 // Headless bot-difficulty simulation. Run with:
-//   node --no-warnings --import ./scripts/ts-loader.mjs scripts/sim-bots.ts
-// (or `pnpm sim`). No dependency, no network: Node 25 strips the types natively and
-// scripts/ts-loader.mjs teaches module resolution to find src/game's extensionless
+//   pnpm sim
+// No dependency, no network: Node 25 strips the types natively and
+// scripts/resolve-ts.mjs teaches module resolution to find src/game's extensionless
 // relative imports (e.g. `from "./car"`).
 //
 // For each mode and several seeds, races the 3 bots against a mistake-free AI "proxy"
