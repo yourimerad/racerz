@@ -75,6 +75,8 @@ export type Profile = {
 };
 
 export const NEW_PROFILE: Profile = { money: 2_000, cars: { gt: { level: 1, paliers: 0, skin: "factory" } }, selected: "gt", skins: ["factory"] };
+/** Debug mode plays with a separate profile; its purchases/earnings never touch the player's. */
+export const DEBUG_PROFILE: Profile = { ...NEW_PROFILE, money: 1_000_000 };
 
 export const PAYOUTS = [5_000, 2_500, 1_000]; // 1st, 2nd, 3rd
 export const PALIERS_PER_LEVEL = 5;

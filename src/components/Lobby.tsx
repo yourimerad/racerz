@@ -45,9 +45,10 @@ type Props = {
   setMode: (m: ThemeId) => void;
   record: number | null;
   onStart: () => void;
+  debug: boolean;
 };
 
-export default function Lobby({ profile, setProfile, mode, setMode, record, onStart }: Props) {
+export default function Lobby({ profile, setProfile, mode, setMode, record, onStart, debug }: Props) {
   const selected = profile.cars[profile.selected];
 
   return (
@@ -57,7 +58,10 @@ export default function Lobby({ profile, setProfile, mode, setMode, record, onSt
           <h1 className={styles.logo}>RACERZ</h1>
           <p className={styles.credit}>créé par Andrea Tranchant</p>
         </div>
-        <div className={styles.money}>💰 {formatMoney(profile.money)}</div>
+        <div className={styles.money}>
+          💰 {formatMoney(profile.money)}
+          {debug && <span className={styles.debugBadge}>DEBUG</span>}
+        </div>
       </header>
 
       <div className={styles.lobbyGrid}>
@@ -150,7 +154,9 @@ export default function Lobby({ profile, setProfile, mode, setMode, record, onSt
           <button className={styles.cta} onClick={onStart}>Démarrer (Entrée / Espace)</button>
           <ul className={styles.help}>
             <li><kbd>↑</kbd>/<kbd>W</kbd>/<kbd>Z</kbd> accélérer · <kbd>↓</kbd>/<kbd>S</kbd> freiner · <kbd>←</kbd><kbd>→</kbd>/<kbd>A</kbd><kbd>Q</kbd><kbd>D</kbd> tourner · <kbd>Espace</kbd> frein à main</li>
-            <li><kbd>1</kbd>–<kbd>4</kbd> mode · <kbd>R</kbd> recommencer · <kbd>H</kbd> panneau debug</li>
+            <li>
+              <kbd>1</kbd>–<kbd>4</kbd> mode · <kbd>R</kbd> recommencer{debug && <> · <kbd>H</kbd> panneau debug</>}
+            </li>
           </ul>
         </section>
       </div>

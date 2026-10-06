@@ -46,6 +46,10 @@
 .lobbyHead { width: min(1180px, 100%); display: flex; align-items: center; justify-content: space-between; }
 .logo { font-size: 44px; font-weight: 900; font-style: italic; color: #ffd166; text-shadow: 4px 4px 0 #d62828; }
 .money { font: 700 22px var(--font-geist-mono), monospace; background: #0006; padding: 8px 16px; border-radius: 999px; border: 1px solid #ffd16688; }
+.debugBadge {
+  margin-left: 8px; font: 700 11px var(--font-geist-mono), monospace; letter-spacing: 0.08em; vertical-align: middle;
+  color: #9ef; border: 1px solid #9ef8; border-radius: 999px; padding: 3px 8px; opacity: 0.85;
+}
 .lobbyGrid { width: min(1180px, 100%); display: grid; grid-template-columns: 1fr 1.25fr; gap: 16px; text-align: left; }
 @media (max-width: 900px) { .lobbyGrid { grid-template-columns: 1fr; } }
 .panel { background: #0005; border: 1px solid #fff2; border-radius: 16px; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }

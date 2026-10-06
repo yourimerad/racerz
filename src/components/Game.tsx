@@ -1,11 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { type Input, NO_INPUT } from "@/game/car";
+import {
+  SECRET_WORD, advanceSecretBuffer, debugModeFromUrl, getDebugMode, getServerDebugMode, setDebugMode, subscribeDebugMode, toggleDebugMode,
+} from "@/game/debug";
 import { type Race, createRace, stepRace, standings } from "@/game/race";
 import { formatTime, render } from "@/game/render";
 import { type ThemeId, THEMES, THEME_ORDER } from "@/game/themes";
-import { type Profile, type RaceReport, NEW_PROFILE, formatMoney, settleRace } from "@/game/garage";
+import { type Profile, type RaceReport, DEBUG_PROFILE, NEW_PROFILE, formatMoney, settleRace } from "@/game/garage";
 import DebugPanel from "./DebugPanel";
 import Fireworks from "./Fireworks";
 import Lobby from "./Lobby";
@@ -32,17 +35,37 @@ export default function Game() {
   // Best lap per mode, kept for the session only.
   const [records, setRecords] = useState<Partial<Record<ThemeId, number>>>({});
   const record = records[mode] ?? null;
-  const [debug, setDebug] = useState(false);
-  // Money, cars, skins and tiers: session only.
-  const [profile, setProfile] = useState<Profile>(NEW_PROFILE);
-  const profileRef = useRef(profile);
+  // Debug mode: locked by default, unlocked for the session via ?debug=1 or the
+  // "debug" secret sequence (see below). External store to read it without any
+  // hydration mismatch on this statically prerendered page.
+  const debugMode = useSyncExternalStore(subscribeDebugMode, getDebugMode, getServerDebugMode);
+  const [debugPanelOpen, setDebugPanelOpen] = useState(false);
+  const secretBufferRef = useRef("");
+  useEffect(() => {
+    if (debugModeFromUrl()) setDebugMode(true);
+  }, []);
+  // Money, cars, skins and tiers: session only. Debug mode plays with its own
+  // separate profile so purchases/earnings there never leak into the player's.
+  const [playerProfile, setPlayerProfile] = useState<Profile>(NEW_PROFILE);
+  const [debugProfile, setDebugProfile] = useState<Profile>(DEBUG_PROFILE);
+  const playerProfileRef = useRef(playerProfile);
+  const debugProfileRef = useRef(debugProfile);
+  const profile = debugMode ? debugProfile : playerProfile;
+  const setProfile = debugMode ? setDebugProfile : setPlayerProfile;
+  // Which profile was active when the current race started (toggling mid-race must not matter).
+  const raceIsDebugRef = useRef(false);
   const [report, setReport] = useState<RaceReport | null>(null);
   useEffect(() => {
-    profileRef.current = profile;
-  }, [profile]);
+    playerProfileRef.current = playerProfile;
+  }, [playerProfile]);
+  useEffect(() => {
+    debugProfileRef.current = debugProfile;
+  }, [debugProfile]);
 
   const start = useCallback(() => {
-    const p = profileRef.current;
+    const isDebugRace = getDebugMode();
+    raceIsDebugRef.current = isDebugRace;
+    const p = (isDebugRace ? debugProfileRef : playerProfileRef).current;
     const car = p.cars[p.selected] ?? { level: 1, skin: "factory" as const };
     raceRef.current = createRace(mode, { model: p.selected, skin: car.skin, level: car.level });
     inputRef.current = { ...NO_INPUT };
@@ -59,9 +82,15 @@ export default function Game() {
           return;
         }
         if (e.code === "KeyR" && screen !== "menu") return start();
-        if (e.code === "KeyH") return setDebug((d) => !d);
+        if (debugMode && e.code === "KeyH") return setDebugPanelOpen((d) => !d);
         const digit = /^(Digit|Numpad)([1-4])$/.exec(e.code);
         if (digit && screen === "menu") return setMode(THEME_ORDER[Number(digit[2]) - 1]);
+        // Hidden unlock: typing "debug" toggles debug mode for the session, on any screen.
+        secretBufferRef.current = advanceSecretBuffer(secretBufferRef.current, e.key);
+        if (secretBufferRef.current === SECRET_WORD) {
+          secretBufferRef.current = "";
+          toggleDebugMode();
+        }
       }
       const k = KEYS[e.code];
       if (!k) return;
@@ -76,7 +105,7 @@ export default function Game() {
       window.removeEventListener("keydown", kd);
       window.removeEventListener("keyup", ku);
     };
-  }, [screen, start]);
+  }, [screen, start, debugMode]);
 
   useEffect(() => {
     if (screen !== "race") return;
@@ -112,9 +141,12 @@ export default function Game() {
         if (best !== null) setRecords((r) => (best < (r[id] ?? Infinity) ? { ...r, [id]: best } : r));
         const player = race.cars[0];
         const place = standings(race).indexOf(player) + 1;
-        const settled = settleRace(profileRef.current, place, player.offTime / Math.max(1, player.finishTime ?? race.time), player.hits);
-        profileRef.current = settled.profile;
-        setProfile(settled.profile);
+        // Settle the profile that was active at race start, not whatever is active now.
+        const activeRef = raceIsDebugRef.current ? debugProfileRef : playerProfileRef;
+        const setActive = raceIsDebugRef.current ? setDebugProfile : setPlayerProfile;
+        const settled = settleRace(activeRef.current, place, player.offTime / Math.max(1, player.finishTime ?? race.time), player.hits);
+        activeRef.current = settled.profile;
+        setActive(settled.profile);
         setReport(settled.report);
         // Let the other cars run a bit before showing the podium.
         setTimeout(() => {
@@ -144,7 +176,7 @@ export default function Game() {
   return (
     <div className={styles.root}>
       <canvas ref={canvasRef} className={styles.canvas} />
-      {debug && <DebugPanel raceRef={raceRef} mode={mode} />}
+      {debugMode && debugPanelOpen && <DebugPanel raceRef={raceRef} mode={mode} />}
 
       {screen === "race" && (
         <div className={styles.touch}>
@@ -160,7 +192,7 @@ export default function Game() {
       )}
 
       {screen === "menu" && (
-        <Lobby profile={profile} setProfile={setProfile} mode={mode} setMode={setMode} record={record} onStart={start} />
+        <Lobby profile={profile} setProfile={setProfile} mode={mode} setMode={setMode} record={record} onStart={start} debug={debugMode} />
       )}
 
       {screen === "results" && report?.place === 1 && <Fireworks />}
