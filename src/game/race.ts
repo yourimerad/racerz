@@ -30,7 +30,11 @@ export type Race = {
   rng: Rng;
   /** Random-mistake bookkeeping per car, indexed by `car.id`. */
   ai: AiState[];
+  /** Straw thrown up by bumper hits (hay bales), drawn by render.ts. */
+  straw: Straw[];
 };
+
+export type Straw = { x: number; y: number; vx: number; vy: number; rot: number; life: number };
 
 export type PlayerCar = { model: ModelId; skin: SkinId; level: number };
 
@@ -74,7 +78,7 @@ export function createRace(themeId: ThemeId, player: PlayerCar, seed?: number): 
   });
   const rng = mulberry32(seed ?? ((Math.random() * 2 ** 32) >>> 0));
   const ai: AiState[] = cars.map(() => ({ mistake: null, until: 0, cooldown: 0, sign: 1, count: 0 }));
-  return { track, theme, scene: sceneFor(theme, track), cars, phase: "countdown", time: -COUNTDOWN, skids: [], overheadOpacity: 1, rng, ai };
+  return { track, theme, scene: sceneFor(theme, track), cars, phase: "countdown", time: -COUNTDOWN, skids: [], overheadOpacity: 1, rng, ai, straw: [] };
 }
 
 const MISTAKE_KINDS: MistakeKind[] = ["lateBrake", "liftOff", "wideLine", "twitch"];
@@ -196,10 +200,40 @@ function hitBarrier(race: Race, car: Car, index: number, dist: number) {
   }
 }
 
+/** Normal speed a bumper sends a car back with: springy (more than it came in), never less than a kick. */
+const BUMPER_BOUNCE = 1.45;
+const BUMPER_KICK = 300;
+
+/** Hay bales and other round bumpers: push out, bounce back hard, spin a little, throw straw. */
+function hitBumpers(race: Race, car: Car) {
+  for (const b of race.scene.bumpers ?? []) {
+    const d = sub(car.pos, b);
+    const dist = len(d);
+    const min = b.r + CAR_RADIUS * 0.8;
+    if (dist === 0 || dist >= min) continue;
+    const nrm = scale(d, 1 / dist);
+    car.pos = add(b, scale(nrm, min));
+    const vn = dot(car.vel, nrm);
+    if (vn >= 0) continue;
+    car.vel = add(car.vel, scale(nrm, -vn + Math.max(-vn * BUMPER_BOUNCE, BUMPER_KICK)));
+    const fwd = fromAngle(car.angle);
+    car.angle += 0.3 * Math.sign(fwd.x * nrm.y - fwd.y * nrm.x);
+    if (-vn > 80 && car.hitCooldown <= 0) {
+      car.hits++;
+      car.hitCooldown = 0.5;
+      for (let k = 0; k < 14; k++) {
+        const a = Math.atan2(nrm.y, nrm.x) + (race.rng() - 0.5) * 2.4, v = 60 + race.rng() * 160;
+        race.straw.push({ x: b.x + nrm.x * b.r, y: b.y + nrm.y * b.r, vx: Math.cos(a) * v, vy: Math.sin(a) * v, rot: race.rng() * Math.PI, life: 1 });
+      }
+    }
+  }
+}
+
 function updateProgress(race: Race, car: Car, dt: number) {
   const n = race.track.path.length;
   const loc = locate(race.track, car.pos);
   hitBarrier(race, car, loc.index, loc.dist);
+  hitBumpers(race, car);
   car.surface = surfaceAt(race, car.pos, Math.min(loc.dist, race.track.barrier));
   if (race.phase === "racing" && car.finishTime === null && car.surface !== "track") car.offTime += dt;
   let delta = loc.index - car.lastIndex;
@@ -256,6 +290,14 @@ export function stepRace(race: Race, playerInput: Input, dt: number, playerIsAi 
 
   for (const s of race.skids) s.life -= dt * 0.25;
   race.skids = race.skids.filter((s) => s.life > 0).slice(-600);
+  for (const p of race.straw) {
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.vx *= 1 - 3 * dt;
+    p.vy *= 1 - 3 * dt;
+    p.life -= dt * 0.8;
+  }
+  race.straw = race.straw.filter((p) => p.life > 0).slice(-300);
 
   // Fade the overhead layer when the player is under a covered section (~0.25s either way).
   const target = isCovered(race.track, race.cars[0].lastIndex) ? 0.3 : 1;

@@ -14,6 +14,8 @@ export type Scene = {
   lava: Circle[];
   /** Smoke sources for the animated layer. */
   vents: Circle[];
+  /** Solid round obstacles inside the barriers (hay bales…): cars bounce off them hard. */
+  bumpers?: Circle[];
   /** Ground painted under the track. */
   under(ctx: Ctx): void;
   /** Texture painted over the asphalt (dust, ice streaks…). */

@@ -146,6 +146,15 @@ export function render(ctx: CanvasRenderingContext2D, race: Race, w: number, h: 
   }
 
   for (const car of race.cars) drawCarSprite(ctx, car.model, car.skin, car.pos.x, car.pos.y, car.angle);
+  for (const p of race.straw) {
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.rotate(p.rot + p.life * 4);
+    ctx.globalAlpha = Math.min(1, p.life * 1.5);
+    ctx.fillStyle = "#e9cf6f";
+    ctx.fillRect(-4, -1, 8, 2);
+    ctx.restore();
+  }
   theme.fx.air?.(ctx, scene, view);
 
   // Covered-section ceiling: fades out over the player (race.overheadOpacity) so they can

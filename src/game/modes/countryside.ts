@@ -100,6 +100,41 @@ function bale(ctx: Ctx, c: Circle) {
   ctx.stroke();
 }
 
+/** Square straw bale lining a bend (a bumper: cars bounce off it), long side along the road. */
+function strawBale(ctx: Ctx, c: Prop) {
+  ctx.save();
+  ctx.translate(c.x, c.y);
+  ctx.rotate(c.a);
+  const w = c.r * 2.1, h = c.r * 1.35;
+  ctx.fillStyle = "rgba(0,0,0,0.3)";
+  ctx.fillRect(-w / 2 + 3, -h / 2 + 4, w, h);
+  ctx.fillStyle = "#e3c35a";
+  ctx.fillRect(-w / 2, -h / 2, w, h);
+  ctx.fillStyle = "rgba(255,240,180,0.45)";
+  ctx.fillRect(-w / 2, -h / 2, w, h * 0.35);
+  ctx.strokeStyle = "rgba(150,110,40,0.55)";
+  ctx.lineWidth = 1;
+  for (let k = -2; k <= 2; k++) {
+    ctx.beginPath();
+    ctx.moveTo(-w / 2 + 2, (k * h) / 6);
+    ctx.lineTo(w / 2 - 2, (k * h) / 6 + 1);
+    ctx.stroke();
+  }
+  // Two binding twines.
+  ctx.strokeStyle = "#8a5a2b";
+  ctx.lineWidth = 1.6;
+  for (const x of [-w / 4, w / 4]) {
+    ctx.beginPath();
+    ctx.moveTo(x, -h / 2);
+    ctx.lineTo(x, h / 2);
+    ctx.stroke();
+  }
+  ctx.strokeStyle = "rgba(120,85,30,0.7)";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(-w / 2, -h / 2, w, h);
+  ctx.restore();
+}
+
 function cow(ctx: Ctx, c: Circle, rot: number) {
   ctx.save();
   ctx.translate(c.x, c.y);
@@ -356,6 +391,17 @@ export function scene(track: Track): Scene {
     }
   });
 
+  // Zone B's top bends: a row of straw bales in the runoff on the outside of each bend —
+  // solid bumpers (scene.bumpers) that cars bounce off hard.
+  const hayBales: Prop[] = [];
+  for (const i of stepThrough(spp, n, ZONE_B, 3)) {
+    const ta = track.tangents[(i - 6 + n) % n], tb = track.tangents[(i + 6) % n];
+    const turn = ta.x * tb.y - ta.y * tb.x;
+    if (Math.abs(turn) < 0.2) continue;
+    const p = onTrackPoint(track, i, -Math.sign(turn) * (track.width / 2 + 30));
+    hayBales.push({ x: p.x, y: p.y, r: 15, a: p.a });
+  }
+
   // Forest: dense trees on both sides, plus marked entrances/exits at the two canopy passages.
   const forestTrees = belt(track, rng, occ, stepThrough(spp, n, FOREST, 5), 16, 28, 10, 70);
   const archPillars: Circle[] = [];
@@ -443,6 +489,7 @@ export function scene(track: Track): Scene {
   return {
     lava: [],
     vents: lightGaps,
+    bumpers: hayBales,
     under(ctx) {
       for (const f of fields) {
         ctx.save();
@@ -537,6 +584,7 @@ export function scene(track: Track): Scene {
       for (const c of chapiteaux) chapiteau(ctx, c);
       for (const v of villageStands) villageStand(ctx, v);
       for (const vb of villageBales) bale(ctx, vb);
+      for (const hb of hayBales) strawBale(ctx, hb);
       for (const t of forestTrees) tree(ctx, t);
       for (const p of archPillars) archPillar(ctx, p);
       for (const t of trees) tree(ctx, t);
