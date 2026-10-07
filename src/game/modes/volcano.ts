@@ -4,8 +4,10 @@ import type { CoverRange, Track, TrackLayout } from "../track";
 
 // Volcano: the circuit climbs the cone's flank through a bored tunnel, crosses the open-air
 // crater on a stone causeway ringed by a lava lake, then drops back down through a second
-// tunnel on the far flank. The rest of the lap runs the ash slopes around the base.
-// (The more-realistic lava pass promised in docs/decisions.md is the next commit.)
+// tunnel on the far flank. The rest of the lap runs the ash slopes around the base. The lava
+// itself is cooled crust in irregular plates (scene.under) with slow-glowing fissures, a
+// hotter core, popping bubbles and a heat haze (fx.ground/air) — always clipped to the same
+// outline as scene.lava, so what's drawn always matches where the "lava" surface actually is.
 
 type Ctx = CanvasRenderingContext2D;
 type Pt = { x: number; y: number };
@@ -79,6 +81,54 @@ function flowStreak(rng: Rng): Pt[] {
     pts.push({ x: CRATER.x + Math.cos(a) * r, y: CRATER.y + Math.sin(a) * r });
   }
   return pts;
+}
+
+/**
+ * Deterministic organic outline around a lava pool (same seed every call), used for both the
+ * static crust and the clipped animated glow so the realistic rendering never drifts from the
+ * physical pool — only the colors inside it move.
+ */
+function blobPoints(c: Circle, i: number, n = 9, jitter = 0.08): Pt[] {
+  const pts: Pt[] = [];
+  for (let k = 0; k < n; k++) {
+    const a = (k / n) * TAU;
+    // Stays within ~0.86r..1.02r so the drawn pool never spills past the physical lava disc.
+    const r = c.r * (0.94 + (hash(i, k * 7 + 3) - 0.5) * 2 * jitter);
+    pts.push({ x: c.x + Math.cos(a) * r, y: c.y + Math.sin(a) * r });
+  }
+  return pts;
+}
+
+function tracePoly(ctx: Ctx, pts: Pt[]) {
+  ctx.beginPath();
+  pts.forEach((p, k) => (k ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+  ctx.closePath();
+}
+
+type Crack = { a: Pt; b: Pt; seed: number };
+
+/** A couple of hairline fissures per pool, well inside blobPoints' radius at any jitter. */
+function crackLines(c: Circle, i: number): Crack[] {
+  const n = 2 + Math.floor(hash(i, 90) * 2); // 2-3 cracks
+  const out: Crack[] = [];
+  for (let k = 0; k < n; k++) {
+    const a = hash(i, k * 5 + 1) * TAU;
+    const len = c.r * (0.4 + hash(i, k * 5 + 2) * 0.35);
+    const ox = (hash(i, k * 5 + 4) - 0.5) * c.r * 0.35, oy = (hash(i, k * 5 + 5) - 0.5) * c.r * 0.35;
+    out.push({
+      a: { x: c.x + ox - Math.cos(a) * len * 0.5, y: c.y + oy - Math.sin(a) * len * 0.5 },
+      b: { x: c.x + ox + Math.cos(a) * len * 0.5, y: c.y + oy + Math.sin(a) * len * 0.5 },
+      seed: i * 11 + k * 3 + 1,
+    });
+  }
+  return out;
+}
+
+/** A pool's slow swell-and-pop bubble cycle; shared by the ground glow and the ember spray. */
+function bubbleCycle(i: number, t: number) {
+  const period = 3 + hash(i, 70) * 3;
+  const phase = wrap(t + hash(i, 71) * period, period) / period; // 0..1
+  return phase;
 }
 
 /** Dense lava fill inside the crater disc, kept clear of the causeway (and its margin). */
@@ -188,10 +238,26 @@ export function scene(track: Track): Scene {
       ctx.arc(CRATER.x, CRATER.y, CRATER.r + 40, 0, TAU);
       ctx.stroke();
 
-      // Dim lava base; the bright pulsing glow is the animated layer.
-      for (const l of lava) disc(ctx, l.x, l.y, l.r + 6, "#3a1408");
-      for (const l of lava) disc(ctx, l.x, l.y, l.r, "#9a2a08");
-      for (const l of lava) for (let k = 0; k < 3; k++) disc(ctx, l.x + range(d, -0.5, 0.5) * l.r, l.y + range(d, -0.5, 0.5) * l.r, l.r * range(d, 0.12, 0.25), "rgba(40,12,6,0.7)");
+      // Cooled crust: irregular dark plates (not discs) with a faint pre-drawn fissure network;
+      // the animated layer only has to redraw the glow on top of this each frame.
+      for (let i = 0; i < lava.length; i++) {
+        disc(ctx, lava[i].x, lava[i].y, lava[i].r + 6, "#2c0f08"); // scorched rim, slightly wider
+        tracePoly(ctx, blobPoints(lava[i], i));
+        const shade = 8 + Math.round(hash(i, 95) * 7);
+        ctx.fillStyle = `hsl(10,${22 + shade}%,${9 + Math.round(hash(i, 96) * 5)}%)`;
+        ctx.fill();
+      }
+      ctx.lineCap = "round";
+      for (let i = 0; i < lava.length; i++) {
+        for (const cr of crackLines(lava[i], i)) {
+          ctx.strokeStyle = "rgba(110,36,10,0.4)";
+          ctx.lineWidth = Math.max(1, lava[i].r * 0.07);
+          ctx.beginPath();
+          ctx.moveTo(cr.a.x, cr.a.y);
+          ctx.lineTo(cr.b.x, cr.b.y);
+          ctx.stroke();
+        }
+      }
     },
     onTrack(ctx) {
       const d = mulberry32(4003);
@@ -240,27 +306,72 @@ export function scene(track: Track): Scene {
 }
 
 export const fx: Fx = {
+  // Realistic lava: a dark cooled crust (pre-rendered, see scene.under) with slow-glowing
+  // fissures, a hotter core showing through, popping bubbles and a heat haze on the ground
+  // nearby — all clipped to the same organic outline as the crust so the glow never drifts off
+  // the physical pool. Per visible pool this is a handful of strokes/dots, no re-triangulation.
   ground(ctx, scene, v) {
+    // Heat haze: a soft, slow halo bleeding onto the rock around each pool.
+    ctx.globalCompositeOperation = "lighter";
+    for (let i = 0; i < scene.lava.length; i++) {
+      const c = scene.lava[i];
+      if (!visible(c, v, c.r * 2.2)) continue;
+      const slow = 0.5 + 0.5 * Math.sin(v.t * 0.3 + hash(i, 50) * TAU);
+      const g = ctx.createRadialGradient(c.x, c.y, c.r * 0.6, c.x, c.y, c.r * 2.1);
+      g.addColorStop(0, `rgba(255,90,20,${(0.07 + 0.06 * slow).toFixed(3)})`);
+      g.addColorStop(1, "rgba(255,60,0,0)");
+      dot(ctx, c.x, c.y, c.r * 2.1, g);
+    }
+    ctx.globalCompositeOperation = "source-over";
+
     for (let i = 0; i < scene.lava.length; i++) {
       const c = scene.lava[i];
       if (!visible(c, v, c.r)) continue;
-      const pulse = 0.5 + 0.5 * Math.sin(v.t * 2.2 + c.x * 0.013 + c.y * 0.007);
-      const g = ctx.createRadialGradient(c.x, c.y, 0, c.x, c.y, c.r);
-      g.addColorStop(0, `rgba(255,${200 + Math.round(40 * pulse)},110,0.95)`);
-      g.addColorStop(0.55, `rgba(255,${100 + Math.round(40 * pulse)},20,0.9)`);
-      g.addColorStop(1, "rgba(190,40,0,0)");
-      dot(ctx, c.x, c.y, c.r, g);
+      const poly = blobPoints(c, i);
+      const flow = 0.5 + 0.5 * Math.sin(v.t * 0.45 + c.x * 0.01 + c.y * 0.006 + hash(i, 60) * TAU);
+
+      // Hotter, brighter core glowing up through the crust; clipped to the pool's own outline.
+      ctx.save();
+      tracePoly(ctx, poly);
+      ctx.clip();
+      const core = ctx.createRadialGradient(c.x, c.y, 0, c.x, c.y, c.r * 0.9);
+      core.addColorStop(0, `rgba(255,${195 + Math.round(35 * flow)},110,${(0.55 + 0.2 * flow).toFixed(2)})`);
+      core.addColorStop(0.6, `rgba(225,${70 + Math.round(30 * flow)},18,${(0.35 + 0.15 * flow).toFixed(2)})`);
+      core.addColorStop(1, "rgba(110,18,5,0)");
+      dot(ctx, c.x, c.y, c.r * 0.9, core);
+      ctx.restore();
+
+      // Glowing fissures: each evolves on its own slow cycle, orange drifting to yellow.
+      for (const cr of crackLines(c, i)) {
+        const pulse = 0.5 + 0.5 * Math.sin(v.t * 0.55 + hash(cr.seed, 1) * TAU * 2);
+        ctx.strokeStyle = pulse > 0.72
+          ? `rgba(255,${225 + Math.round(20 * pulse)},130,${(0.55 + 0.3 * pulse).toFixed(2)})`
+          : `rgba(255,${115 + Math.round(55 * pulse)},30,${(0.3 + 0.35 * pulse).toFixed(2)})`;
+        ctx.lineWidth = Math.max(1.4, c.r * (0.07 + 0.05 * pulse));
+        ctx.lineCap = "round";
+        ctx.beginPath();
+        ctx.moveTo(cr.a.x, cr.a.y);
+        ctx.lineTo(cr.b.x, cr.b.y);
+        ctx.stroke();
+      }
+
+      // Bubbles swelling then popping, right at the slow flow's own cadence.
+      const phase = bubbleCycle(i, v.t);
+      if (phase < 0.18) {
+        const bx = c.x + (hash(i, 72) - 0.5) * c.r * 0.8, by = c.y + (hash(i, 73) - 0.5) * c.r * 0.8;
+        const grow = phase / 0.18;
+        if (grow < 0.75) {
+          dot(ctx, bx, by, 2 + grow * 6, `rgba(255,205,130,${(0.55 * (1 - grow * 0.4)).toFixed(2)})`);
+        } else {
+          const pop = (grow - 0.75) / 0.25;
+          ctx.strokeStyle = `rgba(255,220,150,${(0.6 * (1 - pop)).toFixed(2)})`;
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.arc(bx, by, 5 + pop * 11, 0, TAU);
+          ctx.stroke();
+        }
+      }
     }
-    ctx.globalCompositeOperation = "lighter";
-    for (const c of scene.lava) {
-      if (!visible(c, v, c.r)) continue;
-      const pulse = 0.5 + 0.5 * Math.sin(v.t * 2.2 + c.x * 0.013 + c.y * 0.007);
-      const g = ctx.createRadialGradient(c.x, c.y, c.r * 0.5, c.x, c.y, c.r * 1.9);
-      g.addColorStop(0, `rgba(255,90,20,${(0.12 + 0.14 * pulse).toFixed(3)})`);
-      g.addColorStop(1, "rgba(255,60,0,0)");
-      dot(ctx, c.x, c.y, c.r * 1.9, g);
-    }
-    ctx.globalCompositeOperation = "source-over";
   },
   air(ctx, scene, v) {
     // Embers rising from the lava.
@@ -273,6 +384,17 @@ export const fx: Fx = {
         const x = c.x + (hash(i, j + 5) - 0.5) * c.r * 1.4 + Math.sin(age * 3 + i) * 8;
         const y = c.y + (hash(i, j + 7) - 0.5) * c.r - age * 65;
         dot(ctx, x, y, 2 + hash(i, j + 3) * 2, `rgba(255,${140 + Math.round(80 * (1 - f))},60,${(0.9 * (1 - f)).toFixed(2)})`);
+      }
+      // A short spray of embers right as that pool's bubble pops.
+      const phase = bubbleCycle(i, v.t);
+      if (phase >= 0.75 && phase <= 0.92) {
+        const burst = (phase - 0.75) / 0.17;
+        const bx = c.x + (hash(i, 72) - 0.5) * c.r * 0.8, by = c.y + (hash(i, 73) - 0.5) * c.r * 0.8;
+        for (let j = 0; j < 4; j++) {
+          const a = hash(i, j + 80) * TAU, dist = burst * (10 + hash(i, j + 84) * 28);
+          const x = bx + Math.cos(a) * dist, y = by + Math.sin(a) * dist - burst * 16;
+          dot(ctx, x, y, 1.6, `rgba(255,${150 + Math.round(70 * (1 - burst))},70,${(0.85 * (1 - burst)).toFixed(2)})`);
+        }
       }
     }
     ctx.globalCompositeOperation = "source-over";
