@@ -2,18 +2,147 @@ import { drift, dot, type Fx } from "../fx";
 import { disc, ellipse, mulberry32, onTrackPoint, range, rock, scatter, shadow, softBlob, TAU, type Circle, type Scene } from "../scenery";
 import type { Track, TrackLayout } from "../track";
 
-// Desert: same circuit as the other modes for now (see docs/decisions.md for the planned
-// canyon passage). Dunes, an oasis, cacti and sun-bleached skulls beyond the barriers.
+// Desert: open dunes for most of the lap, cut through by a canyon of red sandstone — a
+// natural arch to drive under, plus two cliff overhangs that jut out over the road. Oasis,
+// cacti and sun-bleached skulls fill the open stretch, same as before.
 
 type Ctx = CanvasRenderingContext2D;
 
+const OVERHANG_A = { from: 3.1, to: 3.75 }; // west overhang: a cliff ledge jutting halfway over the road
+const ARCH = { from: 4.3, to: 4.7 }; // the arch itself
+const OVERHANG_B = { from: 5.25, to: 5.9 }; // east overhang
+
 export const layout: TrackLayout = {
   points: [
-    [400, 1100], [400, 600], [650, 300], [1100, 280], [1400, 560], [1750, 420],
-    [2250, 330], [2700, 560], [2780, 1050], [2450, 1380], [1950, 1250],
-    [1550, 1560], [1050, 1760], [600, 1620],
+    [420, 1700], [420, 1200], [520, 820], [850, 600], [1300, 520], [1750, 500],
+    [2200, 560], [2600, 780], [2820, 1150], [2650, 1550], [2150, 1700],
+    [1700, 1550], [1200, 1700], [750, 1800],
   ],
+  covers: [OVERHANG_A, ARCH, OVERHANG_B],
 };
+
+// Mirrors track.ts's SAMPLES_PER_SEGMENT: control-point unit -> sample index. Kept local so
+// this mode doesn't need a shared export just for placing its own canyon scenery.
+const SPS = 40;
+function sampleAt(track: Track, control: number): number {
+  const n = track.path.length;
+  return ((Math.round(control * SPS) % n) + n) % n;
+}
+
+/** Sample indices from control unit `from` to `to` (both within the same loop, `from` < `to`), every `step`. */
+function sampleRange(track: Track, from: number, to: number, step: number): number[] {
+  const a = sampleAt(track, from), b = sampleAt(track, to);
+  const out: number[] = [];
+  for (let i = a; i < b; i += step) out.push(i);
+  out.push(b);
+  return out;
+}
+
+// ---------- canyon (red-sandstone strata, a natural arch, two overhangs) ----------
+
+const CANYON = { wallFrom: 2.7, wallTo: 6.3 };
+
+const STRATA = ["#b5603f", "#9c4b32", "#c97a4e", "#8a3f2b", "#d99a5f"];
+
+/** Points along the centerline, offset sideways (see onTrackPoint), from control unit `from` to `to`. */
+function wallPoints(track: Track, from: number, to: number, offset: number) {
+  return sampleRange(track, from, to, 3).map((i) => onTrackPoint(track, i, offset));
+}
+
+function strokePath(ctx: Ctx, pts: { x: number; y: number }[], lineWidth: number, style: string) {
+  if (pts.length < 2) return;
+  ctx.beginPath();
+  pts.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+  ctx.lineWidth = lineWidth;
+  ctx.strokeStyle = style;
+  ctx.stroke();
+}
+
+/** One canyon wall (side = -1 left / +1 right of travel), with sedimentary strata bands. */
+function canyonWall(ctx: Ctx, track: Track, side: 1 | -1) {
+  const gap = 40, thick = 200;
+  const inner = track.barrier + gap;
+  ctx.lineCap = ctx.lineJoin = "round";
+  // Contact shadow where the cliff meets the ground, just outside the barrier.
+  strokePath(ctx, wallPoints(track, CANYON.wallFrom, CANYON.wallTo, side * (inner - 10)), 26, "rgba(40,16,8,0.4)");
+  // Base rock mass.
+  strokePath(ctx, wallPoints(track, CANYON.wallFrom, CANYON.wallTo, side * (inner + thick / 2)), thick, "#8a4330");
+  // Strata bands: parallel stripes following the cliff, like sediment layers seen from above.
+  const bandCount = STRATA.length;
+  for (let k = 0; k < bandCount; k++) {
+    const d = inner + ((k + 0.5) / bandCount) * thick;
+    strokePath(ctx, wallPoints(track, CANYON.wallFrom, CANYON.wallTo, side * d), thick / bandCount - 4, STRATA[k]);
+  }
+  // Sunlit clifftop rim.
+  strokePath(ctx, wallPoints(track, CANYON.wallFrom, CANYON.wallTo, side * (inner + thick - 6)), 10, "rgba(255,225,185,0.55)");
+}
+
+/** A rock bulge pushing closer to the road where an overhang's base anchors into the wall. */
+function canyonLedgeBase(ctx: Ctx, track: Track, cover: { from: number; to: number }, side: 1 | -1) {
+  const gap = 20, thick = 120;
+  const inner = track.barrier + gap;
+  strokePath(ctx, wallPoints(track, cover.from, cover.to, side * (inner + thick / 2)), thick, "#7a3b2a");
+  strokePath(ctx, wallPoints(track, cover.from, cover.to, side * (inner + thick - 8)), 14, "rgba(255,225,185,0.4)");
+}
+
+/** The arch's two rock legs flanking the road at its midpoint. */
+function archLegs(ctx: Ctx, track: Track, rng: () => number) {
+  const mid = sampleAt(track, (ARCH.from + ARCH.to) / 2);
+  const gap = 22, r = 72;
+  for (const side of [-1, 1] as const) {
+    const p = onTrackPoint(track, mid, side * (track.barrier + gap + r));
+    rock(ctx, rng, { x: p.x, y: p.y, r }, "#6b3324", "#a35a3b");
+  }
+}
+
+/** Underside shading inside the arch: darkest at the apex, fading toward both openings. */
+function archOverhead(ctx: Ctx, track: Track) {
+  const a = sampleAt(track, ARCH.from), b = sampleAt(track, ARCH.to);
+  const mid = onTrackPoint(track, sampleAt(track, (ARCH.from + ARCH.to) / 2), 0);
+  const halfSpan = track.barrier + 160;
+  const archLenPts = wallPoints(track, ARCH.from, ARCH.to, 0);
+  const archLen = archLenPts.reduce((sum, p, i) => (i ? sum + Math.hypot(p.x - archLenPts[i - 1].x, p.y - archLenPts[i - 1].y) : 0), 0);
+  // Deck: solid rock slab spanning the full barrier-to-barrier width.
+  strokePath(ctx, wallPoints(track, ARCH.from, ARCH.to, 0), halfSpan * 2, "#5e2d20");
+  for (let k = 0; k < STRATA.length; k++) {
+    const t = (k + 0.5) / STRATA.length;
+    strokePath(ctx, wallPoints(track, ARCH.from, ARCH.to, (t - 0.5) * halfSpan * 2), halfSpan * 2 / STRATA.length - 3, STRATA[k]);
+  }
+  // Pooled shadow toward the apex (fades out near both mouths of the arch).
+  softBlob(ctx, mid.x, mid.y, Math.max(60, archLen * 0.6), halfSpan * 0.9, mid.a, "15,6,4", 0.55);
+  // Bright rim at each opening, marking entrance/exit.
+  for (const i of [a, b]) {
+    const p = track.path[i], t = track.tangents[i];
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.rotate(Math.atan2(t.y, t.x));
+    const g = ctx.createLinearGradient(-30, 0, 30, 0);
+    g.addColorStop(0, "rgba(255,230,190,0)");
+    g.addColorStop(0.5, "rgba(255,230,190,0.5)");
+    g.addColorStop(1, "rgba(255,230,190,0)");
+    ctx.fillStyle = g;
+    ctx.fillRect(-30, -halfSpan, 60, halfSpan * 2);
+    ctx.restore();
+  }
+}
+
+/** A cliff ledge hanging partway over the road (not the full width), with a lit edge. */
+function overhangDeck(ctx: Ctx, track: Track, cover: { from: number; to: number }, side: 1 | -1) {
+  const outer = side * (track.barrier + 50);
+  const inner = side * -track.width * 0.08; // crosses just past the centerline
+  const center = (outer + inner) / 2;
+  const width = Math.abs(outer - inner);
+  strokePath(ctx, wallPoints(track, cover.from, cover.to, center), width, "#6b3324");
+  for (let k = 0; k < STRATA.length; k++) {
+    const t = (k + 0.5) / STRATA.length;
+    strokePath(ctx, wallPoints(track, cover.from, cover.to, outer + (inner - outer) * t), width / STRATA.length - 3, STRATA[k]);
+  }
+  // Lit inner edge, where the rock ends mid-road.
+  strokePath(ctx, wallPoints(track, cover.from, cover.to, inner), 10, "rgba(255,225,185,0.6)");
+  // Soft shadow it casts just ahead of its own edge.
+  const mid = onTrackPoint(track, sampleAt(track, (cover.from + cover.to) / 2), inner * 0.6);
+  softBlob(ctx, mid.x, mid.y, 90, 60, 0, "15,6,4", 0.3);
+}
 
 function cactus(ctx: Ctx, c: Circle) {
   const s = c.r / 18, x = c.x, y = c.y;
@@ -83,6 +212,13 @@ export function scene(track: Track): Scene {
   const rng = mulberry32(1001);
   const b = track.bounds;
   const occ: Circle[] = [];
+
+  // Keep the canyon's area clear of the usual scattered props (rocks/cacti/skulls/oasis),
+  // so they don't collide with the custom cliff walls drawn for it below.
+  for (const i of sampleRange(track, CANYON.wallFrom, CANYON.wallTo, 20)) {
+    const p = track.path[i];
+    occ.push({ x: p.x, y: p.y, r: track.barrier + 300 });
+  }
   const oasis = scatter(track, rng, occ, 1, 150, 150);
   const rocks = scatter(track, rng, occ, 45, 9, 30);
   const cacti = scatter(track, rng, occ, 40, 14, 22);
@@ -129,6 +265,14 @@ export function scene(track: Track): Scene {
         const p = onTrackPoint(track, Math.floor(d() * n), (d() - 0.5) * track.width * 0.96);
         disc(ctx, p.x, p.y, range(d, 1, 3.5), `rgba(230,205,160,${range(d, 0.15, 0.4).toFixed(2)})`);
       }
+      // Strong shadows cast across the road by the canyon walls, darkest on the west side.
+      for (const [cover, side] of [[OVERHANG_A, -1], [ARCH, -1], [ARCH, 1], [OVERHANG_B, 1]] as const) {
+        const mid = sampleAt(track, (cover.from + cover.to) / 2);
+        for (let k = -2; k <= 2; k++) {
+          const p = onTrackPoint(track, (mid + k * 4 + n) % n, side * track.width * 0.3);
+          softBlob(ctx, p.x, p.y, 90, 70, p.a, "20,10,6", 0.3);
+        }
+      }
     },
     over(ctx) {
       const d = mulberry32(1003);
@@ -145,6 +289,17 @@ export function scene(track: Track): Scene {
       for (const r of rocks) rock(ctx, d, r, "#a07850", "#c49a6c");
       for (const s of skulls) skull(ctx, s, d() * TAU);
       for (const c of [...cacti].sort((a, b) => a.y - b.y)) cactus(ctx, c);
+
+      // Canyon: two sandstone walls, ledge bases for the overhangs, and the arch's legs.
+      for (const side of [-1, 1] as const) canyonWall(ctx, track, side);
+      canyonLedgeBase(ctx, track, OVERHANG_A, -1);
+      canyonLedgeBase(ctx, track, OVERHANG_B, 1);
+      archLegs(ctx, track, d);
+    },
+    overhead(ctx) {
+      archOverhead(ctx, track);
+      overhangDeck(ctx, track, OVERHANG_A, -1);
+      overhangDeck(ctx, track, OVERHANG_B, 1);
     },
   };
 }
