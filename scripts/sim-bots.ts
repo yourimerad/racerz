@@ -5,26 +5,27 @@
 // relative imports (e.g. `from "./car"`).
 //
 // For each mode and several seeds, races the 3 bots against a mistake-free AI "proxy"
-// driving each car model from the stats table below (see race.ts `aiInput`'s
+// driving each car model with its garage.ts stats (see race.ts `aiInput`'s
 // `allowMistakes` param and `stepRace`'s `playerIsAi` param, both added for this).
 // The proxy stands in for "a good human player" to check that a race is winnable with
 // the right car, and not with a cheaper one.
 import { NO_INPUT } from "../src/game/car";
 import { type Race, type PlayerCar, createRace, stepRace, standings, TOTAL_LAPS } from "../src/game/race";
+import { type ModelId, MODEL_ORDER, carStats } from "../src/game/garage";
 import { type ThemeId, THEME_ORDER, THEMES } from "../src/game/themes";
 
-// Local only: the real table lives in garage.ts (another, parallel track owns it), and
-// it only has gt/aventador/f8 at this point in history. Multipliers at level 1, from
-// the task spec (speed / accel / grip).
-const CAR_TABLE = {
-  gt: { speed: 1.0, accel: 1.0, grip: 1.0 },
-  mx5: { speed: 1.04, accel: 1.02, grip: 1.3 },
-  p911: { speed: 1.1, accel: 1.12, grip: 1.18 },
-  aventador: { speed: 1.16, accel: 1.2, grip: 1.12 },
-  f8: { speed: 1.24, accel: 1.3, grip: 0.8 },
-} as const;
-type CarId = keyof typeof CAR_TABLE;
-const CAR_ORDER: CarId[] = ["gt", "mx5", "p911", "aventador", "f8"];
+// Car multipliers at level 1, straight from garage.ts.
+type CarId = ModelId;
+const CAR_ORDER: CarId[] = MODEL_ORDER;
+const CAR_TABLE = Object.fromEntries(MODEL_ORDER.map((id) => [id, carStats(id, 1)])) as Record<CarId, ReturnType<typeof carStats>>;
+
+// Tuning: `pnpm sim <mode> [pace] [spread] [errors]` runs one mode with overridden bot settings.
+const [onlyMode, ...overrides] = process.argv.slice(2) as [ThemeId | undefined, ...string[]];
+if (onlyMode && overrides.length) {
+  const [pace, spread, errors] = overrides.map(Number);
+  const bots = THEMES[onlyMode].bots;
+  THEMES[onlyMode].bots = { pace: pace || bots.pace, spread: spread || bots.spread, errors: Number.isFinite(errors) ? errors : bots.errors };
+}
 
 const SEEDS = Array.from({ length: 24 }, (_, i) => 1000 + i * 97);
 const DT = 1 / 120; // matches Game.tsx's fixed-step loop
@@ -133,7 +134,7 @@ function runMode(themeId: ThemeId): ModeReport {
 
 function printReport() {
   console.log(`racerz — simulation bots (${SEEDS.length} graines/mode, ${TOTAL_LAPS} tours, dt=${DT.toFixed(4)}s)\n`);
-  for (const themeId of THEME_ORDER) {
+  for (const themeId of onlyMode ? [onlyMode] : THEME_ORDER) {
     const theme = THEMES[themeId];
     const report = runMode(themeId);
     console.log(`== ${theme.emoji} ${theme.name} (bots pace ${theme.bots.pace.toFixed(2)} ±${theme.bots.spread.toFixed(3)}, erreurs ${theme.bots.errors}/min) ==`);

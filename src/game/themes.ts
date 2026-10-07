@@ -72,7 +72,7 @@ export const THEMES: Record<ThemeId, Theme> = {
     name: "Campagne",
     emoji: "🌾",
     layout: countrysideMode.layout,
-    bots: { pace: 0.92, spread: 0.035, errors: 6 },
+    bots: { pace: 0.985, spread: 0.035, errors: 6 },
     colors: {
       ground: "#2f6b3a", offtrack: "#3a7d44", asphalt: "#4a4e57", kerbA: "#f1f1f1", kerbB: "#d62828", kerbWidth: 18, barrierA: "#b8bec7", barrierB: "#6b717a",
       dash: "rgba(255,255,255,0.55)", minimap: "rgba(255,255,255,0.6)", accent: "#ffd166", skid: "20,20,20",
@@ -101,7 +101,7 @@ export const THEMES: Record<ThemeId, Theme> = {
     name: "Volcan",
     emoji: "🌋",
     layout: volcanoMode.layout,
-    bots: { pace: 1.03, spread: 0.025, errors: 1 },
+    bots: { pace: 1.045, spread: 0.025, errors: 1 },
     colors: {
       ground: "#1c1514", offtrack: "#2b2321", asphalt: "#3b3534", kerbA: "#26201f", kerbB: "#ff5a1f", kerbWidth: 18, barrierA: "#141011", barrierB: "#ff6a2a",
       dash: "rgba(255,170,120,0.55)", minimap: "rgba(255,140,90,0.75)", accent: "#ff7a3d", skid: "10,8,8",
