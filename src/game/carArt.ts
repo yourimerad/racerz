@@ -30,8 +30,39 @@ function carbon(ctx: Ctx): CanvasPattern | string {
   return carbonCache.get(ctx) ?? "#2a2c30";
 }
 
-/** Paint the current path with the skin: base, pattern, then gloss unless matte. */
+/** Gradients in car-local space, built once per context (a gradient follows the transform active at fill time). */
+type Shades = { metal: CanvasGradient; flanks: CanvasGradient; ends: CanvasGradient; gloss: CanvasGradient; satin: CanvasGradient };
+const shadeCache = new WeakMap<Ctx, Shades>();
+function linear(ctx: Ctx, x0: number, y0: number, x1: number, y1: number, stops: [number, string][]) {
+  const g = ctx.createLinearGradient(x0, y0, x1, y1);
+  for (const [o, c] of stops) g.addColorStop(o, c);
+  return g;
+}
+function shades(ctx: Ctx): Shades {
+  let s = shadeCache.get(ctx);
+  if (!s) {
+    s = {
+      metal: linear(ctx, 0, -W, 0, W, [[0, "rgba(255,250,210,0.7)"], [0.5, "rgba(255,255,255,0)"], [1, "rgba(90,60,0,0.45)"]]),
+      // Darker flanks (the body curves away from the light), a little more on the shadow side.
+      flanks: linear(ctx, 0, -W - 1, 0, W + 1, [[0, "rgba(0,0,0,0.3)"], [0.24, "rgba(0,0,0,0)"], [0.72, "rgba(0,0,0,0)"], [1, "rgba(0,0,0,0.4)"]]),
+      ends: linear(ctx, -L - 1, 0, L + 1, 0, [[0, "rgba(0,0,0,0.25)"], [0.1, "rgba(0,0,0,0)"], [0.92, "rgba(0,0,0,0)"], [1, "rgba(0,0,0,0.2)"]]),
+      // Light streak along the bonnet and roof, just off the centreline.
+      gloss: linear(ctx, 0, -W, 0, W, [[0.2, "rgba(255,255,255,0)"], [0.36, "rgba(255,255,255,0.32)"], [0.44, "rgba(255,255,255,0.1)"], [0.58, "rgba(255,255,255,0)"]]),
+      satin: linear(ctx, 0, -W, 0, W, [[0.08, "rgba(255,255,255,0)"], [0.38, "rgba(255,255,255,0.09)"], [0.7, "rgba(255,255,255,0)"]]),
+    };
+    shadeCache.set(ctx, s);
+  }
+  return s;
+}
+
+function wash(ctx: Ctx, g: CanvasGradient) {
+  ctx.fillStyle = g;
+  ctx.fillRect(-L - 2, -W - 2, CAR_LENGTH + 4, CAR_WIDTH + 4);
+}
+
+/** Paint the current path with the skin: base, pattern, body volume (diffuse if matte), then the outline. */
 function paint(ctx: Ctx, skin: Skin) {
+  const sh = shades(ctx);
   ctx.fillStyle = skin.pattern === "carbon" ? carbon(ctx) : skin.body;
   ctx.fill();
   ctx.save();
@@ -41,60 +72,141 @@ function paint(ctx: Ctx, skin: Skin) {
     ctx.fillRect(-L - 2, -4, CAR_LENGTH + 4, 3);
     ctx.fillRect(-L - 2, 1, CAR_LENGTH + 4, 3);
   }
-  if (skin.pattern === "metal") {
-    const g = ctx.createLinearGradient(0, -W, 0, W);
-    g.addColorStop(0, "rgba(255,250,210,0.7)");
-    g.addColorStop(0.5, "rgba(255,255,255,0)");
-    g.addColorStop(1, "rgba(90,60,0,0.45)");
-    ctx.fillStyle = g;
-    ctx.fillRect(-L, -W, CAR_LENGTH, CAR_WIDTH);
-  }
-  if (!skin.matte) {
-    ctx.fillStyle = "rgba(255,255,255,0.18)";
-    ctx.fillRect(-L, -W, CAR_LENGTH, W * 0.6);
-  }
+  if (skin.pattern === "metal") wash(ctx, sh.metal);
+  wash(ctx, sh.flanks);
+  wash(ctx, sh.ends);
+  wash(ctx, skin.matte ? sh.satin : sh.gloss);
   ctx.restore();
   ctx.strokeStyle = skin.accent;
   ctx.lineWidth = 1;
   ctx.stroke();
 }
 
+/** Four tyres, with the silver rim and dark hub showing on the outer half (the body hides the rest). */
 function wheels(ctx: Ctx, front: number, rear: number, half: number, w = 10, h = 6) {
-  ctx.fillStyle = "#111";
-  for (const x of [front, rear]) for (const y of [-half, half]) ctx.fillRect(x - w / 2, y - h / 2, w, h);
+  const rimY = half + h / 2 - 2.6;
+  ctx.fillStyle = "#121214";
+  ctx.beginPath();
+  for (let i = 0; i < 4; i++) ctx.roundRect((i & 1 ? rear : front) - w / 2, (i & 2 ? half : -half) - h / 2, w, h, 1.5);
+  ctx.fill();
+  ctx.fillStyle = "#aeb4bc";
+  for (let i = 0; i < 4; i++) ctx.fillRect((i & 1 ? rear : front) - w / 2 + 1.8, (i & 2 ? rimY : -rimY) - 1.1, w - 3.6, 2.2);
+  ctx.fillStyle = "#4a4e55";
+  for (let i = 0; i < 4; i++) ctx.fillRect((i & 1 ? rear : front) - 0.8, (i & 2 ? rimY : -rimY) - 1.1, 1.6, 2.2);
 }
 
+/** Tinted glass for the current path: dark fill, a diagonal reflection streak, a pale rim. */
+function glass(ctx: Ctx, x0: number, x1: number, tint = "rgba(14,20,32,0.92)") {
+  ctx.fillStyle = tint;
+  ctx.fill();
+  ctx.save();
+  ctx.clip();
+  const d = (x1 - x0) * 0.45;
+  ctx.fillStyle = "rgba(190,215,245,0.3)";
+  poly(ctx, [[x1 - d * 0.2, -W], [x1 - d * 0.75, -W], [x0 + d * 0.25, W], [x0 + d * 0.8, W]]);
+  ctx.fill();
+  ctx.restore();
+}
+
+/** Door mirrors on stalks, body-coloured, at bonnet-side x, sticking out to ±y. */
+function mirrors(ctx: Ctx, skin: Skin, x: number, y: number) {
+  ctx.fillStyle = skin.pattern === "carbon" ? carbon(ctx) : skin.body;
+  ctx.strokeStyle = "rgba(0,0,0,0.55)";
+  ctx.lineWidth = 0.5;
+  for (let s = -1; s <= 1; s += 2) {
+    ctx.beginPath();
+    ctx.ellipse(x, s * y, 1.1, 1.4, s * 0.35, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  }
+}
+
+/** Fine panel lines (doors, bonnet, boot): flat list of segments x0,y0,x1,y1. One path, one stroke. */
+function seams(ctx: Ctx, segs: number[]) {
+  ctx.strokeStyle = "rgba(0,0,0,0.38)";
+  ctx.lineWidth = 0.45;
+  ctx.beginPath();
+  for (let i = 0; i < segs.length; i += 4) {
+    ctx.moveTo(segs[i], segs[i + 1]);
+    ctx.lineTo(segs[i + 2], segs[i + 3]);
+  }
+  ctx.stroke();
+}
+
+/** Lamp as an ellipse: warm glow ring plus a hot core. */
+function lamp(ctx: Ctx, x: number, y: number, rx: number, ry: number, glow: string, core: string) {
+  ctx.fillStyle = glow;
+  ctx.beginPath();
+  ctx.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = core;
+  ctx.beginPath();
+  ctx.ellipse(x + (x > 0 ? 0.2 : -0.2), y, rx * 0.55, ry * 0.55, 0, 0, Math.PI * 2);
+  ctx.fill();
+}
+const HEAD = "#ffe7a0", HEAD_CORE = "#fffdf4", TAIL = "#c8160c", TAIL_CORE = "#ff5a3c";
+
+// Bonnet edges, door shuts, boot lid.
+const GT_SEAMS = [12, -7, L - 2.5, -6, 12, 7, L - 2.5, 6, 2.5, -W + 0.6, 2.5, -7.8, 2.5, W - 0.6, 2.5, 7.8,
+  -8, -W + 0.6, -8, -7.8, -8, W - 0.6, -8, 7.8, -15, -6.5, -15, 6.5];
 function gt(ctx: Ctx, skin: Skin) {
   wheels(ctx, 12, -12, 12);
   ctx.beginPath();
   ctx.roundRect(-L, -W, CAR_LENGTH, CAR_WIDTH, 6);
   paint(ctx, skin);
-  ctx.fillStyle = "rgba(20,30,50,0.85)";
-  ctx.fillRect(2, -W + 4, 9, CAR_WIDTH - 8);
-  ctx.fillRect(-14, -W + 5, 6, CAR_WIDTH - 10);
-  ctx.fillStyle = "rgba(255,255,255,0.8)";
-  ctx.fillRect(-4, -2, 6, 4);
+  // Discreet twin bonnet stripes (the "stripes" skin already runs full-length ones).
+  if (skin.pattern !== "stripes") {
+    ctx.fillStyle = skin.accent;
+    ctx.globalAlpha = 0.6;
+    ctx.fillRect(12, -2.7, L - 13.5, 1.2);
+    ctx.fillRect(12, 1.5, L - 13.5, 1.2);
+    ctx.globalAlpha = 1;
+  }
+  seams(ctx, GT_SEAMS);
+  // Greenhouse: windscreen, side windows, rear window; the roof between keeps the body colour.
+  poly(ctx, [[11, -6.5], [3, -7.6], [3, 7.6], [11, 6.5]]);
+  glass(ctx, 3, 11);
+  poly(ctx, [[-8, -7.6], [-14, -6], [-14, 6], [-8, 7.6]]);
+  glass(ctx, -14, -8);
+  ctx.fillStyle = "rgba(14,20,32,0.92)";
+  ctx.fillRect(-8, -7.6, 11, 1.3);
+  ctx.fillRect(-8, 6.3, 11, 1.3);
+  mirrors(ctx, skin, 3.5, W + 0.6);
+  for (const s of [-1, 1]) {
+    lamp(ctx, L - 1.8, s * 7.4, 1.3, 2.4, HEAD, HEAD_CORE);
+    lamp(ctx, -L + 1, s * 7.6, 0.9, 2.6, TAIL, TAIL_CORE);
+  }
 }
 
+// Front lid edges, scissor-door shuts, engine bay outline.
+const AVENTADOR_SEAMS = [9, -5.5, L - 3, -4, 9, 5.5, L - 3, 4, 6.5, -W, 6.5, -7.3, 6.5, W, 6.5, 7.3,
+  -8.5, -6.3, -L + 2.5, -5.5, -8.5, 6.3, -L + 2.5, 5.5];
 /** Lamborghini Aventador SVJ: hexagonal wedge, Y lights, engine louvres, big rear wing. */
 function aventador(ctx: Ctx, skin: Skin) {
   wheels(ctx, 12, -12, 12, 11, 7);
   const body = [[L + 1, -4], [L - 2, -W + 1], [6, -W - 0.5], [-13, -W - 0.5], [-L, -W + 2], [-L, W - 2], [-13, W + 0.5], [6, W + 0.5], [L - 2, W - 1], [L + 1, 4]];
   poly(ctx, body);
   paint(ctx, skin);
-  // Side air intakes.
-  ctx.fillStyle = "rgba(0,0,0,0.75)";
-  poly(ctx, [[-2, -W - 0.5], [-10, -W - 0.5], [-8, -W + 3]]);
-  ctx.fill();
-  poly(ctx, [[-2, W + 0.5], [-10, W + 0.5], [-8, W - 3]]);
-  ctx.fill();
-  // Angular canopy.
-  ctx.fillStyle = "rgba(10,12,18,0.92)";
+  seams(ctx, AVENTADOR_SEAMS);
+  // Angular side air intakes in the flanks, lit on their leading edge.
+  for (const s of [-1, 1]) {
+    poly(ctx, [[0, s * (W + 0.4)], [-11, s * (W + 0.4)], [-9, s * (W - 3.4)], [-3.5, s * (W - 2.4)]]);
+    ctx.fillStyle = "rgba(0,0,0,0.78)";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255,255,255,0.28)";
+    ctx.lineWidth = 0.5;
+    ctx.beginPath();
+    ctx.moveTo(0, s * (W + 0.2));
+    ctx.lineTo(-3.5, s * (W - 2.4));
+    ctx.lineTo(-9, s * (W - 3.4));
+    ctx.stroke();
+  }
+  // Angular canopy: tinted glass, with a body-coloured roof panel.
   poly(ctx, [[10, -5], [5, -7.5], [-6, -6.5], [-8, 0], [-6, 6.5], [5, 7.5], [10, 5]]);
-  ctx.fill();
-  ctx.fillStyle = "rgba(120,140,170,0.35)";
-  poly(ctx, [[10, -5], [7, -6.5], [7, 6.5], [10, 5]]);
-  ctx.fill();
+  glass(ctx, 2.5, 10);
+  poly(ctx, [[3, -5.9], [-4.5, -5.3], [-6, 0], [-4.5, 5.3], [3, 5.9]]);
+  paint(ctx, skin);
+  mirrors(ctx, skin, 6, W + 0.4);
   // Hexagonal engine cover louvres.
   ctx.strokeStyle = "rgba(0,0,0,0.6)";
   ctx.lineWidth = 1;
@@ -104,29 +216,44 @@ function aventador(ctx: Ctx, skin: Skin) {
     ctx.lineTo(x, 4.5);
     ctx.stroke();
   }
-  // Y-shaped headlights.
-  ctx.strokeStyle = "#fff6d8";
-  ctx.lineWidth = 1.3;
+  // Y-shaped headlights: warm glow, then a white core on the same path.
+  ctx.beginPath();
   for (const s of [-1, 1]) {
-    ctx.beginPath();
     ctx.moveTo(L - 1, s * 5.5);
     ctx.lineTo(L - 5, s * 7);
     ctx.lineTo(L - 3, s * 9.5);
     ctx.moveTo(L - 5, s * 7);
     ctx.lineTo(L - 8, s * 7.5);
-    ctx.stroke();
   }
-  // SVJ rear wing on two struts, wider than the body.
+  ctx.lineCap = "round";
+  ctx.strokeStyle = HEAD;
+  ctx.lineWidth = 1.7;
+  ctx.stroke();
+  ctx.strokeStyle = HEAD_CORE;
+  ctx.lineWidth = 0.7;
+  ctx.stroke();
+  ctx.lineCap = "butt";
+  // SVJ rear wing on two struts, wider than the body, with dark endplates.
   ctx.fillStyle = "#0d0d0f";
   ctx.fillRect(-L + 2, -4, 3, 1.6);
   ctx.fillRect(-L + 2, 2.4, 3, 1.6);
   ctx.fillStyle = skin.matte ? "#111114" : skin.accent;
   ctx.fillRect(-L - 2, -W - 1.5, 4, CAR_WIDTH + 3);
-  ctx.fillStyle = "#ff3b2f";
+  ctx.fillStyle = "rgba(255,255,255,0.22)";
+  ctx.fillRect(-L + 1.3, -W - 1.5, 0.7, CAR_WIDTH + 3);
+  ctx.fillStyle = "#0d0d0f";
+  ctx.fillRect(-L - 2.3, -W - 1.8, 4.6, 1.1);
+  ctx.fillRect(-L - 2.3, W + 0.7, 4.6, 1.1);
+  ctx.fillStyle = TAIL;
   ctx.fillRect(-L - 0.5, -W + 1, 1.2, 4);
   ctx.fillRect(-L - 0.5, W - 5, 1.2, 4);
+  ctx.fillStyle = TAIL_CORE;
+  ctx.fillRect(-L - 0.2, -W + 1.6, 0.6, 2.8);
+  ctx.fillRect(-L - 0.2, W - 4.4, 0.6, 2.8);
 }
 
+// Bonnet edges and door shuts.
+const F8_SEAMS = [9, -6.5, 16.5, -4.2, 9, 6.5, 16.5, 4.2, 4.5, -W + 1.6, 4.5, -7.4, 4.5, W - 1.6, 4.5, 7.4];
 /** Ferrari F8 Spider: curvy body, open cockpit with two seats, round taillights. */
 function f8(ctx: Ctx, skin: Skin) {
   wheels(ctx, 12, -12, 12, 11, 7);
@@ -141,16 +268,45 @@ function f8(ctx: Ctx, skin: Skin) {
   ctx.bezierCurveTo(12, W - 1, L, 9, L, 3);
   ctx.closePath();
   paint(ctx, skin);
+  seams(ctx, F8_SEAMS);
+  // Side scoops sweeping into the rear flanks ahead of the rear wheels, lit on their inner lip.
+  for (const s of [-1, 1]) {
+    ctx.beginPath();
+    ctx.moveTo(-2.5, s * (W - 2.2));
+    ctx.quadraticCurveTo(-7, s * (W - 0.2), -11.5, s * (W + 0.6));
+    ctx.lineTo(-11.5, s * (W - 2.6));
+    ctx.quadraticCurveTo(-7, s * (W - 3.4), -2.5, s * (W - 2.2));
+    ctx.fillStyle = "rgba(0,0,0,0.72)";
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(-2.5, s * (W - 2.4));
+    ctx.quadraticCurveTo(-7, s * (W - 3.6), -11.5, s * (W - 2.8));
+    ctx.strokeStyle = "rgba(255,255,255,0.3)";
+    ctx.lineWidth = 0.5;
+    ctx.stroke();
+  }
   // S-duct on the bonnet and the yellow shield.
   ctx.fillStyle = "rgba(0,0,0,0.6)";
   ctx.fillRect(12, -4, 3, 8);
   ctx.fillStyle = "#ffd400";
   ctx.fillRect(16, -1, 2, 2);
-  // Windscreen frame, then the open cockpit with two seats.
-  ctx.fillStyle = "rgba(15,20,30,0.9)";
+  // Slim swept headlights.
+  for (const s of [-1, 1]) {
+    poly(ctx, [[L - 1.2, s * 4.6], [L - 5.4, s * 8.6], [L - 6.8, s * 8.2], [L - 2.4, s * 4]]);
+    ctx.fillStyle = HEAD;
+    ctx.fill();
+    ctx.strokeStyle = HEAD_CORE;
+    ctx.lineWidth = 0.5;
+    ctx.beginPath();
+    ctx.moveTo(L - 1.9, s * 4.5);
+    ctx.lineTo(L - 5.8, s * 8.2);
+    ctx.stroke();
+  }
+  // Windscreen, then the open cockpit with two seats.
   ctx.beginPath();
   ctx.roundRect(5, -7, 3, 14, 1.5);
-  ctx.fill();
+  glass(ctx, 5, 8);
+  mirrors(ctx, skin, 5.5, W - 0.2);
   ctx.fillStyle = "#1a1a1a";
   ctx.beginPath();
   ctx.roundRect(-7, -7.5, 12, 15, 3);
@@ -169,21 +325,23 @@ function f8(ctx: Ctx, skin: Skin) {
   ctx.fill();
   ctx.strokeStyle = "rgba(0,0,0,0.5)";
   ctx.lineWidth = 1;
-  for (let x = -16; x <= -12; x += 2) {
-    ctx.beginPath();
+  ctx.beginPath();
+  for (let x = -15; x <= -11; x += 2) {
     ctx.moveTo(x, -5);
     ctx.lineTo(x, 5);
-    ctx.stroke();
   }
+  ctx.stroke();
+  // Small lip spoiler across the tail, lit on its leading edge.
+  ctx.fillStyle = skin.matte ? "#1a1a1c" : skin.accent;
+  ctx.fillRect(-17.6, -7.4, 1.4, 14.8);
+  ctx.fillStyle = "rgba(255,255,255,0.25)";
+  ctx.fillRect(-16.6, -7.4, 0.4, 14.8);
   // Twin round taillights each side.
-  ctx.fillStyle = "#ff2a1a";
-  for (const y of [-8, -5, 5, 8]) {
-    ctx.beginPath();
-    ctx.arc(-L + 1.2, y, 1.2, 0, Math.PI * 2);
-    ctx.fill();
-  }
+  for (const y of [-8, -5, 5, 8]) lamp(ctx, -L + 1.2, y, 1.2, 1.2, TAIL, TAIL_CORE);
 }
 
+// Bonnet edges and the boot lid.
+const MX5_SEAMS = [8.5, -6.4, 16, -4.6, 8.5, 6.4, 16, 4.6, -10.5, -5.5, -10.5, 5.5, -10.5, -5.5, -17, -3.6, -10.5, 5.5, -17, 3.6];
 /** Mazda MX-5: small rounded roadster, long hood, open two-seat cockpit with roll hoops, round headlights, short tail. */
 function mx5(ctx: Ctx, skin: Skin) {
   wheels(ctx, 10, -9, 10, 9, 6);
@@ -193,38 +351,58 @@ function mx5(ctx: Ctx, skin: Skin) {
   ];
   poly(ctx, body);
   paint(ctx, skin);
+  seams(ctx, MX5_SEAMS);
   // Low windscreen ahead of the open cockpit.
-  ctx.fillStyle = "rgba(15,20,30,0.85)";
   ctx.beginPath();
   ctx.roundRect(5, -7, 3, 14, 1.5);
-  ctx.fill();
-  // Open cockpit: two seats side by side, with small roll hoops behind each.
+  glass(ctx, 5, 8);
+  mirrors(ctx, skin, 5.5, 9.6);
+  // Open cockpit: two seats side by side with a centre console, steering wheel on the left.
   ctx.fillStyle = "#1a1a1a";
   ctx.beginPath();
   ctx.roundRect(-7, -8, 11, 16, 3);
   ctx.fill();
+  ctx.fillStyle = "#2c2c2e";
+  ctx.fillRect(-5, -0.8, 8, 1.6);
   ctx.fillStyle = "#c8a27a";
-  for (const y of [-4.8, 1.2]) {
-    ctx.beginPath();
-    ctx.roundRect(-4, y, 7, 3.6, 1.5);
-    ctx.fill();
-  }
+  ctx.beginPath();
+  for (const y of [-4.8, 1.2]) ctx.roundRect(-4, y, 7, 3.6, 1.5);
+  ctx.fill();
+  ctx.fillStyle = "#9c7a56";
+  ctx.beginPath();
+  for (const y of [-4.6, 1.4]) ctx.roundRect(-4.6, y, 2, 3.2, 1);
+  ctx.fill();
+  ctx.strokeStyle = "#3a3a3c";
+  ctx.lineWidth = 0.7;
+  ctx.beginPath();
+  ctx.ellipse(3.2, -3, 0.6, 1.9, 0, 0, Math.PI * 2);
+  ctx.stroke();
+  // Roll hoops behind each seat: body-tone fairings crossed by a polished bar.
   ctx.fillStyle = skin.matte ? "#2a2a2c" : skin.accent;
   ctx.beginPath();
   ctx.ellipse(-6.5, -3, 1.6, 2.2, 0, 0, Math.PI * 2);
   ctx.ellipse(-6.5, 3, 1.6, 2.2, 0, 0, Math.PI * 2);
   ctx.fill();
-  // Round/oval headlights up front, short integrated rear with small taillights.
-  ctx.fillStyle = "#fff6d8";
+  ctx.lineCap = "round";
+  ctx.strokeStyle = "#c4c9d0";
+  ctx.lineWidth = 0.9;
   ctx.beginPath();
-  ctx.ellipse(15.5, -5.5, 2, 1.6, 0, 0, Math.PI * 2);
-  ctx.ellipse(15.5, 5.5, 2, 1.6, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = "#ff2a1a";
-  ctx.fillRect(-L + 0.5, -4.5, 1.4, 3);
-  ctx.fillRect(-L + 0.5, 1.5, 1.4, 3);
+  ctx.moveTo(-6.2, -5);
+  ctx.lineTo(-6.2, -1);
+  ctx.moveTo(-6.2, 1);
+  ctx.lineTo(-6.2, 5);
+  ctx.stroke();
+  ctx.lineCap = "butt";
+  // Round/oval headlights up front, short integrated rear with small taillights.
+  for (const s of [-1, 1]) {
+    lamp(ctx, 15.5, s * 5.5, 2, 1.6, HEAD, HEAD_CORE);
+    lamp(ctx, -L + 1.2, s * 3, 0.9, 1.7, TAIL, TAIL_CORE);
+  }
 }
 
+// Front lid between the fenders, door shuts, engine lid.
+const P911_SEAMS = [9.5, -4.6, 17.5, -3, 9.5, 4.6, 17.5, 3, 5.5, -6.2, 5.5, -7.9, 5.5, 6.2, 5.5, 7.9,
+  -3.5, -5.6, -3.5, -7.4, -3.5, 5.6, -3.5, 7.4, -10.5, -5, -10.5, 5];
 /** Porsche 911 Carrera: bulging front fenders with round headlights, fastback roofline, wide rear haunches, ducktail spoiler, rear light bar. */
 function p911(ctx: Ctx, skin: Skin) {
   wheels(ctx, 12, -12, 11, 10, 6);
@@ -234,36 +412,62 @@ function p911(ctx: Ctx, skin: Skin) {
   ];
   poly(ctx, body);
   paint(ctx, skin);
-  // Fastback canopy, narrowing toward the rear-biased cabin (the engine sits behind the rear axle).
-  ctx.fillStyle = "rgba(12,15,22,0.92)";
-  poly(ctx, [[9, -4], [5, -6], [-3, -5], [-5, 0], [-3, 5], [5, 6], [9, 4]]);
+  seams(ctx, P911_SEAMS);
+  // Fastback greenhouse, rear-biased (the engine sits behind the rear axle): windscreen, slim side
+  // windows and a long sloping rear window; the roof between keeps the body colour.
+  poly(ctx, [[9, -4], [5, -6], [5, 6], [9, 4]]);
+  glass(ctx, 5, 9);
+  poly(ctx, [[-3, -5.4], [-9, -3.8], [-9, 3.8], [-3, 5.4]]);
+  glass(ctx, -9, -3);
+  ctx.fillStyle = "rgba(14,20,32,0.92)";
+  poly(ctx, [[5, -6], [-3, -5.4], [-3, -4.3], [5, -4.9]]);
   ctx.fill();
-  ctx.fillStyle = "rgba(120,140,170,0.3)";
-  poly(ctx, [[9, -4], [7, -5], [7, 5], [9, 4]]);
+  poly(ctx, [[5, 6], [-3, 5.4], [-3, 4.3], [5, 4.9]]);
   ctx.fill();
-  // Round headlights set in the bulging front fenders.
-  ctx.fillStyle = "#fff6d8";
-  ctx.beginPath();
-  ctx.ellipse(16, -6, 1.8, 1.8, 0, 0, Math.PI * 2);
-  ctx.ellipse(16, 6, 1.8, 1.8, 0, 0, Math.PI * 2);
-  ctx.fill();
-  // Small ducktail spoiler over the wide rear haunches, then the rear light bar.
+  mirrors(ctx, skin, 5, 8.9);
+  // Round headlights set in the bulging front fenders, with a chrome bezel.
+  ctx.strokeStyle = "rgba(225,230,238,0.75)";
+  ctx.lineWidth = 0.45;
+  for (const s of [-1, 1]) {
+    lamp(ctx, 16, s * 6, 1.8, 1.8, HEAD, HEAD_CORE);
+    ctx.beginPath();
+    ctx.arc(16, s * 6, 1.9, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  // Ducktail spoiler over the wide rear haunches: lit leading edge, dark trailing lip.
   ctx.fillStyle = skin.matte ? "#1a1a1c" : skin.accent;
-  ctx.fillRect(-17, -8, 3, 16);
-  ctx.fillStyle = "#ff2a1a";
+  poly(ctx, [[-14, -7.6], [-17.6, -8.4], [-17.6, 8.4], [-14, 7.6]]);
+  ctx.fill();
+  ctx.fillStyle = "rgba(255,255,255,0.25)";
+  ctx.fillRect(-14.8, -7.6, 0.6, 15.2);
+  ctx.fillStyle = "rgba(0,0,0,0.45)";
+  ctx.fillRect(-17.6, -8.4, 0.7, 16.8);
+  // Full-width rear light bar.
+  ctx.fillStyle = TAIL;
   ctx.fillRect(-L + 0.5, -6.5, 1.4, 13);
+  ctx.fillStyle = TAIL_CORE;
+  ctx.fillRect(-L + 0.9, -5.8, 0.6, 11.6);
 }
 
 const ART: Record<ModelId, (ctx: Ctx, skin: Skin) => void> = { gt, mx5, p911, aventador, f8 };
 
 export function drawCarSprite(ctx: Ctx, model: ModelId, skin: Skin, x: number, y: number, angle: number) {
   ctx.save();
+  // Soft drop shadow, offset in world space (fixed light): a wide faint layer under a tighter darker one.
+  ctx.translate(x + 2, y + 2.5);
+  ctx.rotate(angle);
+  ctx.fillStyle = "rgba(0,0,0,0.14)";
+  ctx.beginPath();
+  ctx.roundRect(-L - 1.5, -W - 1.5, CAR_LENGTH + 3, CAR_WIDTH + 3, 8);
+  ctx.fill();
+  ctx.fillStyle = "rgba(0,0,0,0.2)";
+  ctx.beginPath();
+  ctx.roundRect(-L + 1, -W + 1, CAR_LENGTH - 2, CAR_WIDTH - 2, 6);
+  ctx.fill();
+  ctx.restore();
+  ctx.save();
   ctx.translate(x, y);
   ctx.rotate(angle);
-  ctx.fillStyle = "rgba(0,0,0,0.3)";
-  ctx.beginPath();
-  ctx.roundRect(-L + 3, -W + 3, CAR_LENGTH, CAR_WIDTH, 6);
-  ctx.fill();
   ART[model](ctx, skin);
   ctx.restore();
 }
