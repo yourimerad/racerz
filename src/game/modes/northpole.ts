@@ -1,19 +1,27 @@
 import { drift, dot, type Fx } from "../fx";
-import { disc, ellipse, mulberry32, onTrackPoint, range, scatter, scatterNear, shadow, softBlob, TAU, type Circle, type Scene } from "../scenery";
+import {
+  disc, ellipse, mulberry32, onTrackPoint, range, type Rng, scatter, scatterNear, shadow, softBlob, TAU, type Circle, type Scene,
+} from "../scenery";
 import type { Track, TrackLayout } from "../track";
+import { clamp } from "../vec";
 
-// North pole: same circuit as the other modes for now (see docs/decisions.md for the planned
-// ice-mountain passage). Igloos, a penguin colony, a polar bear and drifting snow.
+// North pole: a mountain pass. The circuit climbs into a translucent ice massif and dives
+// through a tunnel bored straight through it (~15% of the lap), then loops back across the
+// banquise. Igloos, a penguin colony, a polar bear and drifting snow fill the open ground.
 
 type Ctx = CanvasRenderingContext2D;
+type Pt = { x: number; y: number };
 
 export const layout: TrackLayout = {
   points: [
-    [400, 1100], [400, 600], [650, 300], [1100, 280], [1400, 560], [1750, 420],
-    [2250, 330], [2700, 560], [2780, 1050], [2450, 1380], [1950, 1250],
-    [1550, 1560], [1050, 1760], [600, 1620],
+    [400, 1100], [400, 650], [700, 380], [1150, 300], [1600, 380], [1980, 560],
+    [2320, 780], [2500, 1115], [2680, 1450], [2798, 1670], [2550, 1950], [2000, 1950],
+    [1450, 1950], [950, 1800], [550, 1450],
   ],
+  covers: [{ from: 5.9, to: 8.6 }],
 };
+
+// ---------- open-ground scenery (unchanged style: igloos, penguins, bear, firs) ----------
 
 function fir(ctx: Ctx, c: Circle) {
   shadow(ctx, c.x + 5, c.y + 5, c.r, c.r * 0.9);
@@ -121,15 +129,167 @@ function polarBear(ctx: Ctx, c: Circle, rot: number) {
   ctx.restore();
 }
 
+// ---------- ice-mountain tunnel ----------
+
+/** Sample indices along the loop from `from`, `len` samples long, every `step`. */
+function arcIndices(n: number, from: number, len: number, step: number): number[] {
+  const out: number[] = [];
+  for (let k = 0; k <= len; k += step) out.push((from + k) % n);
+  if (out[out.length - 1] !== (from + len) % n) out.push((from + len) % n);
+  return out;
+}
+
+type Flank = { inner: Pt[]; mid: Pt[]; outer: Pt[]; occ: Circle[] };
+
+/** One side of the massif: a ribbon hugging the road from outside the barrier, bulging into
+ * a peak over the tunnel core and tapering into the open snowfield at both ends. */
+function buildFlank(track: Track, idxs: number[], side: 1 | -1, innerOff: number, jagRng: Rng): Flank {
+  const inner: Pt[] = [], mid: Pt[] = [], outer: Pt[] = [], occ: Circle[] = [];
+  const m = idxs.length;
+  for (let k = 0; k < m; k++) {
+    const idx = idxs[k];
+    const bulge = Math.sin(Math.PI * clamp(k / (m - 1), 0, 1));
+    const outerOff = innerOff + 85 + bulge * 230 + range(jagRng, -30, 50);
+    inner.push(onTrackPoint(track, idx, side * innerOff));
+    outer.push(onTrackPoint(track, idx, side * outerOff));
+    mid.push(onTrackPoint(track, idx, side * (innerOff + (outerOff - innerOff) * 0.5)));
+    if (k % 2 === 0) occ.push({ x: mid[mid.length - 1].x, y: mid[mid.length - 1].y, r: (outerOff - innerOff) / 2 + 24 });
+  }
+  return { inner, mid, outer, occ };
+}
+
+function ring(ctx: Ctx, a: Pt[], b: Pt[]) {
+  ctx.beginPath();
+  a.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+  for (let i = b.length - 1; i >= 0; i--) ctx.lineTo(b[i].x, b[i].y);
+  ctx.closePath();
+}
+
+function drawFlank(ctx: Ctx, f: Flank, rng: Rng) {
+  ring(ctx, f.inner, f.outer);
+  const g = ctx.createLinearGradient(f.inner[0].x, f.inner[0].y, f.outer[Math.floor(f.outer.length / 2)].x, f.outer[Math.floor(f.outer.length / 2)].y);
+  g.addColorStop(0, "rgba(70,105,145,0.5)");
+  g.addColorStop(1, "rgba(140,185,220,0.75)");
+  ctx.fillStyle = g;
+  ctx.fill();
+  // Snow cap: the outer half, paler and more opaque.
+  ring(ctx, f.mid, f.outer);
+  ctx.fillStyle = "rgba(238,247,253,0.88)";
+  ctx.fill();
+  // Crevasses, clipped to the rock body so they never spill onto open snow.
+  ctx.save();
+  ring(ctx, f.inner, f.outer);
+  ctx.clip();
+  ctx.strokeStyle = "rgba(15,40,70,0.5)";
+  ctx.lineWidth = 3;
+  ctx.lineCap = "round";
+  for (let i = 0; i < 14; i++) {
+    const p0 = f.inner[Math.floor(range(rng, 0, f.inner.length - 1))];
+    let x = p0.x, y = p0.y, a = range(rng, 0, TAU);
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    for (let s = 0; s < 4; s++) {
+      a += range(rng, -0.7, 0.7);
+      x += Math.cos(a) * range(rng, 18, 46);
+      y += Math.sin(a) * range(rng, 18, 46);
+      ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+  ctx.restore();
+  // Ridge outline.
+  ring(ctx, f.inner, f.outer);
+  ctx.strokeStyle = "rgba(255,255,255,0.4)";
+  ctx.lineWidth = 2;
+  ctx.stroke();
+}
+
+function icicleRow(ctx: Ctx, from: Pt[], toward: Pt[], rng: Rng, every: number, big: boolean) {
+  for (let k = 1; k < from.length - 1; k += every) {
+    const p = from[k], q = toward[k];
+    const dx = q.x - p.x, dy = q.y - p.y, l = Math.hypot(dx, dy) || 1;
+    const ux = dx / l, uy = dy / l, px = -uy, py = ux;
+    const len = big ? range(rng, 36, 64) : range(rng, 12, 26);
+    const w = big ? range(rng, 14, 22) : range(rng, 5, 10);
+    ctx.beginPath();
+    ctx.moveTo(p.x + px * w, p.y + py * w);
+    ctx.lineTo(p.x + ux * len, p.y + uy * len);
+    ctx.lineTo(p.x - px * w, p.y - py * w);
+    ctx.closePath();
+    ctx.fillStyle = "rgba(213,236,250,0.9)";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255,255,255,0.7)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+}
+
+/** Entrance/exit gate: a row of icicles spanning the tunnel mouth, hanging toward `into`. */
+function portalGate(ctx: Ctx, l: Pt, r: Pt, into: Pt, rng: Rng) {
+  const steps = 7;
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const x = l.x + (r.x - l.x) * t, y = l.y + (r.y - l.y) * t;
+    const len = range(rng, 34, 66), w = range(rng, 11, 19);
+    const px = -into.y, py = into.x;
+    ctx.beginPath();
+    ctx.moveTo(x + px * w, y + py * w);
+    ctx.lineTo(x + into.x * len, y + into.y * len);
+    ctx.lineTo(x - px * w, y - py * w);
+    ctx.closePath();
+    ctx.fillStyle = "rgba(223,241,252,0.92)";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255,255,255,0.75)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+  ctx.beginPath();
+  ctx.moveTo(l.x, l.y);
+  ctx.lineTo(r.x, r.y);
+  ctx.strokeStyle = "rgba(235,247,255,0.95)";
+  ctx.lineWidth = 11;
+  ctx.lineCap = "round";
+  ctx.stroke();
+}
+
 export function scene(track: Track): Scene {
   const rng = mulberry32(3001);
+  const massifRng = mulberry32(3010);
   const b = track.bounds;
   const occ: Circle[] = [];
+  const n = track.path.length;
+  const cover = track.covers[0];
+  let coreLen = cover.end - cover.start;
+  if (coreLen < 0) coreLen += n;
+
+  // Massif flanks: foothills either side of the approach roads, bulging into a peak over
+  // the tunnel core, built from just outside the barrier outward.
+  const FLANK_PAD = 60;
+  const flankFrom = ((cover.start - FLANK_PAD) % n + n) % n;
+  const flankIdx = arcIndices(n, flankFrom, coreLen + FLANK_PAD * 2, 4);
+  const innerOff = track.barrier + 24;
+  const leftFlank = buildFlank(track, flankIdx, -1, innerOff, massifRng);
+  const rightFlank = buildFlank(track, flankIdx, 1, innerOff, massifRng);
+  occ.push(...leftFlank.occ, ...rightFlank.occ);
+
+  // Tunnel roof: a short, solid cap over the road itself (the only place scenery is allowed
+  // on the track band), a little wider than the cover so the portals read as a real gate.
+  const ROOF_PAD = 6;
+  const roofFrom = ((cover.start - ROOF_PAD) % n + n) % n;
+  const roofLen = coreLen + ROOF_PAD * 2;
+  const roofIdx = arcIndices(n, roofFrom, roofLen, 3);
+  const roofHalf = track.width / 2 + 65;
+  const roofLeft = roofIdx.map((i) => onTrackPoint(track, i, -roofHalf));
+  const roofRight = roofIdx.map((i) => onTrackPoint(track, i, roofHalf));
+  const entranceT = track.tangents[roofFrom];
+  const exitIdx = (roofFrom + roofLen) % n;
+  const exitT = track.tangents[exitIdx];
+
   const igloos = scatter(track, rng, occ, 4, 34, 42);
   const colony = igloos.length ? scatterNear(track, rng, occ, 1, igloos[0], 60, 26) : [];
   const bears = scatter(track, rng, occ, 1, 42, 42);
-  const firs = scatter(track, rng, occ, 60, 16, 30);
-  const blocks = scatter(track, rng, occ, 22, 9, 17);
+  const firs = scatter(track, rng, occ, 54, 16, 30);
+  const blocks = scatter(track, rng, occ, 18, 9, 17);
   const drifts = Array.from({ length: 60 }, () => ({
     x: range(rng, b.minX, b.maxX), y: range(rng, b.minY, b.maxY),
     rx: range(rng, 120, 380), ry: range(rng, 40, 130), rot: range(rng, -0.6, 0.6), light: rng() < 0.55,
@@ -155,15 +315,19 @@ export function scene(track: Track): Scene {
       ctx.stroke();
     },
     onTrack(ctx) {
+      // Darken and cool the road under the mountain before the icy sheen on top of it.
+      ring(ctx, roofLeft, roofRight);
+      ctx.fillStyle = "rgba(8,22,40,0.5)";
+      ctx.fill();
+
       const d = mulberry32(3002);
-      const n = track.path.length;
-      ctx.lineCap = "round";
+      const nn = track.path.length;
       // Glossy streaks along the direction of travel.
       for (let i = 0; i < 160; i++) {
-        const start = Math.floor(d() * n), off = (d() - 0.5) * track.width * 0.85, l = 3 + Math.floor(d() * 8);
+        const start = Math.floor(d() * nn), off = (d() - 0.5) * track.width * 0.85, l = 3 + Math.floor(d() * 8);
         ctx.beginPath();
         for (let k = 0; k <= l; k++) {
-          const p = onTrackPoint(track, (start + k) % n, off);
+          const p = onTrackPoint(track, (start + k) % nn, off);
           if (k) ctx.lineTo(p.x, p.y);
           else ctx.moveTo(p.x, p.y);
         }
@@ -175,7 +339,7 @@ export function scene(track: Track): Scene {
       ctx.strokeStyle = "rgba(255,255,255,0.55)";
       ctx.lineWidth = 1.2;
       for (let i = 0; i < 90; i++) {
-        const p = onTrackPoint(track, Math.floor(d() * n), (d() - 0.5) * track.width * 0.8);
+        const p = onTrackPoint(track, Math.floor(d() * nn), (d() - 0.5) * track.width * 0.8);
         let x = p.x, y = p.y, a = d() * TAU;
         ctx.beginPath();
         ctx.moveTo(x, y);
@@ -189,12 +353,39 @@ export function scene(track: Track): Scene {
       }
     },
     over(ctx) {
+      drawFlank(ctx, leftFlank, massifRng);
+      drawFlank(ctx, rightFlank, massifRng);
       const d = mulberry32(3003);
       for (const c of blocks) iceBlock(ctx, c, d() * TAU);
       for (const c of igloos) igloo(ctx, c, d() * TAU);
       for (const c of colony) for (let i = 0; i < 3; i++) penguin(ctx, c.x + (i - 1) * 14, c.y + (i % 2) * 10, range(d, -0.4, 0.4));
       for (const c of bears) polarBear(ctx, c, d() * TAU);
       for (const c of firs) fir(ctx, c);
+    },
+    overhead(ctx) {
+      ring(ctx, roofLeft, roofRight);
+      ctx.fillStyle = "#112640";
+      ctx.fill();
+      ctx.strokeStyle = "rgba(150,195,230,0.55)";
+      ctx.lineWidth = 5;
+      ctx.stroke();
+
+      const gateRng = mulberry32(3011);
+      icicleRow(ctx, roofLeft, roofRight, gateRng, 2, false);
+      icicleRow(ctx, roofRight, roofLeft, gateRng, 2, false);
+      portalGate(ctx, roofLeft[0], roofRight[0], entranceT, gateRng);
+      portalGate(ctx, roofLeft[roofLeft.length - 1], roofRight[roofRight.length - 1], { x: -exitT.x, y: -exitT.y }, gateRng);
+
+      // A few lights hanging from the ceiling.
+      for (let k = 14; k < roofLen - 14; k += 24) {
+        const idx = (roofFrom + k) % n;
+        const p = track.path[idx];
+        const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, 36);
+        g.addColorStop(0, "rgba(255,238,195,0.55)");
+        g.addColorStop(1, "rgba(255,238,195,0)");
+        disc(ctx, p.x, p.y, 36, g);
+        disc(ctx, p.x, p.y, 4, "#fff3c6");
+      }
     },
   };
 }
