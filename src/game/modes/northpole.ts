@@ -204,26 +204,6 @@ function drawFlank(ctx: Ctx, f: Flank, rng: Rng) {
   ctx.stroke();
 }
 
-function icicleRow(ctx: Ctx, from: Pt[], toward: Pt[], rng: Rng, every: number, big: boolean) {
-  for (let k = 1; k < from.length - 1; k += every) {
-    const p = from[k], q = toward[k];
-    const dx = q.x - p.x, dy = q.y - p.y, l = Math.hypot(dx, dy) || 1;
-    const ux = dx / l, uy = dy / l, px = -uy, py = ux;
-    const len = big ? range(rng, 36, 64) : range(rng, 12, 26);
-    const w = big ? range(rng, 14, 22) : range(rng, 5, 10);
-    ctx.beginPath();
-    ctx.moveTo(p.x + px * w, p.y + py * w);
-    ctx.lineTo(p.x + ux * len, p.y + uy * len);
-    ctx.lineTo(p.x - px * w, p.y - py * w);
-    ctx.closePath();
-    ctx.fillStyle = "rgba(213,236,250,0.9)";
-    ctx.fill();
-    ctx.strokeStyle = "rgba(255,255,255,0.7)";
-    ctx.lineWidth = 1;
-    ctx.stroke();
-  }
-}
-
 /** Entrance/exit gate: a row of icicles spanning the tunnel mouth, hanging toward `into`. */
 function portalGate(ctx: Ctx, l: Pt, r: Pt, into: Pt, rng: Rng) {
   const steps = 7;
@@ -278,7 +258,8 @@ export function scene(track: Track): Scene {
   const roofFrom = ((cover.start - ROOF_PAD) % n + n) % n;
   const roofLen = coreLen + ROOF_PAD * 2;
   const roofIdx = arcIndices(n, roofFrom, roofLen, 3);
-  const roofHalf = track.width / 2 + 65;
+  // Wide enough to overlap the flanks' inner edge, so the roof reads as part of the massif.
+  const roofHalf = innerOff + 70;
   const roofLeft = roofIdx.map((i) => onTrackPoint(track, i, -roofHalf));
   const roofRight = roofIdx.map((i) => onTrackPoint(track, i, roofHalf));
   const entranceT = track.tangents[roofFrom];
@@ -319,6 +300,14 @@ export function scene(track: Track): Scene {
       ring(ctx, roofLeft, roofRight);
       ctx.fillStyle = "rgba(8,22,40,0.5)";
       ctx.fill();
+      // Tunnel lights on the road, seen through the fading ice when the player is inside.
+      for (let k = 14; k < roofLen - 14; k += 24) {
+        const p = track.path[(roofFrom + k) % n];
+        const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, 70);
+        g.addColorStop(0, "rgba(255,238,195,0.45)");
+        g.addColorStop(1, "rgba(255,238,195,0)");
+        disc(ctx, p.x, p.y, 70, g);
+      }
 
       const d = mulberry32(3002);
       const nn = track.path.length;
@@ -363,29 +352,65 @@ export function scene(track: Track): Scene {
       for (const c of firs) fir(ctx, c);
     },
     overhead(ctx) {
+      // Translucent blue ice, paler toward the ridge: bands stroked along the crest so they follow the bend.
       ring(ctx, roofLeft, roofRight);
-      ctx.fillStyle = "#112640";
+      ctx.fillStyle = "#7fb2d8";
       ctx.fill();
-      ctx.strokeStyle = "rgba(150,195,230,0.55)";
-      ctx.lineWidth = 5;
+      const iceRng = mulberry32(3012);
+      ctx.save();
+      ring(ctx, roofLeft, roofRight);
+      ctx.clip();
+      // Snow ridge along the crest, with drifts spilling down both sides.
+      const crest = roofIdx.map((i) => onTrackPoint(track, i, 0));
+      ctx.lineCap = ctx.lineJoin = "round";
+      ctx.beginPath();
+      crest.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+      for (const [w, c] of [[1.6, "#a2cbe8"], [1.25, "#bfe0f4"]] as const) {
+        ctx.strokeStyle = c;
+        ctx.lineWidth = roofHalf * w;
+        ctx.stroke();
+      }
+      ctx.strokeStyle = "rgba(255,255,255,0.55)";
+      ctx.lineWidth = roofHalf * 0.9;
+      ctx.stroke();
+      ctx.strokeStyle = "rgba(255,255,255,0.9)";
+      ctx.lineWidth = roofHalf * 0.35;
+      ctx.stroke();
+      for (let k = 0; k < crest.length; k += 3) {
+        const p = crest[k];
+        softBlob(ctx, p.x + range(iceRng, -40, 40), p.y + range(iceRng, -40, 40), range(iceRng, 40, 90), range(iceRng, 20, 45), range(iceRng, 0, TAU), "255,255,255", 0.6);
+      }
+      // Crevasses: dark blue zigzags with a bright lip.
+      for (let i = 0; i < 18; i++) {
+        const k = Math.floor(range(iceRng, 0, roofLeft.length));
+        const t = range(iceRng, 0.12, 0.88);
+        let x = roofLeft[k].x + (roofRight[k].x - roofLeft[k].x) * t, y = roofLeft[k].y + (roofRight[k].y - roofLeft[k].y) * t;
+        let a = range(iceRng, 0, TAU);
+        const pts: Pt[] = [{ x, y }];
+        for (let s = 0; s < 4; s++) {
+          a += range(iceRng, -0.8, 0.8);
+          x += Math.cos(a) * range(iceRng, 16, 40);
+          y += Math.sin(a) * range(iceRng, 16, 40);
+          pts.push({ x, y });
+        }
+        for (const [style, w] of [["rgba(20,60,105,0.6)", 4], ["rgba(255,255,255,0.7)", 1.2]] as const) {
+          ctx.beginPath();
+          pts.forEach((q, j) => (j ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y)));
+          ctx.strokeStyle = style;
+          ctx.lineWidth = w;
+          ctx.stroke();
+        }
+      }
+      ctx.restore();
+      // Shaded rim where the ice meets the flanks.
+      ring(ctx, roofLeft, roofRight);
+      ctx.strokeStyle = "rgba(60,105,150,0.45)";
+      ctx.lineWidth = 6;
       ctx.stroke();
 
       const gateRng = mulberry32(3011);
-      icicleRow(ctx, roofLeft, roofRight, gateRng, 2, false);
-      icicleRow(ctx, roofRight, roofLeft, gateRng, 2, false);
       portalGate(ctx, roofLeft[0], roofRight[0], entranceT, gateRng);
       portalGate(ctx, roofLeft[roofLeft.length - 1], roofRight[roofRight.length - 1], { x: -exitT.x, y: -exitT.y }, gateRng);
-
-      // A few lights hanging from the ceiling.
-      for (let k = 14; k < roofLen - 14; k += 24) {
-        const idx = (roofFrom + k) % n;
-        const p = track.path[idx];
-        const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, 36);
-        g.addColorStop(0, "rgba(255,238,195,0.55)");
-        g.addColorStop(1, "rgba(255,238,195,0)");
-        disc(ctx, p.x, p.y, 36, g);
-        disc(ctx, p.x, p.y, 4, "#fff3c6");
-      }
     },
   };
 }
