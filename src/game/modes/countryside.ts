@@ -391,16 +391,15 @@ export function scene(track: Track): Scene {
     }
   });
 
-  // Zone B's top bends: a row of straw bales in the runoff on the outside of each bend —
-  // solid bumpers (scene.bumpers) that cars bounce off hard.
-  const hayBales: Prop[] = [];
-  for (const i of stepThrough(spp, n, ZONE_B, 3)) {
-    const ta = track.tangents[(i - 6 + n) % n], tb = track.tangents[(i + 6) % n];
-    const turn = ta.x * tb.y - ta.y * tb.x;
-    if (Math.abs(turn) < 0.2) continue;
-    const p = onTrackPoint(track, i, -Math.sign(turn) * (track.width / 2 + 30));
-    hayBales.push({ x: p.x, y: p.y, r: 15, a: p.a });
-  }
+  // Zone B (top): the kerbs are rows of straw bales on both edges, packed tight so no car can
+  // slip between them — solid bumpers (scene.bumpers) that cars bounce off hard.
+  const hayBales: Prop[] = [], hayBumpers: Circle[] = [];
+  for (const i of stepThrough(spp, n, ZONE_B, 2))
+    for (const side of [-1, 1] as const) {
+      const p = onTrackPoint(track, i, side * (track.width / 2 + 9));
+      hayBales.push({ x: p.x, y: p.y, r: 13, a: p.a });
+      hayBumpers.push({ x: p.x, y: p.y, r: 10 });
+    }
 
   // Forest: dense trees on both sides, plus marked entrances/exits at the two canopy passages.
   const forestTrees = belt(track, rng, occ, stepThrough(spp, n, FOREST, 5), 16, 28, 10, 70);
@@ -489,7 +488,7 @@ export function scene(track: Track): Scene {
   return {
     lava: [],
     vents: lightGaps,
-    bumpers: hayBales,
+    bumpers: hayBumpers,
     under(ctx) {
       for (const f of fields) {
         ctx.save();
@@ -540,24 +539,6 @@ export function scene(track: Track): Scene {
         ctx.lineWidth = track.width;
         ctx.strokeStyle = "rgba(5,10,5,0.4)";
         ctx.stroke();
-      }
-      // Zone B: a village circuit painted with its own kerb colours, over the shared white/red ones.
-      const zb = zoneIndices(spp, n, ZONE_B);
-      ctx.lineJoin = "round";
-      for (const side of [-1, 1] as const) {
-        ctx.beginPath();
-        for (let k = 0; k <= zb.len; k++) {
-          const p = onTrackPoint(track, (zb.start + k) % n, side * (track.width / 2 + 9));
-          if (k) ctx.lineTo(p.x, p.y);
-          else ctx.moveTo(p.x, p.y);
-        }
-        ctx.lineWidth = 18;
-        ctx.strokeStyle = "#2a4d8f";
-        ctx.stroke();
-        ctx.setLineDash([22, 26]);
-        ctx.strokeStyle = "#f1c40f";
-        ctx.stroke();
-        ctx.setLineDash([]);
       }
     },
     over(ctx) {

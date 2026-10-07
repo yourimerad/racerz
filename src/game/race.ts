@@ -71,7 +71,7 @@ export function createRace(themeId: ThemeId, player: PlayerCar, seed?: number): 
     return {
       id: i, name: isPlayer ? `Toi (${MODELS[player.model].name})` : r.name, color: skin.body, isPlayer,
       model: isPlayer ? player.model : "gt", skin, skill: stats.speed, accelMul: stats.accel, gripMul: stats.grip,
-      offTime: 0, hits: 0, hitCooldown: 0,
+      offTime: 0, hits: 0, hitCooldown: 0, stun: 0,
       pos, vel: vec(0, 0), angle: Math.atan2(t.y, t.x),
       progress: idx - n, lastIndex: idx, lap: 0, lapStart: 0, bestLap: null, finishTime: null, surface: "track",
     };
@@ -203,6 +203,8 @@ function hitBarrier(race: Race, car: Car, index: number, dist: number) {
 /** Normal speed a bumper sends a car back with: springy (more than it came in), never less than a kick. */
 const BUMPER_BOUNCE = 1.45;
 const BUMPER_KICK = 300;
+/** Engine cut after a bumper hit (seconds): throttle ignored so the bounce isn't driven straight back in. */
+const BUMPER_STUN = 0.6;
 
 /** Hay bales and other round bumpers: push out, bounce back hard, spin a little, throw straw. */
 function hitBumpers(race: Race, car: Car) {
@@ -218,6 +220,7 @@ function hitBumpers(race: Race, car: Car) {
     car.vel = add(car.vel, scale(nrm, -vn + Math.max(-vn * BUMPER_BOUNCE, BUMPER_KICK)));
     const fwd = fromAngle(car.angle);
     car.angle += 0.3 * Math.sign(fwd.x * nrm.y - fwd.y * nrm.x);
+    car.stun = BUMPER_STUN;
     if (-vn > 80 && car.hitCooldown <= 0) {
       car.hits++;
       car.hitCooldown = 0.5;
@@ -275,9 +278,11 @@ export function stepRace(race: Race, playerInput: Input, dt: number, playerIsAi 
       else if (car.finishTime !== null) input = { ...NO_INPUT, brake: speedOf(car) > 0 };
       else input = aiInput(race, car, dt);
     }
+    if (car.stun > 0) input = { ...input, throttle: false };
     const before = car.pos;
     stepCar(car, input, dt, race.theme.phys);
     car.hitCooldown -= dt;
+    car.stun = Math.max(0, car.stun - dt);
     containCar(race, car);
     if (slipOf(car) > 140 || (input.brake && speedOf(car) > 300)) {
       const back = scale(fromAngle(car.angle), -14);

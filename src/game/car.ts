@@ -30,6 +30,8 @@ export type Car = {
   offTime: number;
   hits: number;
   hitCooldown: number;
+  /** Seconds left with the engine cut after a bumper hit, so the bounce plays out. */
+  stun: number;
 };
 
 export const CAR_LENGTH = 40;
@@ -85,7 +87,9 @@ export function stepCar(car: Car, input: Input, dt: number, mods: PhysMods) {
   if (input.brake) vF -= (vF > 0 ? PHYS.brake : PHYS.reverseAccel) * dt;
   vF -= vF * drag * dt;
   if (vF > maxSpeed) vF += (maxSpeed - vF) * Math.min(1, 3 * dt);
-  vF = Math.max(vF, -PHYS.maxReverse);
+  // While bouncing off a bumper (engine cut), let the rebound play out: no reverse cap, loose grip.
+  const bouncing = car.stun > 0;
+  if (!bouncing) vF = Math.max(vF, -PHYS.maxReverse);
 
   const steer = (input.right ? 1 : 0) - (input.left ? 1 : 0);
   // Steering authority grows with speed and inverts in reverse.
@@ -93,7 +97,7 @@ export function stepCar(car: Car, input: Input, dt: number, mods: PhysMods) {
   const turnPenalty = 1 - 0.35 * clamp(Math.abs(vF) / PHYS.maxSpeed, 0, 1);
   car.angle += steer * PHYS.turnRate * authority * turnPenalty * dt * (input.handbrake ? 1.35 : 1);
 
-  vL *= Math.exp(-(input.handbrake ? PHYS.driftGrip : PHYS.grip) * gripMul * car.gripMul * dt);
+  vL *= Math.exp(-(input.handbrake || bouncing ? PHYS.driftGrip : PHYS.grip) * gripMul * car.gripMul * dt);
   if (input.handbrake) vF -= vF * 0.8 * dt;
 
   const nf = fromAngle(car.angle);
