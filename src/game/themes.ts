@@ -35,10 +35,13 @@ export type Theme = {
     kerbA: string;
     kerbB: string;
     kerbWidth: number;
+    /** Optional dark outline around the kerbs (`width` per side). */
+    edge?: { color: string; width: number };
     /** Barrier band: base and alternating segments. */
     barrierA: string;
     barrierB: string;
-    dash: string;
+    /** Dashed centre line; null = no markings on the road. */
+    dash: string | null;
     minimap: string;
     accent: string;
     /** "r,g,b" of skid marks. */
@@ -59,8 +62,8 @@ export const THEMES: Record<ThemeId, Theme> = {
     layout: desertMode.layout,
     bots: { pace: 0.9, spread: 0.035, errors: 9 },
     colors: {
-      ground: "#c9a466", offtrack: "#dcbc7f", asphalt: "#8c8175", kerbA: "#ece0c8", kerbB: "#b8754e", kerbWidth: 18, barrierA: "#5a3d22", barrierB: "#c99a5b",
-      dash: "rgba(255,245,225,0.35)", minimap: "rgba(255,236,200,0.75)", accent: "#ffb347", skid: "90,65,40",
+      ground: "#c4663a", offtrack: "#c4663a", asphalt: "#e2bd84", kerbA: "#e2bd84", kerbB: "#e2bd84", kerbWidth: 0, edge: { color: "#6b2f1a", width: 4 },
+      barrierA: "#7a3519", barrierB: "#a65a34", dash: null, minimap: "rgba(255,236,200,0.75)", accent: "#ffb347", skid: "90,65,40",
     },
     scene: desertMode.scene,
     fx: desertMode.fx,

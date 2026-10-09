@@ -1,16 +1,14 @@
 import { drift, dot, type Fx } from "../fx";
-import { disc, ellipse, mulberry32, onTrackPoint, range, rock, scatter, shadow, softBlob, TAU, type Circle, type Scene } from "../scenery";
+import { disc, ellipse, jagged, mulberry32, onTrackPoint, range, rock, scatter, TAU, type Circle, type Rng, type Scene } from "../scenery";
 import type { Track, TrackLayout } from "../track";
 
-// Desert: open dunes for most of the lap, cut through by a canyon of red sandstone — a
-// natural arch to drive under, plus two cliff overhangs that jut out over the road. Oasis,
-// cacti and sun-bleached skulls fill the open stretch, same as before.
+// Desert: a red-sandstone canyon all the way round. The road is a ribbon of pale sand at the
+// bottom of a ravine; on each side a jagged cliff face (lighter brown, lit rim) rises to the
+// plateau, which is dotted with cracks, boulders and top-down cacti. All edges are broken
+// lines drawn from fixed seeds (scenery.jagged), so the canyon is identical every race.
 
 type Ctx = CanvasRenderingContext2D;
-
-const OVERHANG_A = { from: 3.1, to: 3.75 }; // west overhang: a cliff ledge jutting halfway over the road
-const ARCH = { from: 4.3, to: 4.7 }; // the arch itself
-const OVERHANG_B = { from: 5.25, to: 5.9 }; // east overhang
+type Pt = [number, number];
 
 export const layout: TrackLayout = {
   points: [
@@ -18,289 +16,157 @@ export const layout: TrackLayout = {
     [2200, 560], [2600, 780], [2820, 1150], [2650, 1550], [2150, 1700],
     [1700, 1550], [1200, 1700], [750, 1800],
   ],
-  covers: [OVERHANG_A, ARCH, OVERHANG_B],
 };
 
-// Mirrors track.ts's SAMPLES_PER_SEGMENT: control-point unit -> sample index. Kept local so
-// this mode doesn't need a shared export just for placing its own canyon scenery.
-const SPS = 40;
-function sampleAt(track: Track, control: number): number {
-  const n = track.path.length;
-  return ((Math.round(control * SPS) % n) + n) % n;
+const COL = {
+  plateau: "#c4663a", patch: "#b25830", crack: "#7a3519", rockBase: "#98582f", rockLight: "#b06a3e",
+  cliff: "#b06a3e", rim: "#e8a874", foot: "#6b2f1a", floor: "#d6ae74",
+  cactus: "#4a6a2e", cactusCore: "#6f9446",
+};
+/** Cliff face width between the canyon floor and the plateau. */
+const CLIFF = 25;
+/** Distance from the centerline to the cliff foot, a little beyond the barrier. */
+const footOffset = (track: Track) => track.barrier + 16;
+
+/** One jagged edge of the canyon as a closed loop, `offset` from the centerline on `side`. */
+function edgeLoop(track: Track, side: 1 | -1, offset: number, amp: number, seed: number): Pt[] {
+  const pts: Pt[] = [];
+  for (let i = 0; i < track.path.length; i += 4) {
+    const p = onTrackPoint(track, i, side * offset);
+    pts.push([p.x, p.y]);
+  }
+  pts.push(pts[0]);
+  return jagged(pts, amp, seed);
 }
 
-/** Sample indices from control unit `from` to `to` (both within the same loop, `from` < `to`), every `step`. */
-function sampleRange(track: Track, from: number, to: number, step: number): number[] {
-  const a = sampleAt(track, from), b = sampleAt(track, to);
-  const out: number[] = [];
-  for (let i = a; i < b; i += step) out.push(i);
-  out.push(b);
-  return out;
+function tracePoly(ctx: Ctx, pts: Pt[]) {
+  ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+  ctx.closePath();
 }
 
-// ---------- canyon (red-sandstone strata, a natural arch, two overhangs) ----------
-
-const CANYON = { wallFrom: 2.7, wallTo: 6.3 };
-
-const STRATA = ["#b5603f", "#9c4b32", "#c97a4e", "#8a3f2b", "#d99a5f"];
-
-/** Points along the centerline, offset sideways (see onTrackPoint), from control unit `from` to `to`. */
-function wallPoints(track: Track, from: number, to: number, offset: number) {
-  return sampleRange(track, from, to, 3).map((i) => onTrackPoint(track, i, offset));
-}
-
-function strokePath(ctx: Ctx, pts: { x: number; y: number }[], lineWidth: number, style: string) {
-  if (pts.length < 2) return;
+/** The ground between two edge loops (either may be the outer one: even-odd fill). */
+function fillBetween(ctx: Ctx, a: Pt[], b: Pt[], fill: string) {
   ctx.beginPath();
-  pts.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
-  ctx.lineWidth = lineWidth;
+  tracePoly(ctx, a);
+  tracePoly(ctx, b);
+  ctx.fillStyle = fill;
+  ctx.fill("evenodd");
+}
+
+function strokeLoop(ctx: Ctx, pts: Pt[], width: number, style: string) {
+  ctx.beginPath();
+  tracePoly(ctx, pts);
+  ctx.lineWidth = width;
   ctx.strokeStyle = style;
   ctx.stroke();
 }
 
-/** One canyon wall (side = -1 left / +1 right of travel), with sedimentary strata bands. */
-function canyonWall(ctx: Ctx, track: Track, side: 1 | -1) {
-  const gap = 40, thick = 200;
-  const inner = track.barrier + gap;
-  ctx.lineCap = ctx.lineJoin = "round";
-  // Contact shadow where the cliff meets the ground, just outside the barrier.
-  strokePath(ctx, wallPoints(track, CANYON.wallFrom, CANYON.wallTo, side * (inner - 10)), 26, "rgba(40,16,8,0.4)");
-  // Base rock mass.
-  strokePath(ctx, wallPoints(track, CANYON.wallFrom, CANYON.wallTo, side * (inner + thick / 2)), thick, "#8a4330");
-  // Strata bands: parallel stripes following the cliff, like sediment layers seen from above.
-  const bandCount = STRATA.length;
-  for (let k = 0; k < bandCount; k++) {
-    const d = inner + ((k + 0.5) / bandCount) * thick;
-    strokePath(ctx, wallPoints(track, CANYON.wallFrom, CANYON.wallTo, side * d), thick / bandCount - 4, STRATA[k]);
+/** An irregular flat stain on the plateau. */
+function blotch(ctx: Ctx, rng: Rng, x: number, y: number, r: number, fill: string) {
+  const n = 9;
+  ctx.beginPath();
+  for (let k = 0; k < n; k++) {
+    const a = (k / n) * TAU, rr = r * range(rng, 0.6, 1.1);
+    const px = x + Math.cos(a) * rr * 1.5, py = y + Math.sin(a) * rr;
+    if (k) ctx.lineTo(px, py);
+    else ctx.moveTo(px, py);
   }
-  // Sunlit clifftop rim.
-  strokePath(ctx, wallPoints(track, CANYON.wallFrom, CANYON.wallTo, side * (inner + thick - 6)), 10, "rgba(255,225,185,0.55)");
+  ctx.closePath();
+  ctx.fillStyle = fill;
+  ctx.fill();
 }
 
-/** A rock bulge pushing closer to the road where an overhang's base anchors into the wall. */
-function canyonLedgeBase(ctx: Ctx, track: Track, cover: { from: number; to: number }, side: 1 | -1) {
-  const gap = 20, thick = 120;
-  const inner = track.barrier + gap;
-  strokePath(ctx, wallPoints(track, cover.from, cover.to, side * (inner + thick / 2)), thick, "#7a3b2a");
-  strokePath(ctx, wallPoints(track, cover.from, cover.to, side * (inner + thick - 8)), 14, "rgba(255,225,185,0.4)");
+/** A hairline fissure: a short random walk. */
+function crack(ctx: Ctx, rng: Rng, x: number, y: number) {
+  let a = rng() * TAU;
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+  for (let k = 0; k < 6; k++) {
+    a += range(rng, -0.6, 0.6);
+    x += Math.cos(a) * range(rng, 14, 36);
+    y += Math.sin(a) * range(rng, 14, 36);
+    ctx.lineTo(x, y);
+  }
+  ctx.stroke();
 }
 
-/** The arch's two rock legs flanking the road at its midpoint. */
-function archLegs(ctx: Ctx, track: Track, rng: () => number) {
-  const mid = sampleAt(track, (ARCH.from + ARCH.to) / 2);
-  const gap = 22, r = 72;
-  for (const side of [-1, 1] as const) {
-    const p = onTrackPoint(track, mid, side * (track.barrier + gap + r));
-    rock(ctx, rng, { x: p.x, y: p.y, r }, "#6b3324", "#a35a3b");
-  }
-}
-
-/** Underside shading inside the arch: darkest at the apex, fading toward both openings. */
-function archOverhead(ctx: Ctx, track: Track) {
-  const a = sampleAt(track, ARCH.from), b = sampleAt(track, ARCH.to);
-  const mid = onTrackPoint(track, sampleAt(track, (ARCH.from + ARCH.to) / 2), 0);
-  const halfSpan = track.barrier + 160;
-  const archLenPts = wallPoints(track, ARCH.from, ARCH.to, 0);
-  const archLen = archLenPts.reduce((sum, p, i) => (i ? sum + Math.hypot(p.x - archLenPts[i - 1].x, p.y - archLenPts[i - 1].y) : 0), 0);
-  // Deck: solid rock slab spanning the full barrier-to-barrier width.
-  strokePath(ctx, wallPoints(track, ARCH.from, ARCH.to, 0), halfSpan * 2, "#5e2d20");
-  for (let k = 0; k < STRATA.length; k++) {
-    const t = (k + 0.5) / STRATA.length;
-    strokePath(ctx, wallPoints(track, ARCH.from, ARCH.to, (t - 0.5) * halfSpan * 2), halfSpan * 2 / STRATA.length - 3, STRATA[k]);
-  }
-  // Pooled shadow toward the apex (fades out near both mouths of the arch).
-  softBlob(ctx, mid.x, mid.y, Math.max(60, archLen * 0.6), halfSpan * 0.9, mid.a, "15,6,4", 0.55);
-  // Bright rim at each opening, marking entrance/exit.
-  for (const i of [a, b]) {
-    const p = track.path[i], t = track.tangents[i];
-    ctx.save();
-    ctx.translate(p.x, p.y);
-    ctx.rotate(Math.atan2(t.y, t.x));
-    const g = ctx.createLinearGradient(-30, 0, 30, 0);
-    g.addColorStop(0, "rgba(255,230,190,0)");
-    g.addColorStop(0.5, "rgba(255,230,190,0.5)");
-    g.addColorStop(1, "rgba(255,230,190,0)");
-    ctx.fillStyle = g;
-    ctx.fillRect(-30, -halfSpan, 60, halfSpan * 2);
-    ctx.restore();
-  }
-}
-
-/** A cliff ledge hanging partway over the road (not the full width), with a lit edge. */
-function overhangDeck(ctx: Ctx, track: Track, cover: { from: number; to: number }, side: 1 | -1) {
-  const outer = side * (track.barrier + 50);
-  const inner = side * -track.width * 0.08; // crosses just past the centerline
-  const center = (outer + inner) / 2;
-  const width = Math.abs(outer - inner);
-  strokePath(ctx, wallPoints(track, cover.from, cover.to, center), width, "#6b3324");
-  for (let k = 0; k < STRATA.length; k++) {
-    const t = (k + 0.5) / STRATA.length;
-    strokePath(ctx, wallPoints(track, cover.from, cover.to, outer + (inner - outer) * t), width / STRATA.length - 3, STRATA[k]);
-  }
-  // Lit inner edge, where the rock ends mid-road.
-  strokePath(ctx, wallPoints(track, cover.from, cover.to, inner), 10, "rgba(255,225,185,0.6)");
-  // Soft shadow it casts just ahead of its own edge.
-  const mid = onTrackPoint(track, sampleAt(track, (cover.from + cover.to) / 2), inner * 0.6);
-  softBlob(ctx, mid.x, mid.y, 90, 60, 0, "15,6,4", 0.3);
-}
-
+/** Cactus seen from above: a round green crown with a lighter heart. */
 function cactus(ctx: Ctx, c: Circle) {
-  const s = c.r / 18, x = c.x, y = c.y;
-  ellipse(ctx, x + 16 * s, y + 4 * s, 22 * s, 6 * s, 0.2, "rgba(0,0,0,0.22)");
-  ctx.fillStyle = "#4c9a4f";
-  ctx.strokeStyle = "#2f6e35";
-  ctx.lineWidth = 2 * s;
-  const part = (px: number, py: number, w: number, h: number) => {
+  ellipse(ctx, c.x + c.r * 0.35, c.y + c.r * 0.4, c.r, c.r * 0.9, 0, "rgba(60,20,8,0.28)");
+  disc(ctx, c.x, c.y, c.r, COL.cactus);
+  ctx.strokeStyle = "rgba(20,40,10,0.35)";
+  ctx.lineWidth = 1.5;
+  for (let k = 0; k < 8; k++) {
+    const a = (k / 8) * TAU;
     ctx.beginPath();
-    ctx.roundRect(x + px * s, y + py * s, w * s, h * s, (w / 2) * s);
-    ctx.fill();
+    ctx.moveTo(c.x + Math.cos(a) * c.r * 0.5, c.y + Math.sin(a) * c.r * 0.5);
+    ctx.lineTo(c.x + Math.cos(a) * c.r * 0.95, c.y + Math.sin(a) * c.r * 0.95);
     ctx.stroke();
-  };
-  part(-16, -30, 7, 18);
-  part(-16, -17, 14, 6);
-  part(9, -38, 7, 20);
-  part(3, -22, 13, 6);
-  part(-6, -46, 12, 46);
-  ctx.strokeStyle = "rgba(255,255,255,0.35)";
-  ctx.beginPath();
-  ctx.moveTo(x - 2 * s, y - 42 * s);
-  ctx.lineTo(x - 2 * s, y - 4 * s);
-  ctx.stroke();
-}
-
-function skull(ctx: Ctx, c: Circle, rot: number) {
-  ctx.save();
-  ctx.translate(c.x, c.y);
-  ctx.rotate(rot);
-  ctx.strokeStyle = "#e9dfc8";
-  ctx.lineWidth = 3;
-  ctx.lineCap = "round";
-  ctx.beginPath();
-  ctx.moveTo(-5, -4);
-  ctx.quadraticCurveTo(-16, -8, -14, -18);
-  ctx.moveTo(5, -4);
-  ctx.quadraticCurveTo(16, -8, 14, -18);
-  ctx.stroke();
-  ellipse(ctx, 0, 0, 7, 6, 0, "#f1e9d6");
-  ellipse(ctx, 0, 8, 4, 6, 0, "#f1e9d6");
-  disc(ctx, -3, -1, 1.8, "#3b2f25");
-  disc(ctx, 3, -1, 1.8, "#3b2f25");
-  ctx.restore();
-}
-
-function palm(ctx: Ctx, x: number, y: number, s: number, rot: number) {
-  shadow(ctx, x + 8 * s, y + 8 * s, 30 * s, 26 * s);
-  for (let i = 0; i < 7; i++) {
-    const a = rot + (i / 7) * TAU;
-    ctx.save();
-    ctx.translate(x, y);
-    ctx.rotate(a);
-    ctx.beginPath();
-    ctx.moveTo(0, 0);
-    ctx.quadraticCurveTo(18 * s, -9 * s, 36 * s, 2 * s);
-    ctx.quadraticCurveTo(18 * s, 5 * s, 0, 0);
-    ctx.fillStyle = i % 2 ? "#3f8a3a" : "#5fae4a";
-    ctx.fill();
-    ctx.restore();
   }
-  disc(ctx, x, y, 5 * s, "#7a5230");
-  disc(ctx, x + 3 * s, y - 2 * s, 2.5 * s, "#5a3a1e");
-  disc(ctx, x - 3 * s, y + 2 * s, 2.5 * s, "#5a3a1e");
+  disc(ctx, c.x, c.y, c.r * 0.5, COL.cactusCore);
 }
 
 export function scene(track: Track): Scene {
   const rng = mulberry32(1001);
   const b = track.bounds;
-  const occ: Circle[] = [];
+  const n = track.path.length;
+  const foot = footOffset(track);
 
-  // Keep the canyon's area clear of the usual scattered props (rocks/cacti/skulls/oasis),
-  // so they don't collide with the custom cliff walls drawn for it below.
-  for (const i of sampleRange(track, CANYON.wallFrom, CANYON.wallTo, 20)) {
+  // Both sides' edge loops: cliff foot (floor edge) and cliff rim (plateau edge).
+  const footL = edgeLoop(track, -1, foot, 8, 11), footR = edgeLoop(track, 1, foot, 8, 23);
+  const rimL = edgeLoop(track, -1, foot + CLIFF, 10, 37), rimR = edgeLoop(track, 1, foot + CLIFF, 10, 53);
+
+  // Props stay on the plateau, clear of the cliff.
+  const occ: Circle[] = [];
+  for (let i = 0; i < n; i += 8) {
     const p = track.path[i];
-    occ.push({ x: p.x, y: p.y, r: track.barrier + 300 });
+    occ.push({ x: p.x, y: p.y, r: foot + CLIFF + 40 });
   }
-  const oasis = scatter(track, rng, occ, 1, 150, 150);
-  const rocks = scatter(track, rng, occ, 45, 9, 30);
-  const cacti = scatter(track, rng, occ, 40, 14, 22);
-  const skulls = scatter(track, rng, occ, 8, 14, 14);
-  const dunes = Array.from({ length: 34 }, () => ({
-    x: range(rng, b.minX, b.maxX), y: range(rng, b.minY, b.maxY),
-    rx: range(rng, 220, 520), ry: range(rng, 90, 220), rot: range(rng, -0.4, 0.4), light: rng() < 0.5,
+  const rocks = scatter(track, rng, occ, 50, 10, 30);
+  const cacti = scatter(track, rng, occ, 34, 10, 16);
+  const patches = Array.from({ length: 140 }, () => ({
+    x: range(rng, b.minX, b.maxX), y: range(rng, b.minY, b.maxY), r: range(rng, 30, 90), light: rng() < 0.3,
   }));
-  const ripples = Array.from({ length: 220 }, () => ({
-    x: range(rng, b.minX, b.maxX), y: range(rng, b.minY, b.maxY),
-    len: range(rng, 160, 520), amp: range(rng, 5, 14), f: range(rng, 0.012, 0.03), ph: rng() * TAU,
-  }));
+  const cracks = Array.from({ length: 90 }, () => ({ x: range(rng, b.minX, b.maxX), y: range(rng, b.minY, b.maxY) }));
 
   return {
     lava: [],
     vents: [],
     under(ctx) {
-      for (const d of dunes)
-        softBlob(ctx, d.x, d.y, d.rx, d.ry, d.rot, d.light ? "255,236,190" : "150,100,50", d.light ? 0.45 : 0.22);
-      ctx.lineCap = "round";
-      for (const r of ripples) {
-        for (const [dy, color, w] of [[0, "rgba(255,242,210,0.45)", 3], [5, "rgba(150,105,55,0.28)", 2]] as const) {
-          ctx.beginPath();
-          for (let x = 0; x <= r.len; x += 12) {
-            const px = r.x + x, py = r.y + dy + Math.sin(x * r.f + r.ph) * r.amp;
-            if (x) ctx.lineTo(px, py);
-            else ctx.moveTo(px, py);
-          }
-          ctx.strokeStyle = color;
-          ctx.lineWidth = w;
-          ctx.stroke();
-        }
-      }
+      const d = mulberry32(1002);
+      // 1. Plateau (the base fill): stains, fissures, boulders, cacti.
+      for (const p of patches) blotch(ctx, d, p.x, p.y, p.r, p.light ? "rgba(214,128,80,0.35)" : COL.patch);
+      ctx.lineCap = ctx.lineJoin = "round";
+      ctx.strokeStyle = COL.crack;
+      ctx.lineWidth = 2;
+      for (const c of cracks) crack(ctx, d, c.x, c.y);
+      for (const r of rocks) rock(ctx, d, r, COL.rockBase, COL.rockLight);
+      for (const c of [...cacti].sort((p, q) => p.y - q.y)) cactus(ctx, c);
+
+      // 2. Cliff: a lighter brown face with a bright rim, then the canyon floor inside it.
+      fillBetween(ctx, rimL, rimR, COL.cliff);
+      fillBetween(ctx, footL, footR, COL.floor);
+      for (const loop of [rimL, rimR]) strokeLoop(ctx, loop, 3, COL.rim);
+      // Contact shadow where the cliff meets the floor.
+      for (const loop of [footL, footR]) strokeLoop(ctx, loop, 7, "rgba(107,47,26,0.5)");
     },
     onTrack(ctx) {
-      const d = mulberry32(1002);
-      const n = track.path.length;
-      // Wind-blown sand drifts and dust speckles washing out the asphalt.
-      for (let i = 0; i < 40; i++) {
-        const p = onTrackPoint(track, Math.floor(d() * n), (d() - 0.5) * track.width * 0.7);
-        softBlob(ctx, p.x, p.y, range(d, 50, 110), range(d, 14, 30), p.a, "222,190,135", 0.55);
-      }
-      for (let i = 0; i < 2600; i++) {
-        const p = onTrackPoint(track, Math.floor(d() * n), (d() - 0.5) * track.width * 0.96);
-        disc(ctx, p.x, p.y, range(d, 1, 3.5), `rgba(230,205,160,${range(d, 0.15, 0.4).toFixed(2)})`);
-      }
-      // Strong shadows cast across the road by the canyon walls, darkest on the west side.
-      for (const [cover, side] of [[OVERHANG_A, -1], [ARCH, -1], [ARCH, 1], [OVERHANG_B, 1]] as const) {
-        const mid = sampleAt(track, (cover.from + cover.to) / 2);
-        for (let k = -2; k <= 2; k++) {
-          const p = onTrackPoint(track, (mid + k * 4 + n) % n, side * track.width * 0.3);
-          softBlob(ctx, p.x, p.y, 90, 70, p.a, "20,10,6", 0.3);
+      // Two fine, continuous tyre tracks along the whole lap.
+      for (const side of [-1, 1]) {
+        ctx.beginPath();
+        for (let i = 0; i < n; i++) {
+          const p = onTrackPoint(track, i, side * 26);
+          if (i) ctx.lineTo(p.x, p.y);
+          else ctx.moveTo(p.x, p.y);
         }
+        ctx.closePath();
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = "#d3a96d";
+        ctx.stroke();
       }
     },
-    over(ctx) {
-      const d = mulberry32(1003);
-      for (const o of oasis) {
-        ellipse(ctx, o.x, o.y, o.r, o.r * 0.68, 0, "#c7a25c");
-        ellipse(ctx, o.x, o.y, o.r * 0.85, o.r * 0.56, 0, "#7fa84b");
-        ellipse(ctx, o.x, o.y, o.r * 0.58, o.r * 0.36, 0, "#2f9cc4");
-        ellipse(ctx, o.x - o.r * 0.12, o.y - o.r * 0.08, o.r * 0.32, o.r * 0.14, 0, "rgba(200,240,255,0.35)");
-        for (let i = 0; i < 6; i++) {
-          const a = (i / 6) * TAU + d() * 0.4;
-          palm(ctx, o.x + Math.cos(a) * o.r * 0.74, o.y + Math.sin(a) * o.r * 0.47, range(d, 0.85, 1.15), d() * TAU);
-        }
-      }
-      for (const r of rocks) rock(ctx, d, r, "#a07850", "#c49a6c");
-      for (const s of skulls) skull(ctx, s, d() * TAU);
-      for (const c of [...cacti].sort((a, b) => a.y - b.y)) cactus(ctx, c);
-
-      // Canyon: two sandstone walls, ledge bases for the overhangs, and the arch's legs.
-      for (const side of [-1, 1] as const) canyonWall(ctx, track, side);
-      canyonLedgeBase(ctx, track, OVERHANG_A, -1);
-      canyonLedgeBase(ctx, track, OVERHANG_B, 1);
-      archLegs(ctx, track, d);
-    },
-    overhead(ctx) {
-      archOverhead(ctx, track);
-      overhangDeck(ctx, track, OVERHANG_A, -1);
-      overhangDeck(ctx, track, OVERHANG_B, 1);
-    },
+    over() {},
   };
 }
 
