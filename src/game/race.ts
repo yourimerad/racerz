@@ -1,6 +1,6 @@
 import { type Car, type Input, type Surface, NO_INPUT, CAR_RADIUS, PHYS, stepCar, slipOf, speedOf } from "./car";
 import { type ModelId, type SkinId, MODELS, carStats, skinOf } from "./garage";
-import { type Cue, type Hazard, type Rng, type Scene, mulberry32 } from "./scenery";
+import { type Circle, type Cue, type Hazard, type Rng, type Scene, mulberry32 } from "./scenery";
 import { type Theme, type ThemeId, THEMES, sceneFor } from "./themes";
 import { isCovered, locate, trackFor, type Track } from "./track";
 import { type Vec, vec, add, sub, scale, len, dot, angleDiff, clamp, fromAngle } from "./vec";
@@ -279,32 +279,64 @@ function hitBarrier(race: Race, car: Car, index: number, dist: number) {
 /** Normal speed a bumper sends a car back with: springy (more than it came in), never less than a kick. */
 const BUMPER_BOUNCE = 1.45;
 const BUMPER_KICK = 300;
+/**
+ * Ceiling on that rebound, as a share of the car's top speed. The bounce is springy (> 1), so without a ceiling a car
+ * crossing the road between the two rows of bales gains speed on every hit (380 → 551 → 799 → … → 3 000+ u/s) and ends up
+ * skipping over the bales: the "teleporting" glitch.
+ */
+const BUMPER_MAX_REBOUND = 0.85;
 /** Engine cut after a bumper hit (seconds): throttle ignored so the bounce isn't driven straight back in. */
 const BUMPER_STUN = 0.6;
 
-/** Hay bales and other round bumpers: push out, bounce back hard, spin a little, throw straw. */
+/**
+ * Hay bales and other round bumpers: push out, bounce back hard, spin a little, throw straw. The bales of a row overlap,
+ * so the car is pushed out of all of them (a few passes: leaving one can mean entering the next), and the whole contact
+ * gets a single bounce along the combined normal, not one per bale.
+ */
 function hitBumpers(race: Race, car: Car) {
-  for (const b of race.scene.bumpers ?? []) {
-    const d = sub(car.pos, b);
-    const dist = len(d);
-    const min = b.r + CAR_RADIUS * 0.8;
-    if (dist === 0 || dist >= min) continue;
-    const nrm = scale(d, 1 / dist);
-    car.pos = add(b, scale(nrm, min));
-    const vn = dot(car.vel, nrm);
-    if (vn >= 0) continue;
-    car.vel = add(car.vel, scale(nrm, -vn + Math.max(-vn * BUMPER_BOUNCE, BUMPER_KICK)));
-    const fwd = fromAngle(car.angle);
-    car.angle += 0.3 * Math.sign(fwd.x * nrm.y - fwd.y * nrm.x);
-    car.stun = BUMPER_STUN;
-    if (-vn > 80 && car.hitCooldown <= 0) {
-      car.hits++;
-      car.hitCooldown = 0.5;
-      noteCrash(race, car, -vn);
-      for (let k = 0; k < 14; k++) {
-        const a = Math.atan2(nrm.y, nrm.x) + (race.rng() - 0.5) * 2.4, v = 60 + race.rng() * 160;
-        race.straw.push({ x: b.x + nrm.x * b.r, y: b.y + nrm.y * b.r, vx: Math.cos(a) * v, vy: Math.sin(a) * v, rot: race.rng() * Math.PI, life: 1 });
+  const bumpers = race.scene.bumpers;
+  if (!bumpers?.length) return;
+  let nx = 0, ny = 0, deepest = 0, hit: Circle | null = null;
+  for (let pass = 0; pass < 3; pass++) {
+    let moved = false;
+    for (const b of bumpers) {
+      const d = sub(car.pos, b);
+      const dist = len(d);
+      const min = b.r + CAR_RADIUS * 0.8;
+      if (dist >= min) continue;
+      const nrm = dist === 0 ? vec(1, 0) : scale(d, 1 / dist);
+      car.pos = add(b, scale(nrm, min));
+      moved = true;
+      if (pass === 0) {
+        const pen = min - dist;
+        nx += nrm.x * pen;
+        ny += nrm.y * pen;
+        if (pen > deepest) {
+          deepest = pen;
+          hit = b;
+        }
       }
+    }
+    if (!moved) break;
+  }
+  if (!hit) return;
+  const nl = Math.hypot(nx, ny);
+  const away = sub(car.pos, hit);
+  const nrm = nl > 1e-6 ? vec(nx / nl, ny / nl) : len(away) > 0 ? scale(away, 1 / len(away)) : vec(1, 0);
+  const vn = dot(car.vel, nrm);
+  if (vn >= 0) return;
+  const rebound = Math.min(Math.max(-vn * BUMPER_BOUNCE, BUMPER_KICK), Math.max(BUMPER_KICK, BUMPER_MAX_REBOUND * PHYS.maxSpeed * car.skill));
+  car.vel = add(car.vel, scale(nrm, -vn + rebound));
+  const fwd = fromAngle(car.angle);
+  car.angle += 0.3 * Math.sign(fwd.x * nrm.y - fwd.y * nrm.x);
+  car.stun = BUMPER_STUN;
+  if (-vn > 80 && car.hitCooldown <= 0) {
+    car.hits++;
+    car.hitCooldown = 0.5;
+    noteCrash(race, car, -vn);
+    for (let k = 0; k < 14; k++) {
+      const a = Math.atan2(nrm.y, nrm.x) + (race.rng() - 0.5) * 2.4, v = 60 + race.rng() * 160;
+      race.straw.push({ x: hit.x + nrm.x * hit.r, y: hit.y + nrm.y * hit.r, vx: Math.cos(a) * v, vy: Math.sin(a) * v, rot: race.rng() * Math.PI, life: 1 });
     }
   }
 }
