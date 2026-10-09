@@ -1,3 +1,44 @@
+# Racerz
+
+Jeu web de course 2D (canvas), voir `AGENTS.md` pour l'architecture. Prod : https://racerz-jet.vercel.app
+
+## Comptes joueurs (optionnel, Supabase)
+
+Sans configuration, le jeu fonctionne comme avant : progression sauvegardée dans le navigateur (`localStorage`).
+Pour activer les comptes (inscription / connexion, progression sauvegardée par compte) :
+
+1. Créez un projet sur [supabase.com](https://supabase.com) (Authentication → Providers → Email activé).
+2. Dans **SQL Editor**, exécutez le contenu de [`supabase/schema.sql`](supabase/schema.sql) (rejouable sans risque).
+3. Renseignez les deux variables suivantes (Project Settings → API), en local dans `.env.local` et sur Vercel
+   (Project → Settings → Environment Variables), puis redéployez :
+
+   ```bash
+   NEXT_PUBLIC_SUPABASE_URL=https://xxxx.supabase.co
+   NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJ...   # clé « anon » publique, jamais la clé service_role
+   ```
+
+Sécurité : les mots de passe ne sont jamais gérés par le jeu (Supabase Auth). La table `profiles` est protégée par
+Row Level Security : chaque joueur ne lit que sa ligne et **aucun client ne peut l'écrire**. Achats, gains, paliers
+et niveaux passent par des fonctions SQL (`buy_car`, `buy_skin`, `settle_race`…) qui recalculent l'argent côté
+serveur (prix, solde, gains par place). Limite connue : le résultat d'une course est rapporté par le navigateur
+(pas de simulation serveur) ; il est borné par un ticket `start_race` à usage unique et une durée minimale de 20 s.
+Si vous changez des prix ou des gains dans `src/game/garage.ts`, reportez-les dans `supabase/schema.sql`.
+
+À la première connexion, une progression locale existante peut être reprise sur le compte (une seule fois, vérifiée
+et plafonnée à 500 000 € côté serveur).
+
+## Développement
+
+```bash
+pnpm install
+pnpm dev          # http://localhost:3000
+pnpm lint
+pnpm check:tracks # contrôle des tracés (Node 22.18+ / 25)
+pnpm sim          # courses simulées pour régler les bots
+```
+
+---
+
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
 ## Getting Started

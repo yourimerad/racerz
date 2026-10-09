@@ -1,13 +1,16 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import type { ProfileActions } from "@/game/actions";
 import { drawCarSprite } from "@/game/carArt";
 import {
   type ModelId, type Profile, type SkinId, type StatKey, CLEAN_MAX_HITS, CLEAN_MAX_OFF, MODEL_ORDER, MODELS, PALIERS_PER_LEVEL, PAYOUTS, SKINS,
-  SKIN_ORDER, STAT_RANGE, buyCar, buySkin, carStats, equipSkin, formatMoney, selectCar, skinOf,
+  SKIN_ORDER, STAT_RANGE, carStats, formatMoney, skinOf,
 } from "@/game/garage";
 import { formatTime } from "@/game/render";
 import { type ThemeId, THEMES, THEME_ORDER } from "@/game/themes";
+import AccountPanel from "./AccountPanel";
+import SoundButton from "./SoundButton";
 import styles from "./Game.module.css";
 
 function CarPreview({ model, skin, size = 3 }: { model: ModelId; skin: SkinId; size?: number }) {
@@ -40,7 +43,7 @@ function StatBar({ label, stat, value }: { label: string; stat: StatKey; value: 
 
 type Props = {
   profile: Profile;
-  setProfile: (p: Profile) => void;
+  actions: ProfileActions;
   mode: ThemeId;
   setMode: (m: ThemeId) => void;
   record: number | null;
@@ -48,7 +51,7 @@ type Props = {
   debug: boolean;
 };
 
-export default function Lobby({ profile, setProfile, mode, setMode, record, onStart, debug }: Props) {
+export default function Lobby({ profile, actions, mode, setMode, record, onStart, debug }: Props) {
   const selected = profile.cars[profile.selected];
 
   return (
@@ -58,9 +61,13 @@ export default function Lobby({ profile, setProfile, mode, setMode, record, onSt
           <h1 className={styles.logo}>RACERZ</h1>
           <p className={styles.credit}>créé par Andrea Tranchant</p>
         </div>
-        <div className={styles.money}>
-          💰 {formatMoney(profile.money)}
-          {debug && <span className={styles.debugBadge}>DEBUG</span>}
+        <div className={styles.headRight}>
+          <AccountPanel />
+          <SoundButton />
+          <div className={styles.money}>
+            💰 {formatMoney(profile.money)}
+            {debug && <span className={styles.debugBadge}>DEBUG</span>}
+          </div>
         </div>
       </header>
 
@@ -91,11 +98,11 @@ export default function Lobby({ profile, setProfile, mode, setMode, record, onSt
                     <StatBar label="Adhérence" stat="grip" value={st.grip} />
                   </div>
                   {owned ? (
-                    <button className={styles.small} disabled={profile.selected === id} onClick={() => setProfile(selectCar(profile, id))}>
+                    <button className={styles.small} disabled={profile.selected === id} onClick={() => actions.selectCar(id)}>
                       {profile.selected === id ? "Sélectionnée" : "Choisir"}
                     </button>
                   ) : (
-                    <button className={styles.small} disabled={!affordable} onClick={() => setProfile(buyCar(profile, id))}>
+                    <button className={styles.small} disabled={!affordable} onClick={() => actions.buyCar(id)}>
                       {affordable ? "Acheter" : `Il manque ${formatMoney(m.price - profile.money)}`}
                     </button>
                   )}
@@ -119,7 +126,7 @@ export default function Lobby({ profile, setProfile, mode, setMode, record, onSt
                   key={id}
                   className={`${styles.skin} ${equipped ? styles.skinOn : ""}`}
                   disabled={!owned && profile.money < price}
-                  onClick={() => setProfile(owned ? equipSkin(profile, id) : buySkin(profile, id))}
+                  onClick={() => (owned ? actions.equipSkin(id) : actions.buySkin(id))}
                 >
                   <CarPreview model={profile.selected} skin={id} size={1.4} />
                   <span>{skin.name}</span>
