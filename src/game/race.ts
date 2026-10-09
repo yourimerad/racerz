@@ -126,13 +126,14 @@ function rollMistake(race: Race, car: Car, state: AiState, dt: number) {
  */
 function hazardAvoidance(race: Race, car: Car): { slow: number; offset: number | null } {
   const hz = race.hazard;
-  if (!hz) return { slow: 1, offset: null };
+  if (!hz?.bodies || !hz.avoid) return { slow: 1, offset: null };
+  const avoid = hz.avoid;
   const { track } = race;
   const state = race.ai[car.id];
   const fwd = fromAngle(car.angle);
   const speed = Math.max(0, speedOf(car));
   // Faster cars look further ahead: 120 px is under a quarter of a second at full speed.
-  const range = hz.avoid.range + speed * hz.avoid.lookahead;
+  const range = avoid.range + speed * avoid.lookahead;
   const t = track.tangents[car.lastIndex];
   const here = dot(sub(car.pos, track.path[car.lastIndex]), vec(-t.y, t.x)); // the car's current road offset
   const room = track.width / 2 - 28;
@@ -146,13 +147,13 @@ function hazardAvoidance(race: Race, car: Car): { slow: number; offset: number |
     // Half-extent of the body across the car's path (its ellipse projected on the lateral axis).
     const hc = Math.cos(b.angle) * -fwd.y + Math.sin(b.angle) * fwd.x;
     const half = Math.hypot(b.rx * hc, b.ry * Math.sqrt(Math.max(0, 1 - hc * hc)));
-    const clearance = half + CAR_RADIUS + hz.avoid.margin;
+    const clearance = half + CAR_RADIUS + avoid.margin;
     // Where the body will be (across the car's path) when the car, slowed, reaches it.
-    const eta = clamp(ahead / Math.max(speed * hz.avoid.slow, 100), 0, 3);
+    const eta = clamp(ahead / Math.max(speed * avoid.slow, 100), 0, 3);
     const bodySide = side + (-b.vx * fwd.y + b.vy * fwd.x) * eta;
     if (Math.abs(side) > clearance && Math.abs(bodySide) > clearance) continue;
     seen = true;
-    slow = Math.min(slow, hz.avoid.slow);
+    slow = Math.min(slow, avoid.slow);
     // Passing on its left needs the car at most `bodySide - clearance` sideways; on its right, at least `bodySide + clearance`.
     const left = Math.min(0, bodySide - clearance), right = Math.max(0, bodySide + clearance);
     const fits = (shift: number) => Math.abs(here + shift) <= room;
@@ -164,7 +165,7 @@ function hazardAvoidance(race: Race, car: Car): { slow: number; offset: number |
     state.hazardPass = pass;
     const shift = pass < 0 ? left : right;
     // No room to get round it in time: take the speed off further and let it walk on.
-    if (!fits(shift)) slow = Math.min(slow, hz.avoid.slow * 0.6);
+    if (!fits(shift)) slow = Math.min(slow, avoid.slow * 0.6);
     offset = clamp(here + shift, -room, room);
   }
   if (!seen && state.hazardPass !== 0) state.hazardPass = 0;
@@ -315,7 +316,8 @@ function hitBumpers(race: Race, car: Car) {
  */
 function hitHazard(race: Race, car: Car) {
   const hz = race.hazard;
-  if (!hz) return;
+  if (!hz?.bodies || !hz.impact) return;
+  const { speedKeep, restitution, minImpact } = hz.impact;
   for (const b of hz.bodies()) {
     const c = Math.cos(b.angle), s = Math.sin(b.angle);
     const dx = car.pos.x - b.x, dy = car.pos.y - b.y;
@@ -342,7 +344,6 @@ function hitHazard(race: Race, car: Car) {
     const rv = vec(car.vel.x - b.vx, car.vel.y - b.vy);
     const vn = dot(rv, n);
     if (vn >= 0) continue;
-    const { speedKeep, restitution, minImpact } = hz.impact;
     if (vn > -minImpact) {
       car.vel = vec(b.vx + rv.x - n.x * vn, b.vy + rv.y - n.y * vn); // just stop closing in
       continue;
@@ -350,7 +351,7 @@ function hitHazard(race: Race, car: Car) {
     const k = -(1 + restitution) * vn;
     car.vel = vec(b.vx + (rv.x + n.x * k) * speedKeep, b.vy + (rv.y + n.y * k) * speedKeep);
     const power = clamp(-vn / 500, 0, 1);
-    if (hz.touch(b, car.id, car.pos, power)) car.hits++;
+    if (hz.touch?.(b, car.id, car.pos, power)) car.hits++;
     if (car.isPlayer && race.cues.length < 16) race.cues.push({ kind: "thud", power });
   }
 }

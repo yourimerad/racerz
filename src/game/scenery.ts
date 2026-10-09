@@ -24,24 +24,32 @@ export type HazardWorld = {
   cues: Cue[];
 };
 
+/** The visible world rectangle (same fields as fx.ts's FxView), for culling what a hazard draws. */
+export type HazardView = { minX: number; maxX: number; minY: number; maxY: number };
+
 /**
- * A mode's moving obstacle (e.g. the polar bear). Its state lives in the Race (a fresh one per
- * race, built by `Scene.hazard`), never in the memoized Scene.
+ * A mode's dynamic element, built per race by `Scene.hazard` and driven by the simulation clock:
+ * a moving obstacle cars bounce off (polar bear: `bodies`, `avoid`, `impact`, `touch`) or a purely
+ * visual effect (volcano eruption: only `step` and the drawing hooks). Its state lives in the Race
+ * (a fresh one per race), never in the memoized Scene.
  */
 export type Hazard = {
-  /**
-   * How bots react: slow to `slow` × their limit when a body is within `range` px (+ `lookahead` s of their own speed) ahead,
-   * and steer to pass it with `margin` px to spare, on the side that is free where the body will be when they get there.
-   */
-  avoid: { range: number; slow: number; margin: number; lookahead: number };
+  /** How bots react: slow to `slow` × their limit when a body is within `range` px (+ `lookahead` s of their own speed) ahead,
+   * and steer to pass it with `margin` px to spare, on the side that is free where the body will be when they get there. */
+  avoid?: { range: number; slow: number; margin: number; lookahead: number };
   /** Impact on a car: share of the relative speed it keeps, bounciness, and the closing speed below which it just slides off. */
-  impact: { speedKeep: number; restitution: number; minImpact: number };
-  bodies(): readonly HazardBody[];
+  impact?: { speedKeep: number; restitution: number; minImpact: number };
+  /** Solid bodies cars collide with (none for a purely visual hazard). */
+  bodies?(): readonly HazardBody[];
   step(world: HazardWorld, dt: number): void;
   /** A car hit `body` hard enough to count as an impact at `at`; true when it counts as a contact (clean-race rule). */
-  touch(body: HazardBody, carId: number, at: Vec, power: number): boolean;
+  touch?(body: HazardBody, carId: number, at: Vec, power: number): boolean;
+  /** World space, drawn over the ground and under the skid marks and cars. */
+  drawGround?(ctx: Ctx, time: number, view: HazardView): void;
   /** World space, drawn over the cars. */
-  draw(ctx: Ctx, time: number): void;
+  draw(ctx: Ctx, time: number, view: HazardView): void;
+  /** Camera shake (world units) to apply to the whole view when the camera is at `at`. */
+  shake?(at: Vec): Vec;
 };
 
 export type Scene = {

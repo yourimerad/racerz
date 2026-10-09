@@ -9,7 +9,8 @@
     "lint": "eslint",
     "check:tracks": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/resolve-ts.mjs scripts/check-tracks.ts",
     "sim": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/resolve-ts.mjs scripts/sim-bots.ts",
-    "check:bear": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/resolve-ts.mjs scripts/check-bear.ts"
+    "check:bear": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/resolve-ts.mjs scripts/check-bear.ts",
+    "check:eruption": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/resolve-ts.mjs scripts/check-eruption.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.117.3",

@@ -126,6 +126,9 @@ export function render(ctx: CanvasRenderingContext2D, race: Race, w: number, h: 
   ctx.translate(w / 2, h / 2);
   ctx.scale(zoom, zoom);
   ctx.translate(-player.pos.x, -player.pos.y);
+  // A mode's hazard may shake the whole view (cars and ground together, so nothing slides under the cars).
+  const shake = race.hazard?.shake?.(player.pos);
+  if (shake) ctx.translate(shake.x, shake.y);
 
   const b = track.bounds;
   ctx.drawImage(staticLayer(theme, track, scene), b.minX, b.minY, b.maxX - b.minX, b.maxY - b.minY);
@@ -134,6 +137,7 @@ export function render(ctx: CanvasRenderingContext2D, race: Race, w: number, h: 
   ctx.strokeRect(b.minX, b.minY, b.maxX - b.minX, b.maxY - b.minY);
 
   theme.fx.ground?.(ctx, scene, view);
+  race.hazard?.drawGround?.(ctx, race.time, view);
 
   ctx.lineCap = "round";
   ctx.lineWidth = 6;
@@ -155,7 +159,7 @@ export function render(ctx: CanvasRenderingContext2D, race: Race, w: number, h: 
     ctx.fillRect(-4, -1, 8, 2);
     ctx.restore();
   }
-  race.hazard?.draw(ctx, race.time);
+  race.hazard?.draw(ctx, race.time, view);
   theme.fx.air?.(ctx, scene, view);
 
   // Covered-section ceiling: fades out over the player (race.overheadOpacity) so they can
