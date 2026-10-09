@@ -45,7 +45,7 @@ for (const seed of SEEDS) {
     break;
   }
   const pairs = new Set<string>(); // distinct (bear, bot) pairs that touched
-  const touch = hz.touch.bind(hz);
+  const touch = hz.touch!.bind(hz);
   hz.touch = (b, carId, at, p) => {
     if (carId !== 0) pairs.add(`${b.id}:${carId}`);
     return touch(b, carId, at, p);
@@ -56,7 +56,7 @@ for (const seed of SEEDS) {
   const spawns: number[] = [];
   while (race.time < 240 && race.cars.some((c) => c.finishTime === null)) {
     stepRace(race, aiInput(race, race.cars[0], DT, false), DT);
-    const bodies = hz.bodies();
+    const bodies = (hz.bodies?.() ?? []);
     if (bodies.length > 1) fail(`seed ${seed}: ${bodies.length} bears at once at t=${race.time.toFixed(1)}s`);
     for (const b of bodies) {
       if (!seen.has(b.id)) {
@@ -87,7 +87,7 @@ for (const seed of SEEDS) {
   botTouches += pairs.size;
   // Let the last bear walk off: the list must end empty.
   for (let i = 0; i < 20 * 120; i++) stepRace(race, NO_INPUT, DT, false);
-  if (hz.bodies().length) fail(`seed ${seed}: ${hz.bodies().length} bear(s) still alive 20 s after the end (leak)`);
+  if ((hz.bodies?.() ?? []).length) fail(`seed ${seed}: ${(hz.bodies?.() ?? []).length} bear(s) still alive 20 s after the end (leak)`);
   console.log(`  seed ${seed}: race ${race.time.toFixed(0)}s · ${spawns.length} bears (first at ${firstSpawn.toFixed(1)}s) · bots that touched a bear ${pairs.size}`);
 }
 console.log(`  total ${totalBears} bears · (bear, bot) pairs that touched ${botTouches} of ${totalBears * 3} · min gap ${Number.isFinite(minGap) ? minGap.toFixed(1) : "-"}s`);
@@ -102,7 +102,7 @@ if (Number.isFinite(minGap) && minGap < 20 - 1e-6) fail(`two bears only ${minGap
   let bear: HazardBody | null = null;
   while (!bear && race.time < 120) {
     stepRace(race, aiInput(race, player, DT, false), DT); // the bear is placed ahead of a moving player
-    bear = hz.bodies()[0] ?? null;
+    bear = (hz.bodies?.() ?? [])[0] ?? null;
   }
   if (!bear) {
     fail("no bear appeared to test collisions");
@@ -122,7 +122,7 @@ if (Number.isFinite(minGap) && minGap < 20 - 1e-6) fail(`two bears only ${minGap
     for (let i = 0; i < steps; i++) {
       // Keep the throttle down: the car keeps pressing on the bear.
       stepRace(race, { ...NO_INPUT, throttle: true }, DT);
-      const b = hz.bodies()[0];
+      const b = (hz.bodies?.() ?? [])[0];
       if (!b) break;
       if (inside(b, player.pos.x, player.pos.y, 13.6)) wasInside = true;
       const sp = Math.hypot(player.vel.x - b.vx, player.vel.y - b.vy);
@@ -132,7 +132,7 @@ if (Number.isFinite(minGap) && minGap < 20 - 1e-6) fail(`two bears only ${minGap
       }
       minSpeed = Math.min(minSpeed, sp);
     }
-    const b = hz.bodies()[0];
+    const b = (hz.bodies?.() ?? [])[0];
     const dt = race.time - t0;
     if (!impact) fail("collision: the car did not register an impact");
     if (wasInside) fail("collision: the car ended a step inside the bear's hitbox");
