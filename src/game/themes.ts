@@ -106,12 +106,12 @@ export const THEMES: Record<ThemeId, Theme> = {
     layout: volcanoMode.layout,
     bots: { pace: 1.045, spread: 0.025, errors: 1 },
     colors: {
-      ground: "#1c1514", offtrack: "#2b2321", asphalt: "#3b3534", kerbA: "#26201f", kerbB: "#ff5a1f", kerbWidth: 18, barrierA: "#141011", barrierB: "#ff6a2a",
-      dash: "rgba(255,170,120,0.55)", minimap: "rgba(255,140,90,0.75)", accent: "#ff7a3d", skid: "10,8,8",
+      ground: "#1c1514", offtrack: "#2b2321", asphalt: "#4a4543", kerbA: "#6b635f", kerbB: "#6b635f", kerbWidth: 12, edge: { color: "#15100e", width: 3 },
+      barrierA: "#1e1715", barrierB: "#5c4a42", dash: null, minimap: "rgba(255,140,90,0.75)", accent: "#ff7a3d", skid: "10,8,8",
     },
     scene: volcanoMode.scene,
     fx: volcanoMode.fx,
-    // Ash behaves like grass; lava pools nearly stop the car.
+    // Ash behaves like grass (the crater's lava is only decoration).
     phys: { ...NEUTRAL, lavaDrag: 3.2, lavaMax: 0.3 },
   },
 };
