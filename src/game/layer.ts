@@ -1,3 +1,4 @@
+import { drawFinishLine } from "./finishLine";
 import type { Scene } from "./scenery";
 import type { Theme } from "./themes";
 import type { Track } from "./track";
@@ -53,7 +54,7 @@ function drawTrack(ctx: CanvasRenderingContext2D, track: Track, c: Theme["colors
   ctx.stroke();
 }
 
-function drawMarkings(ctx: CanvasRenderingContext2D, track: Track, c: Theme["colors"]) {
+function drawMarkings(ctx: CanvasRenderingContext2D, track: Track, c: Theme["colors"], mode: string) {
   if (c.dash) {
     tracePath(ctx, track);
     ctx.lineWidth = 4;
@@ -63,18 +64,9 @@ function drawMarkings(ctx: CanvasRenderingContext2D, track: Track, c: Theme["col
     ctx.setLineDash([]);
   }
 
-  // Checkered start/finish line at sample 0.
-  const p = track.path[0], t = track.tangents[0];
-  ctx.save();
-  ctx.translate(p.x, p.y);
-  ctx.rotate(Math.atan2(t.y, t.x));
-  const sq = 12, rows = Math.ceil(track.width / sq);
-  for (let col = 0; col < 2; col++)
-    for (let r = 0; r < rows; r++) {
-      ctx.fillStyle = (r + col) % 2 ? "#111" : "#fff";
-      ctx.fillRect(col * sq - sq, -track.width / 2 + r * sq, sq, sq);
-    }
-  ctx.restore();
+  // Checkered start/finish line at sample 0, in the mode's own style (purely visual: lap detection is race.ts's).
+  const t = track.tangents[0];
+  drawFinishLine(ctx, mode, track.path[0].x, track.path[0].y, Math.atan2(t.y, t.x), track.width);
 }
 
 /**
@@ -129,7 +121,7 @@ export function staticLayer(theme: Theme, track: Track, scene: Scene): HTMLCanva
   scene.under(ctx);
   drawTrack(ctx, track, theme.colors);
   scene.onTrack?.(ctx);
-  drawMarkings(ctx, track, theme.colors);
+  drawMarkings(ctx, track, theme.colors, theme.id);
   drawBarriers(ctx, track, theme.colors, canvas.width, canvas.height, s);
   scene.over(ctx);
   cached = { id: theme.id, canvas };
