@@ -1,7 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { type Input, NO_INPUT } from "@/game/car";
+import { type ProfileActions, localActions } from "@/game/actions";
+import {
+  accountStartRace, accountSettleRace, getAccountState, getServerAccountState, initAccount, isSignedIn, remoteActions, subscribeAccount,
+} from "@/game/account";
+import { type Input, NO_INPUT, PHYS, slipOf, speedOf } from "@/game/car";
 import {
   SECRET_WORD, advanceSecretBuffer, debugModeFromUrl, getDebugMode, getDebugPanelOpen, getServerDebugMode, getServerDebugPanelOpen,
   setDebugMode, subscribeDebugMode, subscribeDebugPanel, toggleDebugMode, toggleDebugPanel,
@@ -13,9 +17,13 @@ import {
   type Profile, type RaceReport, DEBUG_PROFILE, formatMoney, getPlayerProfile, getServerPlayerProfile, savePlayerProfile, settleRace,
   subscribePlayerProfile,
 } from "@/game/garage";
+import { getServerSettings, getSettings, subscribeSettings } from "@/game/settings";
+import { sound } from "@/game/sound";
+import { AccountNotice } from "./AccountPanel";
 import DebugPanel from "./DebugPanel";
 import Fireworks from "./Fireworks";
 import Lobby from "./Lobby";
+import SoundButton from "./SoundButton";
 import styles from "./Game.module.css";
 
 const KEYS: Record<string, keyof Input> = {
@@ -58,7 +66,30 @@ export default function Game() {
   const [debugProfile, setDebugProfile] = useState<Profile>(DEBUG_PROFILE);
   const debugProfileRef = useRef(debugProfile);
   const profile = debugMode ? debugProfile : playerProfile;
-  const setProfile = debugMode ? setDebugProfile : savePlayerProfile;
+  // Accounts (Supabase, optional): a signed-in player's purchases and winnings go through the server.
+  const account = useSyncExternalStore(subscribeAccount, getAccountState, getServerAccountState);
+  const actions: ProfileActions = debugMode
+    ? localActions(() => debugProfile, setDebugProfile)
+    : account.status === "signedIn"
+      ? remoteActions
+      : localActions(getPlayerProfile, savePlayerProfile);
+  const { muted } = useSyncExternalStore(subscribeSettings, getSettings, getServerSettings);
+  useEffect(() => {
+    void initAccount();
+  }, []);
+  useEffect(() => {
+    sound.setMuted(muted);
+  }, [muted]);
+  // Browsers only allow audio after a user gesture: the first key press or click creates it.
+  useEffect(() => {
+    const unlock = () => sound.unlock();
+    window.addEventListener("pointerdown", unlock, true);
+    window.addEventListener("keydown", unlock, true);
+    return () => {
+      window.removeEventListener("pointerdown", unlock, true);
+      window.removeEventListener("keydown", unlock, true);
+    };
+  }, []);
   // Which profile was active when the current race started (toggling mid-race must not matter).
   const raceIsDebugRef = useRef(false);
   const [report, setReport] = useState<RaceReport | null>(null);
@@ -74,6 +105,7 @@ export default function Game() {
     raceIsDebugRef.current = isDebugRace;
     const p = isDebugRace ? debugProfileRef.current : getPlayerProfile();
     const car = p.cars[p.selected] ?? { level: 1, skin: "factory" as const };
+    if (!isDebugRace && isSignedIn()) accountStartRace();
     raceRef.current = createRace(mode, { model: p.selected, skin: car.skin, level: car.level });
     inputRef.current = { ...NO_INPUT };
     setScreen("race");
@@ -81,6 +113,8 @@ export default function Game() {
 
   useEffect(() => {
     const set = (e: KeyboardEvent, down: boolean) => {
+      // Typing in a form field (sign-in) must not drive the car or start a race.
+      if ((e.target as HTMLElement | null)?.closest?.("input, textarea, select")) return;
       if (down && !e.repeat) {
         // Enter/Space start from the menu or results (Space is the handbrake while racing).
         if ((e.code === "Enter" || e.code === "Space") && screen !== "race") {
@@ -129,6 +163,7 @@ export default function Game() {
     };
     resize();
     window.addEventListener("resize", resize);
+    sound.startEngine();
 
     const frame = (now: number) => {
       const race = raceRef.current;
@@ -141,6 +176,16 @@ export default function Game() {
       }
       render(ctx, race, canvas.clientWidth, canvas.clientHeight);
 
+      const me = race.cars[0];
+      for (const power of race.crashes.splice(0)) sound.crash(power);
+      if (race.phase === "finished") sound.stopEngine();
+      else {
+        sound.drive({
+          speedRatio: Math.abs(speedOf(me)) / (PHYS.maxSpeed * me.skill), throttle: inputRef.current.throttle && me.stun <= 0,
+          slip: slipOf(me), onRoad: me.surface === "track",
+        });
+      }
+
       if (race.phase === "finished" && !resultsShown) {
         resultsShown = true;
         const best = race.cars[0].bestLap;
@@ -152,14 +197,23 @@ export default function Game() {
         const isDebugRace = raceIsDebugRef.current;
         const current = isDebugRace ? debugProfileRef.current : getPlayerProfile();
         const settled = settleRace(current, place, player.offTime / Math.max(1, player.finishTime ?? race.time), player.hits);
+        const onAccount = !isDebugRace && isSignedIn();
         if (isDebugRace) {
           debugProfileRef.current = settled.profile;
           setDebugProfile(settled.profile);
         } else {
-          savePlayerProfile(settled.profile);
+          savePlayerProfile(settled.profile); // signed in: shown right away, the server then has the last word
         }
         setReport(settled.report);
         setSettledBalance(settled.profile.money);
+        if (onAccount) {
+          void accountSettleRace(place, player.offTime / Math.max(1, player.finishTime ?? race.time), player.hits).then((srv) => {
+            if (srv) setReport((r) => r && { ...r, earned: srv.earned, palier: srv.palier, levelUp: srv.levelUp });
+            setSettledBalance(getPlayerProfile().money);
+          });
+        }
+        if (place === 1) sound.victory();
+        else sound.finish();
         // Let the other cars run a bit before showing the podium.
         setTimeout(() => {
           if (raceRef.current !== race) return; // restarted with R meanwhile
@@ -173,6 +227,7 @@ export default function Game() {
     return () => {
       cancelAnimationFrame(raf);
       window.removeEventListener("resize", resize);
+      sound.stopEngine();
     };
   }, [screen]);
 
@@ -186,12 +241,21 @@ export default function Game() {
   });
 
   return (
-    <div className={styles.root}>
+    <div
+      className={styles.root}
+      onClickCapture={(e) => {
+        // Menu click sound for every button, except the ones that opt out (touch pad, mute).
+        const b = (e.target as HTMLElement).closest("button");
+        if (b && !b.closest("[data-nosound]")) sound.click();
+      }}
+    >
       <canvas ref={canvasRef} className={styles.canvas} />
+      <AccountNotice />
+      {screen !== "menu" && <SoundButton floating />}
       {debugMode && debugPanelOpen && <DebugPanel raceRef={raceRef} mode={mode} />}
 
       {screen === "race" && (
-        <div className={styles.touch}>
+        <div className={styles.touch} data-nosound>
           <div className={styles.pad}>
             <button {...touch("left")} aria-label="Gauche">◀</button>
             <button {...touch("right")} aria-label="Droite">▶</button>
@@ -204,7 +268,7 @@ export default function Game() {
       )}
 
       {screen === "menu" && (
-        <Lobby profile={profile} setProfile={setProfile} mode={mode} setMode={setMode} record={record} onStart={start} debug={debugMode} />
+        <Lobby profile={profile} actions={actions} mode={mode} setMode={setMode} record={record} onStart={start} debug={debugMode} />
       )}
 
       {screen === "results" && report?.place === 1 && <Fireworks />}

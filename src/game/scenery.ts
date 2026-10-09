@@ -148,3 +148,24 @@ export function onTrackPoint(track: Track, i: number, offset: number) {
   return { x: p.x - t.y * offset, y: p.y + t.x * offset, a: Math.atan2(t.y, t.x) };
 }
 
+
+/**
+ * Roughens a polyline into a broken line: every segment is split into ~22-unit steps and each
+ * vertex is shifted by up to ±amp on both axes. A fixed `seed` (small LCG) makes the result
+ * identical on every run, so a cliff edge looks the same every race. The last input point is
+ * not emitted, so a closed loop can be passed with its first point repeated at the end.
+ */
+export function jagged(pts: [number, number][], amp = 8, seed = 1): [number, number][] {
+  let s = seed;
+  const rnd = () => (s = (s * 16807) % 2147483647) / 2147483647;
+  const out: [number, number][] = [];
+  for (let i = 0; i < pts.length - 1; i++) {
+    const [x1, y1] = pts[i], [x2, y2] = pts[i + 1];
+    const steps = Math.max(2, Math.floor(Math.hypot(x2 - x1, y2 - y1) / 22));
+    for (let k = 0; k < steps; k++) {
+      const t = k / steps;
+      out.push([x1 + (x2 - x1) * t + (rnd() - 0.5) * amp * 2, y1 + (y2 - y1) * t + (rnd() - 0.5) * amp * 2]);
+    }
+  }
+  return out;
+}

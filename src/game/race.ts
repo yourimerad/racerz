@@ -32,6 +32,8 @@ export type Race = {
   ai: AiState[];
   /** Straw thrown up by bumper hits (hay bales), drawn by render.ts. */
   straw: Straw[];
+  /** Impacts the player's car took since Game.tsx last emptied this list (drives the crash sound). */
+  crashes: number[];
 };
 
 export type Straw = { x: number; y: number; vx: number; vy: number; rot: number; life: number };
@@ -78,7 +80,7 @@ export function createRace(themeId: ThemeId, player: PlayerCar, seed?: number): 
   });
   const rng = mulberry32(seed ?? ((Math.random() * 2 ** 32) >>> 0));
   const ai: AiState[] = cars.map(() => ({ mistake: null, until: 0, cooldown: 0, sign: 1, count: 0 }));
-  return { track, theme, scene: sceneFor(theme, track), cars, phase: "countdown", time: -COUNTDOWN, skids: [], overheadOpacity: 1, rng, ai, straw: [] };
+  return { track, theme, scene: sceneFor(theme, track), cars, phase: "countdown", time: -COUNTDOWN, skids: [], overheadOpacity: 1, rng, ai, straw: [], crashes: [] };
 }
 
 const MISTAKE_KINDS: MistakeKind[] = ["lateBrake", "liftOff", "wideLine", "twitch"];
@@ -161,7 +163,12 @@ export function aiInput(race: Race, car: Car, dt: number, allowMistakes = true):
   };
 }
 
-function collide(a: Car, b: Car) {
+/** Records an impact on the player's car, as a 0..1 strength (speed against 500 u/s). */
+function noteCrash(race: Race, car: Car, speed: number) {
+  if (car.isPlayer && race.crashes.length < 16) race.crashes.push(clamp(speed / 500, 0, 1));
+}
+
+function collide(race: Race, a: Car, b: Car) {
   const d = sub(b.pos, a.pos);
   const dist = len(d);
   const min = CAR_RADIUS * 2;
@@ -175,6 +182,7 @@ function collide(a: Car, b: Car) {
     const imp = scale(nrm, rel * 0.85);
     a.vel = sub(a.vel, imp);
     b.vel = add(b.vel, imp);
+    if (rel > 80) noteCrash(race, a.isPlayer ? a : b, rel);
   }
 }
 
@@ -197,6 +205,7 @@ function hitBarrier(race: Race, car: Car, index: number, dist: number) {
   if (vn > 80 && car.hitCooldown <= 0) {
     car.hits++;
     car.hitCooldown = 0.5;
+    noteCrash(race, car, vn);
   }
 }
 
@@ -224,6 +233,7 @@ function hitBumpers(race: Race, car: Car) {
     if (-vn > 80 && car.hitCooldown <= 0) {
       car.hits++;
       car.hitCooldown = 0.5;
+      noteCrash(race, car, -vn);
       for (let k = 0; k < 14; k++) {
         const a = Math.atan2(nrm.y, nrm.x) + (race.rng() - 0.5) * 2.4, v = 60 + race.rng() * 160;
         race.straw.push({ x: b.x + nrm.x * b.r, y: b.y + nrm.y * b.r, vx: Math.cos(a) * v, vy: Math.sin(a) * v, rot: race.rng() * Math.PI, life: 1 });
@@ -290,7 +300,7 @@ export function stepRace(race: Race, playerInput: Input, dt: number, playerIsAi 
     }
   }
   for (let i = 0; i < race.cars.length; i++)
-    for (let j = i + 1; j < race.cars.length; j++) collide(race.cars[i], race.cars[j]);
+    for (let j = i + 1; j < race.cars.length; j++) collide(race, race.cars[i], race.cars[j]);
   for (const car of race.cars) updateProgress(race, car, dt);
 
   for (const s of race.skids) s.life -= dt * 0.25;

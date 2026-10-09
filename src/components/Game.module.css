@@ -78,3 +78,25 @@
 .ok { color: #06d6a0; }
 .ko { color: #ff8a8a; }
 .credit { font-size: 14px; font-style: italic; opacity: 0.85; margin-top: 2px; }
+.headRight { display: flex; align-items: center; gap: 10px; position: relative; }
+.soundBtn { width: 42px; height: 42px; border-radius: 50%; border: 1px solid #ffd16688; background: #0006; font-size: 20px; cursor: pointer; color: #fff; }
+.soundBtn:hover { background: #fff2; }
+.soundFloat { position: absolute; z-index: 20; left: 12px; top: 148px; width: 36px; height: 36px; font-size: 17px; }
+.accountWrap { position: relative; }
+.account { display: inline-flex; align-items: center; gap: 8px; font: 600 13px var(--font-geist-sans), system-ui, sans-serif; color: #fff; background: #0006; border: 1px solid #fff4; border-radius: 999px; padding: 8px 14px; }
+button.account { cursor: pointer; }
+button.account:hover { background: #fff2; }
+.linkBtn { background: none; border: 0; color: #ffd166; text-decoration: underline; cursor: pointer; font: inherit; padding: 0; }
+.accountCard {
+  position: absolute; right: 0; top: calc(100% + 8px); z-index: 30; width: 300px; text-align: left; display: flex; flex-direction: column; gap: 10px;
+  background: #0b1a12f2; border: 1px solid #fff3; border-radius: 14px; padding: 14px; font-size: 13px; box-shadow: 0 10px 30px #0008;
+}
+.accountCard label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; opacity: 0.9; }
+.accountCard input { padding: 8px 10px; border-radius: 8px; border: 1px solid #fff4; background: #0008; color: #fff; font-size: 14px; }
+.ghostSmall { background: transparent; border: 1px solid #fff6; }
+.notice {
+  position: absolute; z-index: 40; top: 14px; left: 50%; transform: translateX(-50%); max-width: min(560px, 92vw); display: flex; gap: 12px; align-items: center;
+  padding: 10px 14px; border-radius: 12px; background: #1b5e3aee; color: #fff; font: 600 14px var(--font-geist-sans), system-ui, sans-serif;
+}
+.noticeErr { background: #8a1c2bee; }
+.notice button { background: none; border: 0; color: #fff; cursor: pointer; font-size: 16px; }

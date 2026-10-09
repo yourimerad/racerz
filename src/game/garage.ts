@@ -1,5 +1,7 @@
 // Player progression: cars, skins, race payouts and upgrade tiers ("paliers").
-// The player profile is persisted to localStorage (debug mode's profile is not).
+// The player profile is persisted to localStorage (debug mode's profile is not). When the player
+// is signed in (see account.ts) the account's profile replaces it, and localStorage is left
+// untouched as the guest save.
 
 export type ModelId = "gt" | "mx5" | "p911" | "aventador" | "f8";
 export type SkinId = "factory" | "pearl" | "electric" | "mantis" | "arancio" | "stripes" | "carbon" | "gold";
@@ -228,7 +230,13 @@ function writeStoredProfile(p: Profile) {
 }
 
 let cachedPlayerProfile: Profile | null = null;
+/** The signed-in account's profile; while set, it is the player profile and localStorage is not written. */
+let accountProfile: Profile | null = null;
 const playerProfileListeners = new Set<() => void>();
+
+function notifyProfile() {
+  for (const l of playerProfileListeners) l();
+}
 
 /**
  * The player profile as an external store backed by localStorage, so
@@ -237,6 +245,12 @@ const playerProfileListeners = new Set<() => void>();
  * `getServerPlayerProfile`, never the real storage).
  */
 export function getPlayerProfile(): Profile {
+  if (accountProfile) return accountProfile;
+  return getLocalProfile();
+}
+
+/** The guest save in localStorage, whether or not an account is signed in. */
+export function getLocalProfile(): Profile {
   if (cachedPlayerProfile === null) cachedPlayerProfile = readStoredProfile();
   return cachedPlayerProfile;
 }
@@ -257,14 +271,29 @@ if (typeof window !== "undefined") {
   window.addEventListener("storage", (e) => {
     if (e.key === STORAGE_KEY) {
       cachedPlayerProfile = null;
-      for (const l of playerProfileListeners) l();
+      notifyProfile();
     }
   });
 }
 
+/** Switches the player profile to the account's (or back to the guest save with null). */
+export function setAccountProfile(p: Profile | null) {
+  accountProfile = p;
+  notifyProfile();
+}
+
 /** Persists the player profile and notifies subscribers. Never used for the debug profile. */
 export function savePlayerProfile(p: Profile) {
-  cachedPlayerProfile = p;
-  writeStoredProfile(p);
-  for (const l of playerProfileListeners) l();
+  if (accountProfile) {
+    accountProfile = p; // the account owns the money: its writes go through the server (account.ts)
+  } else {
+    cachedPlayerProfile = p;
+    writeStoredProfile(p);
+  }
+  notifyProfile();
+}
+
+/** Whether the guest save holds any progress worth offering to move to an account. */
+export function hasLocalProgress(): boolean {
+  return JSON.stringify(getLocalProfile()) !== JSON.stringify(NEW_PROFILE);
 }

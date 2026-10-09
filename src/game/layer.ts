@@ -32,25 +32,36 @@ function tracePath(ctx: CanvasRenderingContext2D, track: Track) {
 function drawTrack(ctx: CanvasRenderingContext2D, track: Track, c: Theme["colors"]) {
   ctx.lineJoin = ctx.lineCap = "round";
   tracePath(ctx, track);
+  // Optional dark outline around the kerbs (or straight around the road when kerbWidth is 0).
+  if (c.edge) {
+    ctx.lineWidth = track.width + c.kerbWidth + c.edge.width * 2;
+    ctx.strokeStyle = c.edge.color;
+    ctx.stroke();
+  }
   ctx.lineWidth = track.width + c.kerbWidth;
   ctx.strokeStyle = c.kerbA;
   ctx.stroke();
-  ctx.setLineDash([30, 30]);
-  ctx.strokeStyle = c.kerbB;
-  ctx.stroke();
-  ctx.setLineDash([]);
+  // Same two kerb colors = one solid kerb, no dashes.
+  if (c.kerbB !== c.kerbA) {
+    ctx.setLineDash([30, 30]);
+    ctx.strokeStyle = c.kerbB;
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
   ctx.lineWidth = track.width;
   ctx.strokeStyle = c.asphalt;
   ctx.stroke();
 }
 
 function drawMarkings(ctx: CanvasRenderingContext2D, track: Track, c: Theme["colors"]) {
-  tracePath(ctx, track);
-  ctx.lineWidth = 4;
-  ctx.setLineDash([40, 40]);
-  ctx.strokeStyle = c.dash;
-  ctx.stroke();
-  ctx.setLineDash([]);
+  if (c.dash) {
+    tracePath(ctx, track);
+    ctx.lineWidth = 4;
+    ctx.setLineDash([40, 40]);
+    ctx.strokeStyle = c.dash;
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
 
   // Checkered start/finish line at sample 0.
   const p = track.path[0], t = track.tangents[0];
