@@ -1,5 +1,5 @@
 import { locate, type Track } from "./track";
-import { vec } from "./vec";
+import { type Vec, vec } from "./vec";
 
 // Scenery helpers shared by the per-mode files in ./modes. Everything is generated from a
 // fixed seed, so a mode always looks the same; props stay beyond the barriers, lava stops at
@@ -9,6 +9,41 @@ type Ctx = CanvasRenderingContext2D;
 export type Rng = () => number;
 export type Circle = { x: number; y: number; r: number };
 
+/** A solid moving body of a hazard: a rotated ellipse (half-axes rx along `angle`, ry across) cars bounce off. */
+export type HazardBody = { id: number; x: number; y: number; vx: number; vy: number; angle: number; rx: number; ry: number };
+
+/** A short sound/effect request raised during the simulation; Game.tsx plays it. */
+export type Cue = { kind: "growl" | "thud"; power: number };
+
+/** What a hazard may look at (Race satisfies this) and write to (`cues`). */
+export type HazardWorld = {
+  time: number;
+  phase: "countdown" | "racing" | "finished";
+  track: Track;
+  cars: ReadonlyArray<{ id: number; pos: Vec; vel: Vec; lastIndex: number; finishTime: number | null }>;
+  cues: Cue[];
+};
+
+/**
+ * A mode's moving obstacle (e.g. the polar bear). Its state lives in the Race (a fresh one per
+ * race, built by `Scene.hazard`), never in the memoized Scene.
+ */
+export type Hazard = {
+  /**
+   * How bots react: slow to `slow` × their limit when a body is within `range` px (+ `lookahead` s of their own speed) ahead,
+   * and steer to pass it with `margin` px to spare, on the side that is free where the body will be when they get there.
+   */
+  avoid: { range: number; slow: number; margin: number; lookahead: number };
+  /** Impact on a car: share of the relative speed it keeps, bounciness, and the closing speed below which it just slides off. */
+  impact: { speedKeep: number; restitution: number; minImpact: number };
+  bodies(): readonly HazardBody[];
+  step(world: HazardWorld, dt: number): void;
+  /** A car hit `body` hard enough to count as an impact at `at`; true when it counts as a contact (clean-race rule). */
+  touch(body: HazardBody, carId: number, at: Vec, power: number): boolean;
+  /** World space, drawn over the cars. */
+  draw(ctx: Ctx, time: number): void;
+};
+
 export type Scene = {
   /** Lava pools (volcano only): driving into one is the "lava" surface. */
   lava: Circle[];
@@ -16,6 +51,8 @@ export type Scene = {
   vents: Circle[];
   /** Solid round obstacles inside the barriers (hay bales…): cars bounce off them hard. */
   bumpers?: Circle[];
+  /** Builds this mode's moving obstacle for one race (`rng` is seeded from the race's own PRNG). */
+  hazard?(track: Track, rng: Rng): Hazard;
   /** Ground painted under the track. */
   under(ctx: Ctx): void;
   /** Texture painted over the asphalt (dust, ice streaks…). */
