@@ -155,6 +155,7 @@ export function render(ctx: CanvasRenderingContext2D, race: Race, w: number, h: 
     ctx.fillRect(-4, -1, 8, 2);
     ctx.restore();
   }
+  race.hazard?.draw(ctx, race.time);
   theme.fx.air?.(ctx, scene, view);
 
   // Covered-section ceiling: fades out over the player (race.overheadOpacity) so they can

@@ -178,6 +178,7 @@ export default function Game() {
 
       const me = race.cars[0];
       for (const power of race.crashes.splice(0)) sound.crash(power);
+      for (const cue of race.cues.splice(0)) sound.cue(cue.kind, cue.power);
       if (race.phase === "finished") sound.stopEngine();
       else {
         sound.drive({

@@ -1,16 +1,78 @@
 import { drift, dot, type Fx } from "../fx";
 import {
-  disc, ellipse, mulberry32, onTrackPoint, range, type Rng, scatter, scatterNear, shadow, softBlob, TAU, type Circle, type Scene,
+  disc, ellipse, mulberry32, onTrackPoint, range, type Rng, scatter, scatterNear, shadow, softBlob, TAU, type Circle, type Hazard, type HazardBody,
+  type HazardWorld, type Scene,
 } from "../scenery";
-import type { Track, TrackLayout } from "../track";
-import { clamp } from "../vec";
+import { isCovered, type Track, type TrackLayout } from "../track";
+import { angleDiff, clamp, type Vec } from "../vec";
 
 // North pole: a mountain pass. The circuit climbs into a translucent ice massif and dives
 // through a tunnel bored straight through it (~15% of the lap), then loops back across the
 // banquise. Igloos, a penguin colony, a polar bear and drifting snow fill the open ground.
+// From time to time a polar bear also walks across the road: a moving obstacle (see BEAR below
+// and `createBears`) that cars bounce off. The shared collision / bot-avoidance / drawing hooks
+// live in race.ts and render.ts and are generic: only this mode defines a hazard.
 
 type Ctx = CanvasRenderingContext2D;
 type Pt = { x: number; y: number };
+
+// ---------- polar bear: tunables ----------
+
+const BEAR = {
+  /** Bears alive at once. */
+  max: 1,
+  /** Walking speed (px/s). The road is 190 px wide, so crossing it takes about 5 s. */
+  speed: 50,
+  /** Sprite scale: the drawing is ~76 px nose to tail at 1, against a 40 px car. */
+  scale: 1.25,
+  /** Hitbox (an ellipse), before scale: length along the bear's heading × width across it. */
+  hitbox: { length: 55, width: 30 },
+  /** Seconds after the green light for the first bear, then between two appearances. */
+  firstAppear: [10, 20] as const,
+  interval: [20, 40] as const,
+  /** Never sooner than this after the start (s). */
+  noEarlierThan: 8,
+  /** Blinking alert before it appears (s). */
+  warning: 1.5,
+  /** No car closer than this (px) to the spot when the bear appears. */
+  minCarDistance: 150,
+  /** The spot is at least this far ahead of where the player will be at that moment: max(leadMin px, leadSeconds of its speed). */
+  leadMin: 650,
+  leadSeconds: 1.6,
+  /** Only on stretches turning less than `straightMaxTurn` rad over `straightWindow` samples either side (~11 px each). */
+  straightWindow: 14,
+  straightMaxTurn: 0.2,
+  /** Kept away from the tunnel by this many samples. */
+  tunnelMargin: 40,
+  /** When no spot / free moment is found: retry after (s), and give up waiting for the cars to clear after (s). */
+  retryDelay: 0.5,
+  maxSpawnDelay: 3,
+  /**
+   * Impact on a car: it keeps `speedKeep` of its speed relative to the bear (0.4 = loses 60 %), bounces back
+   * with `restitution`; a closing speed below `minImpact` (px/s) is not an impact, the car is just slid off.
+   */
+  speedKeep: 0.4,
+  restitution: 0.3,
+  minImpact: 40,
+  /** One contact counted per bear and per car, and at least this long (s) between two counted contacts of a car. */
+  contactGap: 1,
+  /**
+   * Bots: slow to `aiSlow` × their limit when a bear is within `aiRange` px ahead (plus `aiLookahead` s of their own
+   * speed, since 120 px is under a quarter of a second at full speed), and steer round it with `aiMargin` px to spare,
+   * on the side that is free where the bear will be when they reach it.
+   */
+  aiRange: 120,
+  aiLookahead: 1.0,
+  aiSlow: 0.5,
+  aiMargin: 26,
+  /** Fade in/out at both ends of the crossing (s) and body sway (degrees). */
+  fade: 0.4,
+  swayDeg: 2,
+  /** Snow puff on impact: particles and lifetime (s). */
+  puffs: 12,
+  puffLife: 0.9,
+  maxPuffs: 40,
+};
 
 export const layout: TrackLayout = {
   points: [
@@ -127,6 +189,238 @@ function polarBear(ctx: Ctx, c: Circle, rot: number) {
   disc(ctx, 32, -4, 1.2, "#1e1e1e");
   disc(ctx, 32, 4, 1.2, "#1e1e1e");
   ctx.restore();
+}
+
+// ---------- roaming polar bear (the moving obstacle) ----------
+
+/**
+ * The bear, seen from above, facing +x. `t` drives the leg swing, `alpha` the fade in/out. Blue-grey
+ * outlines and a drop shadow keep it readable on the white snow.
+ */
+function drawPolarBear(ctx: Ctx, x: number, y: number, angle: number, t: number, s = 1, alpha = 1) {
+  const swing = Math.sin(t * 8) * 5;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.translate(x, y);
+  ctx.rotate(angle + Math.sin(t * 4) * ((BEAR.swayDeg * Math.PI) / 180));
+  ctx.scale(s, s);
+  const ell = (cx: number, cy: number, rx: number, ry: number, fill: string, stroke?: string) => {
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, rx, ry, 0, 0, TAU);
+    ctx.fillStyle = fill;
+    ctx.fill();
+    if (stroke) {
+      ctx.strokeStyle = stroke;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+  };
+  ell(4, 6, 30, 17, "rgba(11,29,51,0.25)"); // drop shadow
+  // Four legs, swinging in alternation.
+  for (const [px, py, d] of [[14, 12, 1], [-14, 12, -1], [14, -12, -1], [-14, -12, 1]]) ell(px + swing * d, py, 8, 5, "#e8eff5", "#9fb2c4");
+  ell(0, 0, 27, 16, "#f2f6fa", "#9fb2c4"); // body
+  ell(-2, 6, 22, 8, "#d9e3ec"); // belly shade
+  ell(-27, 0, 4.5, 4, "#f2f6fa", "#9fb2c4"); // tail
+  ell(27, 0, 12, 10, "#f2f6fa", "#9fb2c4"); // head
+  ell(25, 8, 3.5, 3.5, "#f2f6fa", "#9fb2c4"); // ears
+  ell(25, -8, 3.5, 3.5, "#f2f6fa", "#9fb2c4");
+  ell(37, 0, 6, 4.5, "#e8eff5", "#9fb2c4"); // muzzle
+  ell(42, 0, 2.2, 2, "#1b2430"); // nose
+  ell(31, 4, 1.4, 1.4, "#1b2430"); // eyes
+  ell(31, -4, 1.4, 1.4, "#1b2430");
+  ctx.restore();
+}
+
+/** Orange warning triangle with an exclamation mark, dark-rimmed so it stands out on snow. */
+function warningSign(ctx: Ctx, x: number, y: number, size: number) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.lineJoin = "round";
+  const tri = () => {
+    ctx.beginPath();
+    ctx.moveTo(0, -size * 0.62);
+    ctx.lineTo(size * 0.58, size * 0.42);
+    ctx.lineTo(-size * 0.58, size * 0.42);
+    ctx.closePath();
+  };
+  tri();
+  ctx.lineWidth = size * 0.3;
+  ctx.strokeStyle = "rgba(60,32,0,0.85)";
+  ctx.stroke();
+  tri();
+  ctx.lineWidth = size * 0.14;
+  ctx.strokeStyle = "#ff9f1c";
+  ctx.fillStyle = "#ff9f1c";
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = "#2b1a00";
+  ctx.beginPath();
+  ctx.roundRect(-size * 0.06, -size * 0.28, size * 0.12, size * 0.4, size * 0.05);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(0, size * 0.25, size * 0.075, 0, TAU);
+  ctx.fill();
+  ctx.restore();
+}
+
+type Bear = HazardBody & { age: number; life: number; hit: Set<number> };
+type Puff = { x: number; y: number; vx: number; vy: number; r: number; life: number };
+type Plan = { idx: number; side: 1 | -1; x: number; y: number; dir: Vec; signX: number; signY: number; warnAt: number; appearAt: number };
+
+/** Sample index `dist` px further along the loop. */
+function advance(track: Track, from: number, dist: number): number {
+  const n = track.path.length;
+  let i = from, d = 0;
+  while (d < dist) {
+    const a = track.path[i], b = track.path[(i + 1) % n];
+    d += Math.hypot(b.x - a.x, b.y - a.y);
+    i = (i + 1) % n;
+  }
+  return i;
+}
+
+/** Samples where the road is straight or nearly (and clear of the tunnel): where a bear may cross. */
+function straightSamples(track: Track): boolean[] {
+  const n = track.path.length, W = BEAR.straightWindow;
+  const heading = track.tangents.map((t) => Math.atan2(t.y, t.x));
+  return track.path.map((_, i) => {
+    for (let m = -BEAR.tunnelMargin; m <= BEAR.tunnelMargin; m += 10) if (isCovered(track, i + m)) return false;
+    let turn = 0;
+    for (let k = -W; k < W; k++) turn += Math.abs(angleDiff(heading[(i + k + n) % n], heading[(i + k + 1 + n) % n]));
+    return turn <= BEAR.straightMaxTurn;
+  });
+}
+
+/**
+ * One race's bear. It is announced by a blinking sign, appears at the edge of the road ahead of the
+ * player, walks straight across at a constant speed and is dropped as soon as it has left the road
+ * on the other side. State lives here (one instance per race), driven by the simulation clock.
+ */
+function createBears(track: Track, rng: Rng): Hazard {
+  const straight = straightSamples(track);
+  const n = track.path.length;
+  const hx = (BEAR.hitbox.length / 2) * BEAR.scale, hy = (BEAR.hitbox.width / 2) * BEAR.scale;
+  /** Distance from the centre line where a bear starts/ends: its whole body just past the road edge. */
+  const edge = track.width / 2 + hx + 4;
+  const life = (2 * edge) / BEAR.speed;
+  const pick = (r: readonly [number, number]) => range(rng, r[0], r[1]);
+
+  const bears: Bear[] = [];
+  const puffs: Puff[] = [];
+  let plan: Plan | null = null;
+  let nextAppear = Math.max(BEAR.noEarlierThan, pick(BEAR.firstAppear));
+  let retryAt = 0;
+  let nextId = 1;
+  const lastCounted = new Map<number, number>();
+  let now = 0;
+
+  /** A straight spot ahead of the player, far enough to be seen and reacted to. */
+  function pickSpot(world: HazardWorld): Plan | null {
+    const me = world.cars[0];
+    const v = Math.hypot(me.vel.x, me.vel.y);
+    const from = advance(track, me.lastIndex, v * BEAR.warning + Math.max(BEAR.leadMin, v * BEAR.leadSeconds));
+    for (let k = 0; k < 70; k += 2) {
+      const idx = (from + k) % n;
+      if (!straight[idx]) continue;
+      const p = track.path[idx], t = track.tangents[idx];
+      const side: 1 | -1 = rng() < 0.5 ? -1 : 1;
+      const rn = { x: -t.y, y: t.x };
+      return {
+        idx, side, x: p.x + rn.x * side * edge, y: p.y + rn.y * side * edge, dir: { x: -rn.x * side, y: -rn.y * side },
+        signX: p.x + rn.x * side * (track.width / 2 + 26), signY: p.y + rn.y * side * (track.width / 2 + 26),
+        warnAt: world.time, appearAt: Math.max(world.time + BEAR.warning, nextAppear),
+      };
+    }
+    return null;
+  }
+
+  const clear = (world: HazardWorld, x: number, y: number) =>
+    world.cars.every((c) => Math.hypot(c.pos.x - x, c.pos.y - y) >= BEAR.minCarDistance);
+
+  return {
+    avoid: { range: BEAR.aiRange, slow: BEAR.aiSlow, margin: BEAR.aiMargin, lookahead: BEAR.aiLookahead },
+    impact: { speedKeep: BEAR.speedKeep, restitution: BEAR.restitution, minImpact: BEAR.minImpact },
+    bodies: () => bears,
+
+    step(world, dt) {
+      now = world.time;
+      // Walk, and drop any bear that has left the road (no leak: nothing is kept past that).
+      for (let i = bears.length - 1; i >= 0; i--) {
+        const b = bears[i];
+        b.age += dt;
+        b.x += b.vx * dt;
+        b.y += b.vy * dt;
+        if (b.age >= life) bears.splice(i, 1);
+      }
+      for (let i = puffs.length - 1; i >= 0; i--) {
+        const p = puffs[i];
+        p.life -= dt / BEAR.puffLife;
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        p.vx *= 1 - 2.5 * dt;
+        p.vy *= 1 - 2.5 * dt;
+        if (p.life <= 0) puffs.splice(i, 1);
+      }
+
+      const racing = world.phase === "racing" && world.cars[0].finishTime === null;
+      if (!racing) {
+        plan = null;
+        return;
+      }
+      if (!plan) {
+        if (bears.length < BEAR.max && now >= nextAppear - BEAR.warning && now >= retryAt) {
+          plan = pickSpot(world);
+          if (!plan) retryAt = now + BEAR.retryDelay;
+        }
+        return;
+      }
+      if (now < plan.appearAt) return;
+      if (clear(world, plan.x, plan.y)) {
+        bears.push({
+          id: nextId++, x: plan.x, y: plan.y, vx: plan.dir.x * BEAR.speed, vy: plan.dir.y * BEAR.speed, angle: Math.atan2(plan.dir.y, plan.dir.x),
+          rx: hx, ry: hy, age: 0, life, hit: new Set(),
+        });
+        world.cues.push({ kind: "growl", power: 1 });
+        plan = null;
+        nextAppear = now + pick(BEAR.interval);
+      } else if (now - plan.appearAt > BEAR.maxSpawnDelay) {
+        plan = null; // the spot stayed busy: pick another one shortly
+        retryAt = now + BEAR.retryDelay;
+      }
+    },
+
+    touch(body, carId, at, power) {
+      const r = rng;
+      for (let k = 0; k < BEAR.puffs && puffs.length < BEAR.maxPuffs; k++) {
+        const a = r() * TAU, v = range(r, 40, 60 + power * 110);
+        puffs.push({ x: at.x, y: at.y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, r: range(r, 4, 9), life: 1 });
+      }
+      const bear = bears.find((b) => b.id === body.id);
+      if (!bear || bear.hit.has(carId)) return false;
+      bear.hit.add(carId);
+      const last = lastCounted.get(carId);
+      if (last !== undefined && now - last < BEAR.contactGap) return false;
+      lastCounted.set(carId, now);
+      return true;
+    },
+
+    draw(ctx, time) {
+      if (plan && Math.floor((time - plan.warnAt) * 5) % 2 === 0) warningSign(ctx, plan.signX, plan.signY, 46);
+      for (const b of bears) {
+        const alpha = Math.min(1, b.age / BEAR.fade, (b.life - b.age) / BEAR.fade);
+        drawPolarBear(ctx, b.x, b.y, b.angle, b.age, BEAR.scale, Math.max(0, alpha));
+      }
+      for (const p of puffs) {
+        ctx.fillStyle = `rgba(255,255,255,${(0.85 * p.life).toFixed(2)})`;
+        ctx.strokeStyle = `rgba(159,178,196,${(0.5 * p.life).toFixed(2)})`;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.r * (1.6 - p.life * 0.6), 0, TAU);
+        ctx.fill();
+        ctx.stroke();
+      }
+    },
+  };
 }
 
 // ---------- ice-mountain tunnel ----------
@@ -282,6 +576,7 @@ export function scene(track: Track): Scene {
   return {
     lava: [],
     vents: [],
+    hazard: createBears,
     under(ctx) {
       for (const d of drifts)
         softBlob(ctx, d.x, d.y, d.rx, d.ry, d.rot, d.light ? "255,255,255" : "170,200,225", d.light ? 0.85 : 0.45);

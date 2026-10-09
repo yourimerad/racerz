@@ -1,6 +1,6 @@
 import { type Car, type Input, type Surface, NO_INPUT, CAR_RADIUS, PHYS, stepCar, slipOf, speedOf } from "./car";
 import { type ModelId, type SkinId, MODELS, carStats, skinOf } from "./garage";
-import { type Rng, type Scene, mulberry32 } from "./scenery";
+import { type Cue, type Hazard, type Rng, type Scene, mulberry32 } from "./scenery";
 import { type Theme, type ThemeId, THEMES, sceneFor } from "./themes";
 import { isCovered, locate, trackFor, type Track } from "./track";
 import { type Vec, vec, add, sub, scale, len, dot, angleDiff, clamp, fromAngle } from "./vec";
@@ -13,7 +13,11 @@ export type Skid = { a: Vec; b: Vec; life: number };
 
 /** Per-bot random-mistake state (see `aiInput`), indexed by `car.id`. */
 export type MistakeKind = "lateBrake" | "liftOff" | "wideLine" | "twitch";
-export type AiState = { mistake: MistakeKind | null; until: number; cooldown: number; sign: number; count: number };
+export type AiState = {
+  mistake: MistakeKind | null; until: number; cooldown: number; sign: number; count: number;
+  /** The hazard body this bot is steering round, and which way it chose to pass it (-1 left / +1 right, 0 = none yet). */
+  hazardId: number; hazardPass: -1 | 0 | 1;
+};
 
 export type Race = {
   track: Track;
@@ -34,6 +38,10 @@ export type Race = {
   straw: Straw[];
   /** Impacts the player's car took since Game.tsx last emptied this list (drives the crash sound). */
   crashes: number[];
+  /** The mode's moving obstacle for this race (null in modes without one). */
+  hazard: Hazard | null;
+  /** Sound requests raised by the hazard, emptied by Game.tsx. */
+  cues: Cue[];
 };
 
 export type Straw = { x: number; y: number; vx: number; vy: number; rot: number; life: number };
@@ -79,8 +87,11 @@ export function createRace(themeId: ThemeId, player: PlayerCar, seed?: number): 
     };
   });
   const rng = mulberry32(seed ?? ((Math.random() * 2 ** 32) >>> 0));
-  const ai: AiState[] = cars.map(() => ({ mistake: null, until: 0, cooldown: 0, sign: 1, count: 0 }));
-  return { track, theme, scene: sceneFor(theme, track), cars, phase: "countdown", time: -COUNTDOWN, skids: [], overheadOpacity: 1, rng, ai, straw: [], crashes: [] };
+  const ai: AiState[] = cars.map(() => ({ mistake: null, until: 0, cooldown: 0, sign: 1, count: 0, hazardId: 0, hazardPass: 0 }));
+  const scene = sceneFor(theme, track);
+  // Only modes with a moving obstacle consume the PRNG here, so the other modes replay as before.
+  const hazard = scene.hazard ? scene.hazard(track, mulberry32((rng() * 2 ** 32) >>> 0)) : null;
+  return { track, theme, scene, cars, phase: "countdown", time: -COUNTDOWN, skids: [], overheadOpacity: 1, rng, ai, straw: [], crashes: [], hazard, cues: [] };
 }
 
 const MISTAKE_KINDS: MistakeKind[] = ["lateBrake", "liftOff", "wideLine", "twitch"];
@@ -106,6 +117,58 @@ function rollMistake(race: Race, car: Car, state: AiState, dt: number) {
   state.until = race.time + lo + race.rng() * (hi - lo);
   state.sign = race.rng() < 0.5 ? -1 : 1;
   state.count++;
+}
+
+/**
+ * What a bot does about the hazard bodies ahead of it: a slowdown factor, and (when a body will be
+ * in its way) the road offset to steer for. The body keeps walking, so the way round is judged where
+ * it will be when the bot gets there, and once chosen (left or right of it) it is kept.
+ */
+function hazardAvoidance(race: Race, car: Car): { slow: number; offset: number | null } {
+  const hz = race.hazard;
+  if (!hz) return { slow: 1, offset: null };
+  const { track } = race;
+  const state = race.ai[car.id];
+  const fwd = fromAngle(car.angle);
+  const speed = Math.max(0, speedOf(car));
+  // Faster cars look further ahead: 120 px is under a quarter of a second at full speed.
+  const range = hz.avoid.range + speed * hz.avoid.lookahead;
+  const t = track.tangents[car.lastIndex];
+  const here = dot(sub(car.pos, track.path[car.lastIndex]), vec(-t.y, t.x)); // the car's current road offset
+  const room = track.width / 2 - 28;
+  let slow = 1, offset: number | null = null, seen = false;
+  for (const b of hz.bodies()) {
+    const dx = b.x - car.pos.x, dy = b.y - car.pos.y;
+    const ahead = dx * fwd.x + dy * fwd.y;
+    const side = -dx * fwd.y + dy * fwd.x; // + = body on the car's right
+    const reach = Math.max(b.rx, b.ry);
+    if (ahead < -reach * 0.5 || ahead > range + reach) continue;
+    // Half-extent of the body across the car's path (its ellipse projected on the lateral axis).
+    const hc = Math.cos(b.angle) * -fwd.y + Math.sin(b.angle) * fwd.x;
+    const half = Math.hypot(b.rx * hc, b.ry * Math.sqrt(Math.max(0, 1 - hc * hc)));
+    const clearance = half + CAR_RADIUS + hz.avoid.margin;
+    // Where the body will be (across the car's path) when the car, slowed, reaches it.
+    const eta = clamp(ahead / Math.max(speed * hz.avoid.slow, 100), 0, 3);
+    const bodySide = side + (-b.vx * fwd.y + b.vy * fwd.x) * eta;
+    if (Math.abs(side) > clearance && Math.abs(bodySide) > clearance) continue;
+    seen = true;
+    slow = Math.min(slow, hz.avoid.slow);
+    // Passing on its left needs the car at most `bodySide - clearance` sideways; on its right, at least `bodySide + clearance`.
+    const left = Math.min(0, bodySide - clearance), right = Math.max(0, bodySide + clearance);
+    const fits = (shift: number) => Math.abs(here + shift) <= room;
+    let pass: -1 | 1;
+    if (state.hazardId === b.id && state.hazardPass !== 0 && fits(state.hazardPass < 0 ? left : right)) pass = state.hazardPass;
+    else if (fits(left) && fits(right)) pass = -left < right ? -1 : 1;
+    else pass = fits(left) ? -1 : fits(right) ? 1 : bodySide >= 0 ? -1 : 1;
+    state.hazardId = b.id;
+    state.hazardPass = pass;
+    const shift = pass < 0 ? left : right;
+    // No room to get round it in time: take the speed off further and let it walk on.
+    if (!fits(shift)) slow = Math.min(slow, hz.avoid.slow * 0.6);
+    offset = clamp(here + shift, -room, room);
+  }
+  if (!seen && state.hazardPass !== 0) state.hazardPass = 0;
+  return { slow, offset };
 }
 
 /**
@@ -137,9 +200,12 @@ export function aiInput(race: Race, car: Car, dt: number, allowMistakes = true):
   const look = Math.round((10 + Math.max(0, speed) / 40) * (1 + (1 - grip) * 0.8));
   const baseLane = ((car.id % 3) - 1) * track.width * 0.15 * grip;
   // "wideLine": briefly aim further out, as if missing the apex.
-  const lane = mistake === "wideLine" ? baseLane + state!.sign * track.width * 0.22 : baseLane;
+  let lane = mistake === "wideLine" ? baseLane + state!.sign * track.width * 0.22 : baseLane;
   const i = (car.lastIndex + look) % n;
   const t = track.tangents[i];
+  // A moving obstacle just ahead: slow down and swerve away from it (never stop).
+  const { slow: hazardSlow, offset: hazardLane } = hazardAvoidance(race, car);
+  if (hazardLane !== null) lane = hazardLane;
   const target = add(track.path[i], scale(vec(-t.y, t.x), lane));
   const to = sub(target, car.pos);
   const bearing = Math.atan2(to.y, to.x);
@@ -151,7 +217,7 @@ export function aiInput(race: Race, car: Car, dt: number, allowMistakes = true):
   const far = track.tangents[(car.lastIndex + look * 2) % n];
   const bend = Math.abs(angleDiff(Math.atan2(t.y, t.x), Math.atan2(far.y, far.x)));
   const cornerK = 0.45 + (1 - grip) * 0.55;
-  const limit = PHYS.maxSpeed * car.skill * Math.max(0.3, 1 - clamp(bend, 0, 1.2) * cornerK) * (car.surface === "track" ? 1 : 0.6);
+  const limit = PHYS.maxSpeed * car.skill * Math.max(0.3, 1 - clamp(bend, 0, 1.2) * cornerK) * (car.surface === "track" ? 1 : 0.6) * hazardSlow;
   const tooFast = speed > limit;
   return {
     // "liftOff": brief lift, no risk. "lateBrake": brake late and run wide instead.
@@ -242,11 +308,59 @@ function hitBumpers(race: Race, car: Car) {
   }
 }
 
+/**
+ * A mode's moving obstacle (polar bear…): solid, never stops. Cars are pushed out of its
+ * elliptical hitbox every step (so none can sit inside it or cross it); a real impact bounces
+ * the car back, takes most of its speed and may count as a contact for the clean-race rule.
+ */
+function hitHazard(race: Race, car: Car) {
+  const hz = race.hazard;
+  if (!hz) return;
+  for (const b of hz.bodies()) {
+    const c = Math.cos(b.angle), s = Math.sin(b.angle);
+    const dx = car.pos.x - b.x, dy = car.pos.y - b.y;
+    // Car centre in the body's frame; the ellipse is grown by the car's own radius.
+    const lx = dx * c + dy * s, ly = -dx * s + dy * c;
+    const A = b.rx + CAR_RADIUS * 0.8, B = b.ry + CAR_RADIUS * 0.8;
+    const q = Math.sqrt((lx / A) ** 2 + (ly / B) ** 2);
+    if (q >= 1) continue;
+    // Outward normal on the grown ellipse, and the point on its boundary to push the car to.
+    let nx = lx / (A * A), ny = ly / (B * B), bx: number, by: number;
+    if (q < 1e-6) {
+      nx = 0;
+      ny = ly >= 0 ? 1 : -1;
+      bx = 0;
+      by = ny * B;
+    } else {
+      bx = lx / q;
+      by = ly / q;
+    }
+    const nl = Math.hypot(nx, ny) || 1;
+    const n = vec((nx / nl) * c - (ny / nl) * s, (nx / nl) * s + (ny / nl) * c);
+    car.pos = vec(b.x + (bx * 1.002) * c - (by * 1.002) * s, b.y + (bx * 1.002) * s + (by * 1.002) * c);
+    // Velocity relative to the (moving) body.
+    const rv = vec(car.vel.x - b.vx, car.vel.y - b.vy);
+    const vn = dot(rv, n);
+    if (vn >= 0) continue;
+    const { speedKeep, restitution, minImpact } = hz.impact;
+    if (vn > -minImpact) {
+      car.vel = vec(b.vx + rv.x - n.x * vn, b.vy + rv.y - n.y * vn); // just stop closing in
+      continue;
+    }
+    const k = -(1 + restitution) * vn;
+    car.vel = vec(b.vx + (rv.x + n.x * k) * speedKeep, b.vy + (rv.y + n.y * k) * speedKeep);
+    const power = clamp(-vn / 500, 0, 1);
+    if (hz.touch(b, car.id, car.pos, power)) car.hits++;
+    if (car.isPlayer && race.cues.length < 16) race.cues.push({ kind: "thud", power });
+  }
+}
+
 function updateProgress(race: Race, car: Car, dt: number) {
   const n = race.track.path.length;
   const loc = locate(race.track, car.pos);
   hitBarrier(race, car, loc.index, loc.dist);
   hitBumpers(race, car);
+  hitHazard(race, car);
   car.surface = surfaceAt(race, car.pos, Math.min(loc.dist, race.track.barrier));
   if (race.phase === "racing" && car.finishTime === null && car.surface !== "track") car.offTime += dt;
   let delta = loc.index - car.lastIndex;
@@ -279,6 +393,7 @@ function containCar(race: Race, car: Car) {
 export function stepRace(race: Race, playerInput: Input, dt: number, playerIsAi = false) {
   race.time += dt;
   if (race.phase === "countdown" && race.time >= 0) race.phase = "racing";
+  race.hazard?.step(race, dt);
 
   const live = race.phase !== "countdown";
   for (const car of race.cars) {

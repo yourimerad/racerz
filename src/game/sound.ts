@@ -1,6 +1,7 @@
 // Sound effects, synthesized with the Web Audio API (no audio files to ship): an engine whose
 // pitch follows the car's speed with gear shifts, tyre squeal while sliding, gravel off the road,
-// a crash on every impact, a victory fanfare and a click for the menus.
+// a crash on every impact, a victory fanfare and a click for the menus — plus a growl and a dull
+// thud for the polar bear.
 //
 // Browsers only let audio start after a user gesture: nothing is created until `unlock()` is
 // called from a key press or click (Game.tsx does it on the first one). Muting just closes the
@@ -201,6 +202,80 @@ class Sound {
     const t = this.ctx.currentTime + 0.05;
     this.note(392, t, 0.2, 0.12, "triangle");
     this.note(329.63, t + 0.18, 0.4, 0.12, "triangle");
+  }
+
+  /** A deep rumble from a big animal: a low voice with a wobble, run through a throaty filter. */
+  growl(power = 1) {
+    const ctx = this.ctx, master = this.master, noise = this.noise;
+    if (!ctx || !master || !noise) return;
+    const now = ctx.currentTime, dur = 1;
+    const osc = ctx.createOscillator();
+    osc.type = "sawtooth";
+    osc.frequency.setValueAtTime(78, now);
+    osc.frequency.exponentialRampToValueAtTime(52, now + dur);
+    const lfo = ctx.createOscillator(), lfoGain = ctx.createGain();
+    lfo.frequency.value = 17;
+    lfoGain.gain.value = 9;
+    lfo.connect(lfoGain).connect(osc.frequency);
+    const throat = ctx.createBiquadFilter();
+    throat.type = "bandpass";
+    throat.frequency.setValueAtTime(260, now);
+    throat.frequency.linearRampToValueAtTime(420, now + dur * 0.4);
+    throat.frequency.linearRampToValueAtTime(200, now + dur);
+    throat.Q.value = 3;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.exponentialRampToValueAtTime(0.28 * power, now + 0.12);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+    osc.connect(throat);
+    // A breathy rasp on top.
+    const src = ctx.createBufferSource();
+    src.buffer = noise;
+    const rasp = ctx.createBiquadFilter();
+    rasp.type = "bandpass";
+    rasp.frequency.value = 340;
+    rasp.Q.value = 1.4;
+    const rg = ctx.createGain();
+    rg.gain.value = 0.35;
+    src.connect(rasp).connect(rg).connect(throat);
+    throat.connect(g).connect(master);
+    osc.start(now);
+    lfo.start(now);
+    src.start(now, Math.random() * 0.4, dur);
+    osc.stop(now + dur + 0.05);
+    lfo.stop(now + dur + 0.05);
+  }
+
+  /** A dull, heavy knock (a car against something soft and big). */
+  thud(power: number) {
+    const ctx = this.ctx, master = this.master, noise = this.noise;
+    if (!ctx || !master || !noise) return;
+    const p = Math.min(1, Math.max(0.2, power)), now = ctx.currentTime;
+    const o = ctx.createOscillator();
+    o.frequency.setValueAtTime(95, now);
+    o.frequency.exponentialRampToValueAtTime(34, now + 0.3);
+    const og = ctx.createGain();
+    og.gain.setValueAtTime(0.7 * p, now);
+    og.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+    o.connect(og).connect(master);
+    o.start(now);
+    o.stop(now + 0.37);
+    const src = ctx.createBufferSource();
+    src.buffer = noise;
+    const lp = ctx.createBiquadFilter();
+    lp.type = "lowpass";
+    lp.frequency.value = 380;
+    const ng = ctx.createGain();
+    ng.gain.setValueAtTime(0.28 * p, now);
+    ng.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
+    src.connect(lp).connect(ng).connect(master);
+    src.start(now, Math.random() * 0.5, 0.2);
+  }
+
+  /** Plays a sound requested by the simulation (see Cue in scenery.ts). */
+  cue(kind: "growl" | "thud", power: number) {
+    if (kind === "growl") this.growl(power);
+    else this.thud(power);
   }
 
   click() {
