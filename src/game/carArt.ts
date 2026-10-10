@@ -183,7 +183,7 @@ function gt(ctx: Ctx, skin: Skin) {
 // Front lid edges, scissor-door shuts, engine bay outline.
 const AVENTADOR_SEAMS = [9, -5.5, L - 3, -4, 9, 5.5, L - 3, 4, 6.5, -W, 6.5, -7.3, 6.5, W, 6.5, 7.3,
   -8.5, -6.3, -L + 2.5, -5.5, -8.5, 6.3, -L + 2.5, 5.5];
-/** Lamborghini Aventador SVJ: hexagonal wedge, Y lights, engine louvres, big rear wing. */
+/** Lamborghini Aventador SVJ Roadster: hexagonal wedge, open cockpit, Y lights, engine louvres, big rear wing. */
 function aventador(ctx: Ctx, skin: Skin) {
   wheels(ctx, 12, -12, 12, 11, 7);
   const body = [[L + 1, -4], [L - 2, -W + 1], [6, -W - 0.5], [-13, -W - 0.5], [-L, -W + 2], [-L, W - 2], [-13, W + 0.5], [6, W + 0.5], [L - 2, W - 1], [L + 1, 4]];
@@ -203,11 +203,44 @@ function aventador(ctx: Ctx, skin: Skin) {
     ctx.lineTo(-9, s * (W - 3.4));
     ctx.stroke();
   }
-  // Angular canopy: tinted glass, with a body-coloured roof panel.
-  poly(ctx, [[10, -5], [5, -7.5], [-6, -6.5], [-8, 0], [-6, 6.5], [5, 7.5], [10, 5]]);
-  glass(ctx, 2.5, 10);
-  poly(ctx, [[3, -5.9], [-4.5, -5.3], [-6, 0], [-4.5, 5.3], [3, 5.9]]);
-  paint(ctx, skin);
+  // A Roadster: the open cockpit (tub, two bucket seats, the steering wheel, the driver's helmet), a raked windscreen in front of it.
+  poly(ctx, [[8.6, -6], [-9, -5.6], [-9, 5.6], [8.6, 6]]);
+  ctx.fillStyle = "#0b0c0e";
+  ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,0.18)";
+  ctx.lineWidth = 0.5;
+  ctx.stroke();
+  for (const s of [-1, 1]) {
+    ctx.fillStyle = "#262a30";
+    ctx.beginPath();
+    ctx.roundRect(-8.2, s * 2.9 - 2.1, 6.6, 4.2, 1.2); // seat: back and cushion
+    ctx.fill();
+    ctx.fillStyle = "#33383f";
+    ctx.fillRect(-8.4, s * 2.9 - 1.1, 1.3, 2.2); // headrest
+  }
+  ctx.strokeStyle = "#1d1f23";
+  ctx.lineWidth = 0.9;
+  ctx.beginPath();
+  ctx.ellipse(3.6, -2.9, 0.7, 1.7, 0, 0, Math.PI * 2); // steering wheel
+  ctx.stroke();
+  ctx.fillStyle = skin.matte ? "#3a3a40" : skin.accent;
+  ctx.beginPath();
+  ctx.arc(-5.6, -2.9, 1.7, 0, Math.PI * 2); // the driver's helmet
+  ctx.fill();
+  poly(ctx, [[11.4, -6.5], [8.6, -6.1], [8.6, 6.1], [11.4, 6.5]]);
+  glass(ctx, 8.6, 11.4);
+  ctx.strokeStyle = "rgba(0,0,0,0.7)";
+  ctx.lineWidth = 0.6;
+  ctx.stroke();
+  // The buttress fins either side of the engine cover.
+  ctx.fillStyle = skin.pattern === "carbon" ? carbon(ctx) : skin.body;
+  for (const s of [-1, 1]) {
+    poly(ctx, [[-9, s * 5.2], [-9, s * 6.3], [-17, s * 5.7], [-17, s * 5.2]]);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(0,0,0,0.5)";
+    ctx.lineWidth = 0.4;
+    ctx.stroke();
+  }
   mirrors(ctx, skin, 6, W + 0.4);
   // Hexagonal engine cover louvres.
   ctx.strokeStyle = "rgba(0,0,0,0.6)";
@@ -454,11 +487,11 @@ function p911(ctx: Ctx, skin: Skin) {
 const ART: Record<Exclude<ModelId, "jet">, (ctx: Ctx, skin: Skin) => void> = { gt, mx5, p911, aventador, f8 };
 
 /**
- * `wing` only matters for the Racerz Jet (0 = wings folded): its drawing, shadow included, lives in jetArt.ts and has no skins.
+ * `wing` only matters for the Racerz Jet (0 = wings folded): its drawing, shadow included, lives in jetArt.ts, which paints it in the skin.
  */
 export function drawCarSprite(ctx: Ctx, model: ModelId, skin: Skin, x: number, y: number, angle: number, wing = 0) {
   if (model === "jet") {
-    drawJetSprite(ctx, x, y, angle, { wing });
+    drawJetSprite(ctx, x, y, angle, { wing, skin });
     return;
   }
   ctx.save();

@@ -72,7 +72,6 @@
 .jetBuy { display: flex; flex-direction: column; align-items: stretch; gap: 6px; }
 .jetBuyBtn:not(:disabled) { background: #3ddc84; color: #0b2a18; }
 .jetKey { text-align: center; font-size: 11px; font-weight: 700; color: #ffd45a; background: #0008; border-radius: 999px; padding: 3px 10px; }
-.fixedSkin { padding: 14px 12px; border-radius: 12px; border: 1px dashed #fff4; background: #0003; font-size: 13px; opacity: 0.9; }
 .flyBtn { font-size: 16px; font-weight: 800; border-color: #ffd45a; color: #ffd45a; }
 .carInfo { display: flex; flex-direction: column; gap: 3px; font-size: 13px; }
 .carInfo strong { font-size: 15px; }

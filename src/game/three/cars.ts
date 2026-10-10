@@ -1,8 +1,10 @@
 import type { CarView } from "../adapter3d";
 import { K } from "../adapter3d";
-import type { ModelId, Skin } from "../garage";
-import { type Key, loft, makeWheel, spline } from "./carbody";
-import { type Disposer, THREE, clamp, lerp, paintTexture } from "./core";
+import type { ModelId } from "../garage";
+import { WHEEL as AVENTADOR_WHEEL, buildAventador } from "./aventador";
+import { type Kit, type Parts, type PaintUniforms, type Spec, addExhausts, addWheels, box, ball, cylX, finish, flameGroup, furniture, headlight, interior, makeKit, mesh, shell, taillight, yAt, zAt } from "./carkit";
+import { type Disposer, THREE, clamp, lerp } from "./core";
+import { loft, spline } from "./carbody";
 
 // The cars in 3D, sculpted like real ones: the body is lofted from cross-sections (width, floor and deck height as curves along its length)
 // into one smooth shell; the greenhouse is a second loft in glass with painted pillars and roof; there are interiors with seats and a
@@ -10,18 +12,8 @@ import { type Disposer, THREE, clamp, lerp, paintTexture } from "./core";
 // calipers. The paint is a clear-coated metallic that reflects the surroundings (the mode's sky), with the shop's skins as a shader on
 // top (racing stripes, carbon weave, gold). Real size: about 4 m long; the Racerz Jet is 5 m. Nose toward +X, origin on the ground.
 
-type Spec = {
-  x0: number; x1: number;
-  hw: Key[]; yb: Key[]; yt: Key[]; eTop: number; eBot: number; tumble: number;
-  cabin?: {
-    x0: number; x1: number; base: number; roof: Key[]; tumble: number;
-    /** Where the side windows are, where the windscreen and rear window start (x), and the pillars (painted) in between. */
-    side: [number, number]; ws: number; rw: number; pillars: [number, number][];
-  };
-  wheel: { xf: number; xr: number; r: number; w: number; z: number; spokes: number; rim: string; caliper: string };
-};
 
-const SPECS: Record<Exclude<ModelId, "jet">, Spec> = {
+const SPECS: Record<Exclude<ModelId, "jet" | "aventador">, Spec> = {
   gt: {
     x0: -2.1, x1: 2.1, eTop: 3.3, eBot: 7, tumble: 0.08,
     hw: [[-2.1, 0.76], [-1.95, 0.86], [-1.5, 0.95], [-0.8, 0.93], [0.2, 0.92], [0.9, 0.94], [1.45, 0.95], [1.9, 0.88], [2.1, 0.74]],
@@ -45,14 +37,6 @@ const SPECS: Record<Exclude<ModelId, "jet">, Spec> = {
     cabin: { x0: -1.75, x1: 0.78, base: 0.74, tumble: 0.34, roof: [[-1.75, 0.97], [-1.45, 1.12], [-0.85, 1.28], [-0.2, 1.34], [0.3, 1.28], [0.55, 1.12], [0.78, 0.9]], side: [-1.45, 0.45], ws: 0.25, rw: -1.0, pillars: [[-1.62, -1.4], [0.1, 0.3]] },
     wheel: { xf: 1.32, xr: -1.3, r: 0.35, w: 0.27, z: 0.82, spokes: 5, rim: "#d4d7dc", caliper: "#e0b000" },
   },
-  aventador: {
-    x0: -2.17, x1: 2.17, eTop: 4.2, eBot: 8, tumble: 0.06,
-    hw: [[-2.17, 0.84], [-2.0, 0.96], [-1.5, 1.03], [-0.8, 1.0], [0, 0.96], [0.8, 0.98], [1.5, 0.96], [1.9, 0.86], [2.17, 0.72]],
-    yb: [[-2.17, 0.38], [-1.9, 0.26], [-1.2, 0.2], [1.5, 0.2], [2.0, 0.2], [2.17, 0.24]],
-    yt: [[-2.17, 0.8], [-1.9, 0.94], [-1.2, 0.98], [-0.4, 0.96], [0.5, 0.8], [1.2, 0.62], [1.8, 0.46], [2.17, 0.34]],
-    cabin: { x0: -0.95, x1: 0.95, base: 0.72, tumble: 0.28, roof: [[-0.95, 0.95], [-0.7, 1.06], [-0.2, 1.14], [0.3, 1.12], [0.65, 1.0], [0.95, 0.72]], side: [-0.6, 0.62], ws: 0.4, rw: -2, pillars: [[-0.95, -0.6]] },
-    wheel: { xf: 1.38, xr: -1.32, r: 0.36, w: 0.3, z: 0.86, spokes: 10, rim: "#34353a", caliper: "#f0c000" },
-  },
   f8: {
     x0: -2.1, x1: 2.1, eTop: 3.1, eBot: 7, tumble: 0.1,
     hw: [[-2.1, 0.82], [-1.9, 0.94], [-1.4, 1.0], [-0.7, 0.97], [0.1, 0.94], [0.9, 0.95], [1.5, 0.96], [1.9, 0.88], [2.1, 0.72]],
@@ -63,281 +47,7 @@ const SPECS: Record<Exclude<ModelId, "jet">, Spec> = {
   },
 };
 
-// ---------- materials ----------
-
-type PaintUniforms = { uAccent: { value: THREE.Color }; uDamage: { value: number } };
-
-function paintMaterial(d: Disposer, skin: Skin, env: THREE.Texture | null): { mat: THREE.MeshPhysicalMaterial; uniforms: PaintUniforms } {
-  const metal = skin.pattern === "metal", matte = !!skin.matte;
-  const mat = d.add(new THREE.MeshPhysicalMaterial({
-    color: skin.pattern === "carbon" ? "#2a2c30" : skin.body, roughness: metal ? 0.24 : matte ? 0.7 : 0.3, metalness: metal ? 1 : matte ? 0.2 : 0.55,
-    clearcoat: matte ? 0 : metal ? 0.35 : 1, clearcoatRoughness: metal ? 0.18 : 0.05, envMap: env, envMapIntensity: metal ? 1.4 : matte ? 0.5 : 1.0,
-  }));
-  const uniforms: PaintUniforms = { uAccent: { value: new THREE.Color(skin.accent) }, uDamage: { value: 0 } };
-  const pattern = skin.pattern;
-  mat.onBeforeCompile = (sh) => {
-    sh.uniforms.uAccent = uniforms.uAccent;
-    sh.uniforms.uDamage = uniforms.uDamage;
-    sh.vertexShader = sh.vertexShader.replace("#include <common>", "#include <common>\nvarying vec3 vLocal;").replace("#include <begin_vertex>", "#include <begin_vertex>\nvLocal = position;");
-    let extra = "";
-    // Racing stripes: two bands 0.3 m wide either side of the centre line, over bonnet, roof and boot.
-    if (pattern === "stripes") extra += "float sz = abs(vLocal.z); if (sz > 0.1 && sz < 0.4 && vLocal.y > 0.5) diffuseColor.rgb = uAccent;\n";
-    // Carbon weave: a two-tone twill, 4 cm cells.
-    if (pattern === "carbon") extra += "vec2 cc = floor(vec2(vLocal.x + vLocal.z * 0.5, vLocal.y + vLocal.z) / 0.04); diffuseColor.rgb = mix(vec3(0.012, 0.014, 0.017), vec3(0.04, 0.045, 0.052), mod(cc.x + cc.y, 2.0));\n";
-    // A wrecked car (the volcano's damage) darkens toward soot.
-    extra += "diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.03, 0.025, 0.025), uDamage * 0.7);\n";
-    sh.fragmentShader = sh.fragmentShader
-      .replace("#include <common>", "#include <common>\nvarying vec3 vLocal; uniform vec3 uAccent; uniform float uDamage;")
-      .replace("#include <color_fragment>", "#include <color_fragment>\n" + extra);
-  };
-  return { mat, uniforms };
-}
-
-type Kit = {
-  d: Disposer; skin: Skin; env: THREE.Texture | null;
-  paint: THREE.MeshPhysicalMaterial; accent: THREE.MeshStandardMaterial; glass: THREE.MeshPhysicalMaterial; trim: THREE.MeshStandardMaterial;
-  chrome: THREE.MeshStandardMaterial; tyre: THREE.MeshStandardMaterial; rim: THREE.MeshStandardMaterial; dark: THREE.MeshStandardMaterial; disc: THREE.MeshStandardMaterial;
-  caliper: THREE.MeshStandardMaterial; lens: THREE.MeshStandardMaterial; housing: THREE.MeshStandardMaterial; tail: THREE.MeshStandardMaterial; interior: THREE.MeshStandardMaterial;
-  cloth: THREE.MeshStandardMaterial; plate: THREE.MeshStandardMaterial; helmet: THREE.MeshStandardMaterial; linerBack: THREE.MeshStandardMaterial;
-};
-
-function makeKit(d: Disposer, skin: Skin, env: THREE.Texture | null, spec?: Spec): { kit: Kit; uniforms: PaintUniforms } {
-  const { mat, uniforms } = paintMaterial(d, skin, env);
-  const std = (p: THREE.MeshStandardMaterialParameters) => d.add(new THREE.MeshStandardMaterial(p));
-  const plateTex = paintTexture(d, 256, 64, (g, w, h) => {
-    g.fillStyle = "#f4f4ee";
-    g.fillRect(0, 0, w, h);
-    g.strokeStyle = "#1a1a1a";
-    g.lineWidth = 4;
-    g.strokeRect(3, 3, w - 6, h - 6);
-    g.fillStyle = "#1d3fa6";
-    g.fillRect(6, 6, 26, h - 12);
-    g.fillStyle = "#1a1a1a";
-    g.font = "700 40px ui-monospace, monospace";
-    g.textAlign = "center";
-    g.textBaseline = "middle";
-    g.fillText("RACERZ", w / 2 + 12, h / 2 + 2);
-  }, { anisotropy: 4 });
-  const kit: Kit = {
-    d, skin, env, paint: mat,
-    accent: std({ color: skin.accent, roughness: 0.4, metalness: 0.3 }),
-    glass: d.add(new THREE.MeshPhysicalMaterial({ color: "#0a1018", roughness: 0.04, metalness: 0.1, transparent: true, opacity: 0.62, envMap: env, envMapIntensity: 1.3, clearcoat: 1, clearcoatRoughness: 0.02 })),
-    trim: std({ color: "#17191d", roughness: 0.55, metalness: 0.3 }),
-    chrome: std({ color: "#d8dde4", roughness: 0.15, metalness: 1, envMap: env, envMapIntensity: 1.2 }),
-    tyre: std({ color: "#0e0e10", roughness: 0.92 }),
-    rim: std({ color: spec?.wheel.rim ?? "#c8ccd2", roughness: 0.28, metalness: 0.9, envMap: env, envMapIntensity: 1.0 }),
-    dark: std({ color: "#101114", roughness: 0.8 }),
-    disc: std({ color: "#7d838b", roughness: 0.4, metalness: 0.85 }),
-    caliper: std({ color: spec?.wheel.caliper ?? "#d62828", roughness: 0.4, metalness: 0.3 }),
-    lens: std({ color: "#fff8e6", emissive: "#fff2c8", emissiveIntensity: 1.8, roughness: 0.15 }),
-    housing: std({ color: "#2a2d33", roughness: 0.25, metalness: 0.9, envMap: env }),
-    tail: std({ color: "#6a0810", emissive: "#ff1c28", emissiveIntensity: 0.9, roughness: 0.3 }),
-    interior: std({ color: "#1b1d21", roughness: 0.9 }),
-    cloth: std({ color: "#2a2d33", roughness: 0.95 }),
-    plate: std({ map: plateTex, roughness: 0.6, ...(plateTex ? {} : { color: "#f4f4ee" }) }),
-    helmet: std({ color: skin.accent, roughness: 0.3, metalness: 0.2 }),
-    linerBack: d.add(new THREE.MeshStandardMaterial({ color: "#0c0d0f", roughness: 0.95, side: THREE.DoubleSide })),
-  };
-  return { kit, uniforms };
-}
-
-// ---------- shared parts ----------
-
-type Parts = {
-  group: THREE.Group;
-  /** Wheel hubs: `pivot` steers about y (the front pair), `spin` turns about z. */
-  wheels: { pivot: THREE.Group; spin: THREE.Group; front: boolean }[];
-  wheelR: number;
-  rear: number;
-  flame: THREE.Group;
-  tail: THREE.MeshStandardMaterial;
-  wings?: THREE.Object3D[];
-  jetFlames?: THREE.Group[];
-  engineY: number;
-};
-
-function mesh(kit: Kit, geo: THREE.BufferGeometry, mat: THREE.Material | THREE.Material[], shadow = true): THREE.Mesh {
-  kit.d.add(geo);
-  const m = new THREE.Mesh(geo, mat);
-  m.castShadow = shadow;
-  m.receiveShadow = true;
-  return m;
-}
-const box = (kit: Kit, w: number, h: number, dp: number, x: number, y: number, z: number, mat: THREE.Material, shadow = false) => {
-  const m = mesh(kit, new THREE.BoxGeometry(w, h, dp), mat, shadow);
-  m.position.set(x, y, z);
-  return m;
-};
-const ball = (kit: Kit, r: number, x: number, y: number, z: number, sx: number, sy: number, sz: number, mat: THREE.Material, shadow = false) => {
-  const m = mesh(kit, new THREE.SphereGeometry(r, 16, 12), mat, shadow);
-  m.position.set(x, y, z);
-  m.scale.set(sx, sy, sz);
-  return m;
-};
-const cylX = (kit: Kit, r: number, len: number, x: number, y: number, z: number, mat: THREE.Material) => {
-  const m = mesh(kit, new THREE.CylinderGeometry(r, r, len, 14), mat, false);
-  m.rotation.z = Math.PI / 2;
-  m.position.set(x, y, z);
-  return m;
-};
-
-function addWheels(kit: Kit, g: THREE.Group, w: Spec["wheel"]): Parts["wheels"] {
-  const out: Parts["wheels"] = [];
-  const wk = { tyre: kit.tyre, rim: kit.rim, dark: kit.dark, disc: kit.disc, caliper: kit.caliper };
-  for (const x of [w.xf, w.xr]) {
-    // One set of geometry for the pair of wheels of an axle (the left one mirrored).
-    const wg = makeWheel(kit.d, wk, w.r, w.w, w.spokes);
-    for (const s of [-1, 1]) {
-      const pivot = new THREE.Group(), spin = new THREE.Group();
-      pivot.position.set(x, w.r, s * w.z);
-      const wheel = s > 0 ? wg : wg.clone();
-      if (s < 0) wheel.rotation.y = Math.PI;
-      spin.add(wheel);
-      pivot.add(spin);
-      g.add(pivot);
-      out.push({ pivot, spin, front: x === w.xf });
-    }
-  }
-  return out;
-}
-
-/** The turbo flame: a two-layer cone out of the back (hidden unless boosting). */
-function flameGroup(kit: Kit, x: number, y: number, z = 0, color = "#ff9a2e", core = "#fff0b0", len = 3.2, r = 0.4): THREE.Group {
-  const grp = new THREE.Group();
-  grp.position.set(x, y, z);
-  const mk = (rad: number, l: number, c: string, o: number) => {
-    const geo = kit.d.add(new THREE.ConeGeometry(rad, l, 12, 1, true));
-    geo.rotateZ(Math.PI / 2);
-    geo.translate(-l / 2, 0, 0);
-    const m = new THREE.Mesh(geo, kit.d.add(new THREE.MeshBasicMaterial({ color: c, transparent: true, opacity: o, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false })));
-    grp.add(m);
-  };
-  mk(r, len, color, 0.55);
-  mk(r * 0.5, len * 0.6, core, 0.8);
-  grp.visible = false;
-  return grp;
-}
-
-/** Half width of the body's surface at height `y` (x along the car): lets lights, vents and intakes sit exactly on the skin. */
-function zAt(spec: Spec, x: number, y: number): number {
-  const hw = spline(spec.hw, x), yb = spline(spec.yb, x), yt = spline(spec.yt, x), yc = (yb + yt) / 2, b = Math.max(0.001, (yt - yb) / 2);
-  const py = clamp((y - yc) / b, -0.999, 0.999), e = py > 0 ? spec.eTop : spec.eBot;
-  const px = Math.pow(Math.max(0, 1 - Math.pow(Math.abs(py), e)), 1 / e);
-  return hw * px * (1 - spec.tumble * Math.pow(Math.max(0, py), 2));
-}
-/** Height on the body at `x` at a fraction `f` (0 floor .. 1 deck) of its section. */
-const yAt = (spec: Spec, x: number, f: number) => spline(spec.yb, x) + f * (spline(spec.yt, x) - spline(spec.yb, x));
-
-/** Interior seen through the glass: floor, dashboard, two seats with headrests, a steering wheel and the driver's helmet and shoulders. */
-function interior(kit: Kit, g: THREE.Group, x: number, belt: number, o: { seatX: number; dashX: number; hw: number; head?: number }) {
-  const head = o.head ?? 0.2;
-  g.add(box(kit, 1.6, 0.04, o.hw * 1.7, x, belt - 0.4, 0, kit.interior));
-  g.add(box(kit, 0.3, 0.26, o.hw * 1.7, o.dashX, belt - 0.16, 0, kit.interior));
-  const wheel = mesh(kit, new THREE.TorusGeometry(0.16, 0.018, 8, 18), kit.trim, false);
-  wheel.position.set(o.dashX - 0.26, belt + 0.02, -o.hw * 0.4);
-  wheel.rotation.y = Math.PI / 2 - 0.35;
-  g.add(wheel);
-  for (const s of [-1, 1]) {
-    g.add(box(kit, 0.16, 0.46, 0.42, o.seatX, belt - 0.06, s * o.hw * 0.4, kit.cloth));
-    g.add(box(kit, 0.46, 0.14, 0.44, o.seatX + 0.24, belt - 0.26, s * o.hw * 0.4, kit.cloth));
-    g.add(box(kit, 0.09, 0.18, 0.2, o.seatX - 0.03, belt + 0.26, s * o.hw * 0.4, kit.cloth));
-  }
-  // The driver (left seat when facing forward): torso, helmet, visor.
-  g.add(box(kit, 0.2, 0.3, 0.4, o.seatX + 0.1, belt - 0.02 + head * 0.3, -o.hw * 0.4, kit.dark));
-  g.add(ball(kit, 0.12, o.seatX + 0.1, belt + head, -o.hw * 0.4, 1, 1.05, 1, kit.helmet));
-  g.add(box(kit, 0.05, 0.06, 0.14, o.seatX + 0.2, belt + head, -o.hw * 0.4, kit.glass));
-}
-
-/** Mirrors on stalks, the number plates and the underbody: what every car has. */
-function furniture(kit: Kit, g: THREE.Group, spec: Spec, mirrorX: number, mirrorY: number, mirrorZ: number) {
-  for (const s of [-1, 1]) {
-    g.add(box(kit, 0.05, 0.035, 0.14, mirrorX, mirrorY - 0.03, s * (mirrorZ - 0.07), kit.paint));
-    g.add(ball(kit, 0.085, mirrorX - 0.03, mirrorY, s * mirrorZ, 0.65, 0.55, 1.1, kit.paint, true));
-  }
-  const rc = (spec.yb[0][1] + spec.yt[0][1]) / 2, fc = (spec.yb[spec.yb.length - 1][1] + spec.yt[spec.yt.length - 1][1]) / 2;
-  const plate = mesh(kit, new THREE.PlaneGeometry(0.52, 0.13), kit.plate, false);
-  plate.position.set(spec.x0 - 0.012, rc - 0.07, 0);
-  plate.rotation.y = -Math.PI / 2;
-  g.add(plate);
-  const front = mesh(kit, new THREE.PlaneGeometry(0.52, 0.13), kit.plate, false);
-  front.position.set(spec.x1 + 0.012, fc - 0.1, 0);
-  front.rotation.y = Math.PI / 2;
-  g.add(front);
-  g.add(box(kit, 2.8, 0.05, 1.2, 0, 0.22, 0, kit.dark)); // the underbody
-}
-
-function addExhausts(kit: Kit, g: THREE.Group, x: number, y: number, zs: number[], r = 0.05) {
-  for (const z of zs) {
-    g.add(cylX(kit, r, 0.14, x, y, z, kit.chrome));
-    g.add(cylX(kit, r * 0.7, 0.16, x - 0.02, y, z, kit.dark));
-  }
-}
-
-/** A headlight: a dark reflector bowl and a lens, set on the skin at `x`, at section fraction `f`, `z` in from the edge. */
-function headlight(kit: Kit, g: THREE.Group, spec: Spec, x: number, f: number, inset: number, size: [number, number]) {
-  const y = yAt(spec, x, f);
-  for (const s of [-1, 1]) {
-    const z = s * (zAt(spec, x, y) - inset);
-    g.add(ball(kit, 1, x, y, z, 0.08, size[1], size[0], kit.housing));
-    g.add(ball(kit, 1, x + 0.045, y, z, 0.05, size[1] * 0.72, size[0] * 0.8, kit.lens));
-  }
-}
-function taillight(kit: Kit, g: THREE.Group, spec: Spec, x: number, f: number, inset: number, size: [number, number]) {
-  const y = yAt(spec, x, f);
-  for (const s of [-1, 1]) {
-    const z = s * (zAt(spec, x, y) - inset);
-    g.add(ball(kit, 1, x, y, z, 0.07, size[1], size[0], kit.housing));
-    g.add(ball(kit, 1, x - 0.035, y, z, 0.045, size[1] * 0.75, size[0] * 0.85, kit.tail));
-  }
-}
-
-/** Builds the common shell: body, greenhouse in glass, wheels. */
-function shell(kit: Kit, g: THREE.Group, spec: Spec) {
-  const hw = (x: number) => spline(spec.hw, x), yb = (x: number) => spline(spec.yb, x), yt = (x: number) => spline(spec.yt, x);
-  const wh = spec.wheel, ra = wh.r + 0.07;
-  const arches = [wh.xf, wh.xr].map((x) => ({ x, r: ra, hub: wh.r, zIn: wh.z - wh.w / 2 - 0.1 }));
-  g.add(mesh(kit, loft(kit.d, { x0: spec.x0, x1: spec.x1, stations: 64, around: 44, hw, yb, yt, eTop: spec.eTop, eBot: spec.eBot, tumble: spec.tumble, caps: true, arches }), kit.paint));
-  // The wheel wells: a dark half-barrel inside each arch, and a black trim round its edge.
-  const linerGeo = kit.d.add(new THREE.CylinderGeometry(ra - 0.015, ra - 0.015, wh.w + 0.5, 20, 1, true, Math.PI / 2, Math.PI));
-  linerGeo.rotateX(Math.PI / 2);
-  const trimGeo = kit.d.add(new THREE.TorusGeometry(ra + 0.005, 0.018, 6, 24, Math.PI));
-  for (const x of [wh.xf, wh.xr]) {
-    for (const s of [-1, 1]) {
-      const liner = new THREE.Mesh(linerGeo, kit.dark);
-      liner.material = kit.linerBack;
-      liner.position.set(x, wh.r, s * (wh.z - 0.05));
-      g.add(liner);
-      const trim = new THREE.Mesh(trimGeo, kit.trim);
-      trim.position.set(x, wh.r, s * (hw(x) * 0.985));
-      g.add(trim);
-    }
-  }
-  const c = spec.cabin;
-  if (c) {
-    const roof = (x: number) => spline(c.roof, x);
-    const geo = loft(kit.d, {
-      x0: c.x0, x1: c.x1, stations: 30, around: 24, hw: () => c.base, yb: (x) => yt(x) - 0.05, yt: roof, eTop: 2.3, eBot: 6, tumble: c.tumble, caps: true,
-      group: (x, j, m) => {
-        const f = j / m;
-        if (f >= 0.5) return 0; // under the belt line: hidden in the body
-        const top = f > 0.17 && f < 0.33;
-        if (c.pillars.some(([a, b]) => x >= a && x <= b)) return 0;
-        if (top) return x >= c.ws || x <= c.rw ? 1 : 0;
-        return x >= c.side[0] && x <= c.side[1] ? 1 : 0;
-      },
-    });
-    g.add(mesh(kit, geo, [kit.paint, kit.glass]));
-  }
-  return addWheels(kit, g, spec.wheel);
-}
-
 // ---------- the five cars ----------
-
-function finish(kit: Kit, g: THREE.Group, spec: Spec, wheels: Parts["wheels"], flameX?: number): Parts {
-  const flame = flameGroup(kit, flameX ?? spec.x0 - 0.05, 0.5);
-  g.add(flame);
-  return { group: g, wheels, wheelR: spec.wheel.r, rear: spec.x0, flame, tail: kit.tail, engineY: 0.8 };
-}
 
 /** Racerz GT: a muscular coupé with a ducktail. */
 function buildGT(kit: Kit): Parts {
@@ -393,31 +103,6 @@ function buildP911(kit: Kit): Parts {
   g.add(box(kit, 0.06, 0.09, 0.9, 2.08, yAt(spec, 2.08, 0.3), 0, kit.dark));
   addExhausts(kit, g, -2.1, 0.4, [-0.52, 0.52]);
   return finish(kit, g, spec, wheels);
-}
-
-/** Lamborghini Aventador SVJ: a low wedge, Y-shaped light bars, side intakes, a big rear wing, three hexagonal exhausts. */
-function buildAventador(kit: Kit): Parts {
-  const g = new THREE.Group(), spec = SPECS.aventador, wheels = shell(kit, g, spec);
-  interior(kit, g, -0.1, 0.76, { seatX: -0.3, dashX: 0.65, hw: 0.72, head: 0.17 });
-  furniture(kit, g, spec, 0.5, 0.95, 0.98);
-  for (const s of [-1, 1]) {
-    const zi = zAt(spec, -0.35, 0.55);
-    g.add(ball(kit, 1, -0.35, 0.55, s * (zi - 0.005), 0.45, 0.1, 0.04, kit.dark)); // the side air intakes
-    g.add(ball(kit, 1, -0.35, 0.69, s * (zi - 0.002), 0.28, 0.018, 0.04, kit.trim));
-    const y = yAt(spec, 2.05, 0.6), z = s * (zAt(spec, 2.05, y) - 0.12);
-    g.add(ball(kit, 1, 2.05, y, z, 0.06, 0.03, 0.3, kit.lens)); // the Y light bars
-    g.add(ball(kit, 1, 1.95, y + 0.005, z * 0.62, 0.05, 0.025, 0.2, kit.lens));
-    g.add(ball(kit, 1, -2.15, yAt(spec, -2.15, 0.7), s * 0.55, 0.05, 0.03, 0.3, kit.tail));
-    g.add(box(kit, 0.12, 0.42, 0.14, -1.92, 1.05, s * 0.72, kit.trim)); // the wing's struts
-    g.add(box(kit, 0.4, 0.14, 0.2, 1.6, 0.34, s * 0.8, kit.dark)); // front splitter vents
-  }
-  g.add(ball(kit, 1, -2.17, yAt(spec, -2.17, 0.7), 0, 0.05, 0.03, 0.5, kit.tail));
-  g.add(box(kit, 0.55, 0.07, 2.15, -2.3, 1.3, 0, kit.paint, true)); // the rear wing
-  for (const s of [-1, 1]) g.add(box(kit, 0.58, 0.28, 0.05, -2.3, 1.28, s * 1.08, kit.accent));
-  g.add(box(kit, 0.4, 0.1, 1.2, -2.0, 0.3, 0, kit.dark)); // diffuser
-  g.add(box(kit, 0.4, 0.04, 2.0, 2.1, 0.2, 0, kit.dark)); // splitter
-  addExhausts(kit, g, -2.2, 0.55, [-0.25, 0, 0.25], 0.07);
-  return finish(kit, g, spec, wheels, -2.25);
 }
 
 /** Ferrari F8 Spider: curvy and low, side intakes behind the doors, hood vents, twin round tail lights, four exhausts. */
@@ -541,8 +226,8 @@ export class Car3D {
   constructor(d: Disposer, view: CarView, env: THREE.Texture | null) {
     this.model = view.model;
     this.id = view.id;
-    const spec = view.model === "jet" ? undefined : SPECS[view.model];
-    const { kit, uniforms } = makeKit(d, view.skin, env, spec);
+    const wheel = view.model === "jet" ? undefined : view.model === "aventador" ? AVENTADOR_WHEEL : SPECS[view.model].wheel;
+    const { kit, uniforms } = makeKit(d, view.skin, env, wheel);
     this.parts = BUILDERS[view.model](kit);
     this.uniforms = uniforms;
     this.group = this.parts.group;
