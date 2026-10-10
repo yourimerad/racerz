@@ -30,7 +30,7 @@ export const BOOST = {
   SCALE: 40 / 28,
   GHOSTS: 6, GHOST_EVERY: 0.04, STREAK_EVERY: 0.03, PART_EVERY: 0.02, MAX_PARTS: 200, MAX_STREAKS: 80,
   /** Pads per lap. */
-  COUNT: 3,
+  COUNT: 2,
   MIN_GAP: 400, START_SAFE: 200, FINISH_SAFE: 200, STRAIGHT_LEN: 250,
   /** Largest curvature (1/px) allowed on the 250 px ahead of a pad. These circuits are gentle (median radius ~1 000 px), so 0.004 (250 px radius) would still put pads in visible bends. */
   MAX_CURV: 0.0015,
