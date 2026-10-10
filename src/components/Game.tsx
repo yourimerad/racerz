@@ -32,6 +32,8 @@ const KEYS: Record<string, keyof Input> = {
   ArrowLeft: "left", KeyA: "left", KeyQ: "left",
   ArrowRight: "right", KeyD: "right",
   Space: "handbrake",
+  // The Racerz Jet's flight: hold Shift (Shift was free; Space stays the handbrake).
+  ShiftLeft: "fly", ShiftRight: "fly",
 };
 const STEP = 1 / 120;
 
@@ -42,6 +44,8 @@ export default function Game() {
   const raceRef = useRef<Race | null>(null);
   const inputRef = useRef<Input>({ ...NO_INPUT });
   const [screen, setScreen] = useState<"menu" | "race" | "results">("menu");
+  // The current race's car can fly (Racerz Jet): shows the touch "Vol" button.
+  const [canFly, setCanFly] = useState(false);
   const [results, setResults] = useState<Result[]>([]);
   const [mode, setMode] = useState<ThemeId>("countryside");
   // Best lap per mode, kept for the session only.
@@ -107,6 +111,7 @@ export default function Game() {
     const car = p.cars[p.selected] ?? { level: 1, skin: "factory" as const };
     if (!isDebugRace && isSignedIn()) accountStartRace();
     raceRef.current = createRace(mode, { model: p.selected, skin: car.skin, level: car.level });
+    setCanFly(raceRef.current.flight !== null);
     inputRef.current = { ...NO_INPUT };
     setScreen("race");
   }, [mode]);
@@ -140,11 +145,19 @@ export default function Game() {
     };
     const kd = (e: KeyboardEvent) => set(e, true);
     const ku = (e: KeyboardEvent) => set(e, false);
+    // Losing the focus (or the tab) swallows the key-up events: let go of everything, Shift included.
+    const release = () => {
+      inputRef.current = { ...NO_INPUT };
+    };
     window.addEventListener("keydown", kd);
     window.addEventListener("keyup", ku);
+    window.addEventListener("blur", release);
+    document.addEventListener("visibilitychange", release);
     return () => {
       window.removeEventListener("keydown", kd);
       window.removeEventListener("keyup", ku);
+      window.removeEventListener("blur", release);
+      document.removeEventListener("visibilitychange", release);
     };
   }, [screen, start, debugMode]);
 
@@ -261,6 +274,11 @@ export default function Game() {
             <button {...touch("left")} aria-label="Gauche">◀</button>
             <button {...touch("right")} aria-label="Droite">▶</button>
           </div>
+          {canFly && (
+            <div className={styles.pad}>
+              <button {...touch("fly")} aria-label="Vol (maintenu)" className={styles.flyBtn}>Vol</button>
+            </div>
+          )}
           <div className={styles.pad}>
             <button {...touch("brake")} aria-label="Frein">▼</button>
             <button {...touch("throttle")} aria-label="Accélérer">▲</button>

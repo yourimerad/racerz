@@ -1,5 +1,5 @@
 import { BOOST } from "./boost";
-import { type Car, speedOf } from "./car";
+import { type Car, isAirborne, speedOf } from "./car";
 import { drawCarSprite } from "./carArt";
 import type { FxView } from "./fx";
 import { overheadLayer, staticLayer, tracePath } from "./layer";
@@ -35,11 +35,11 @@ function watchFrameRate(): number {
   return frames.level;
 }
 
-/** Draws a car like the normal sprite (skin included), translucent: the turbo's ghost images. */
-function drawGhost(ctx: CanvasRenderingContext2D, car: Car, x: number, y: number, angle: number, alpha: number) {
+/** Draws a car like the normal sprite (skin included), translucent: the turbo's ghost images (a Jet keeps its wings as they are). */
+function drawGhost(ctx: CanvasRenderingContext2D, car: Car, x: number, y: number, angle: number, alpha: number, wing: number) {
   ctx.save();
   ctx.globalAlpha = alpha;
-  drawCarSprite(ctx, car.model, car.skin, x, y, angle);
+  drawCarSprite(ctx, car.model, car.skin, x, y, angle, wing);
   ctx.restore();
 }
 
@@ -53,7 +53,8 @@ export function formatTime(t: number | null): string {
   return `${m}:${s.toFixed(3).padStart(6, "0")}`;
 }
 
-function drawMinimap(ctx: CanvasRenderingContext2D, race: Race, w: number) {
+/** Draws the minimap; returns the y of its lower edge (the flight HUD hangs its altitude gauge under it). */
+function drawMinimap(ctx: CanvasRenderingContext2D, race: Race, w: number): number {
   const { track } = race;
   const b = track.bounds;
   const size = Math.min(200, w * 0.28);
@@ -96,6 +97,7 @@ function drawMinimap(ctx: CanvasRenderingContext2D, race: Race, w: number) {
     ctx.fill();
   }
   ctx.restore();
+  return oy + 8 + (b.maxY - b.minY) * s;
 }
 
 function drawHud(ctx: CanvasRenderingContext2D, race: Race, w: number, h: number) {
@@ -193,8 +195,12 @@ export function render(ctx: CanvasRenderingContext2D, race: Race, w: number, h: 
     ctx.stroke();
   }
 
-  boost.drawBehind(ctx, (car, x, y, angle, alpha) => drawGhost(ctx, car, x, y, angle, alpha), race.cars);
+  // The Jet's shadow slides away from it while it climbs (before the cars; only above 1 m).
+  const flight = race.flight;
+  flight?.drawShadow(ctx, player);
+  boost.drawBehind(ctx, (car, x, y, angle, alpha) => drawGhost(ctx, car, x, y, angle, alpha, car.isPlayer && flight ? flight.look(car).wing : 0), race.cars);
   for (const car of race.cars) {
+    if (car.isPlayer && flight && isAirborne(car)) continue; // drawn in the high layer below, over the scenery
     if (boost.isBoosting(car)) {
       // The flame comes out of the rear, under the body (local frame: front toward -y).
       ctx.save();
@@ -204,7 +210,8 @@ export function render(ctx: CanvasRenderingContext2D, race: Race, w: number, h: 
       boost.drawCarFlame(ctx, car);
       ctx.restore();
     }
-    drawCarSprite(ctx, car.model, car.skin, car.pos.x, car.pos.y, car.angle);
+    if (car.isPlayer && flight) flight.drawCar(ctx, car);
+    else drawCarSprite(ctx, car.model, car.skin, car.pos.x, car.pos.y, car.angle);
     race.hazard?.drawCarOverlay?.(ctx, car.id, car.pos.x, car.pos.y, car.angle);
   }
   for (const p of race.straw) {
@@ -227,11 +234,19 @@ export function render(ctx: CanvasRenderingContext2D, race: Race, w: number, h: 
     ctx.drawImage(overhead, b.minX, b.minY, b.maxX - b.minX, b.maxY - b.minY);
     ctx.globalAlpha = 1;
   }
+
+  // High layer: a Jet above 20 m flies over everything (bridge, eruption, tunnel ceiling), below only the HUD.
+  if (flight && isAirborne(player)) {
+    flight.drawCar(ctx, player);
+    race.hazard?.drawCarOverlay?.(ctx, player.id, player.pos.x, player.pos.y, player.angle);
+    flight.drawWingTrails(ctx, player);
+  }
   ctx.restore();
 
   theme.fx.screen?.(ctx, view);
-  drawMinimap(ctx, race, w);
+  const mapBottom = drawMinimap(ctx, race, w);
   drawHud(ctx, race, w, h);
   boost.drawHud(ctx, player, w, h);
   race.hazard?.drawHud?.(ctx, w, h);
+  flight?.drawHud(ctx, player, w, h, mapBottom);
 }

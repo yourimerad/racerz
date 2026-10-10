@@ -1,5 +1,6 @@
 import { type BoostSystem, createBoost } from "./boost";
-import { type Car, type Input, type Surface, NO_INPUT, CAR_RADIUS, PHYS, stepCar, slipOf, speedOf } from "./car";
+import { type Car, type Input, type Surface, NO_INPUT, CAR_RADIUS, PHYS, isAirborne, stepCar, slipOf, speedOf } from "./car";
+import { FlightController, distToLine } from "./flight";
 import { type ModelId, type SkinId, MODELS, carStats, skinOf } from "./garage";
 import { type Circle, type Cue, type Hazard, type HazardBody, type Rng, type Scene, mulberry32 } from "./scenery";
 import { type Theme, type ThemeId, THEMES, sceneFor } from "./themes";
@@ -48,6 +49,8 @@ export type Race = {
   cues: Cue[];
   /** The mode's boost pads and every car's turbo (see boost.ts). */
   boost: BoostSystem;
+  /** The human's flight (Shift) when they drive the Racerz Jet, else null (see flight.ts). */
+  flight: FlightController | null;
 };
 
 export type Straw = { x: number; y: number; vx: number; vy: number; rot: number; life: number };
@@ -86,7 +89,7 @@ export function createRace(themeId: ThemeId, player: PlayerCar, seed?: number): 
     const skin = isPlayer ? skinOf(player.model, player.skin) : { name: r.name, body: r.color, accent: r.color };
     return {
       id: i, name: isPlayer ? `Toi (${MODELS[player.model].name})` : r.name, color: skin.body, isPlayer,
-      model: isPlayer ? player.model : "gt", skin, skill: stats.speed, accelMul: stats.accel, gripMul: stats.grip, speedMul: 1, boostMul: 1,
+      model: isPlayer ? player.model : "gt", skin, skill: stats.speed, accelMul: stats.accel, gripMul: stats.grip, speedMul: 1, boostMul: 1, flyMul: 1, alt: 0,
       offTime: 0, hits: 0, hitCooldown: 0, stun: 0,
       pos, vel: vec(0, 0), angle: Math.atan2(t.y, t.x),
       progress: idx - n, lastIndex: idx, lap: 0, lapStart: 0, bestLap: null, finishTime: null, surface: "track",
@@ -99,7 +102,25 @@ export function createRace(themeId: ThemeId, player: PlayerCar, seed?: number): 
   const boost = createBoost(theme.id, track, { bumpers: scene.bumpers, lava: scene.lava }, GRID_FIRST + (ROSTER.length - 1) * GRID_ROW);
   // Only modes with a moving obstacle consume the PRNG here, so the other modes replay as before.
   const hazard = scene.hazard ? scene.hazard(track, mulberry32((rng() * 2 ** 32) >>> 0)) : null;
-  return { track, theme, scene, cars, phase: "countdown", time: -COUNTDOWN, skids: [], overheadOpacity: 1, rng, ai, straw: [], crashes: [], hazard, cues: [], boost };
+  const race: Race = { track, theme, scene, cars, phase: "countdown", time: -COUNTDOWN, skids: [], overheadOpacity: 1, rng, ai, straw: [], crashes: [], hazard, cues: [], boost, flight: null };
+  if (MODELS[player.model].flying) {
+    const cue = (kind: "takeoff" | "land") => {
+      if (race.cues.length < 16) race.cues.push({ kind, power: 1 });
+    };
+    race.flight = new FlightController({
+      speed: (car) => Math.hypot(car.vel.x, car.vel.y),
+      setSpeedMultiplier: (car, f) => {
+        car.flyMul = f;
+      },
+      // The start line is the finish line (sample 0); a car is on the same side of it for both.
+      distToFinish: (car) => distToLine(track, car),
+      distToStart: (car) => distToLine(track, car),
+      noFlyAt: (x, y) => race.phase === "countdown" || (race.scene.noFly?.(x, y) ?? false),
+      onTakeoff: () => cue("takeoff"),
+      onLand: () => cue("land"),
+    });
+  }
+  return race;
 }
 
 /** Bots under a turbo: how far ahead (× their usual look-ahead) they check bends, and the deceleration they plan their braking with (u/s², under the real 950). */
@@ -260,6 +281,7 @@ export function aiInput(race: Race, car: Car, dt: number, allowMistakes = true):
     left: diff < -0.04,
     right: diff > 0.04,
     handbrake: false,
+    fly: false, // bots never fly
   };
 }
 
@@ -275,6 +297,7 @@ function noteImpact(race: Race, car: Car, speed: number) {
 }
 
 function collide(race: Race, a: Car, b: Car) {
+  if (isAirborne(a) || isAirborne(b)) return; // a flying car passes over the others
   const d = sub(b.pos, a.pos);
   const dist = len(d);
   const min = CAR_RADIUS * 2;
@@ -295,9 +318,9 @@ function collide(race: Race, a: Car, b: Car) {
   }
 }
 
-function surfaceAt(race: Race, p: Vec, dist: number): Surface {
+function surfaceAt(race: Race, p: Vec, dist: number, airborne: boolean): Surface {
   if (dist < race.track.width / 2) return "track";
-  for (const l of race.scene.lava) if ((l.x - p.x) ** 2 + (l.y - p.y) ** 2 < (l.r * 0.9) ** 2) return "lava";
+  if (!airborne) for (const l of race.scene.lava) if ((l.x - p.x) ** 2 + (l.y - p.y) ** 2 < (l.r * 0.9) ** 2) return "lava";
   return "offtrack";
 }
 
@@ -314,7 +337,7 @@ function hitBarrier(race: Race, car: Car, index: number, dist: number) {
   if (vn > 80) {
     race.boost.cut(car);
     if (car.hitCooldown <= 0) {
-      car.hits++;
+      if (!isAirborne(car)) car.hits++; // walls stay solid in flight, but a flying car's touches don't count for the clean-race rule
       car.hitCooldown = 0.5;
       noteCrash(race, car, vn);
     }
@@ -340,7 +363,7 @@ const BUMPER_STUN = 0.6;
  */
 function hitBumpers(race: Race, car: Car) {
   const bumpers = race.scene.bumpers;
-  if (!bumpers?.length) return;
+  if (!bumpers?.length || isAirborne(car)) return; // a flying car passes over the bales
   let nx = 0, ny = 0, deepest = 0, hit: Circle | null = null;
   for (let pass = 0; pass < 3; pass++) {
     let moved = false;
@@ -394,7 +417,7 @@ function hitBumpers(race: Race, car: Car) {
  */
 function hitHazard(race: Race, car: Car) {
   const hz = race.hazard;
-  if (!hz?.bodies || !hz.impact) return;
+  if (!hz?.bodies || !hz.impact || isAirborne(car)) return; // a flying car passes over the bear
   const { speedKeep, restitution, minImpact } = hz.impact;
   for (const b of hz.bodies()) {
     const c = Math.cos(b.angle), s = Math.sin(b.angle);
@@ -441,7 +464,7 @@ function updateProgress(race: Race, car: Car, dt: number) {
   hitBarrier(race, car, loc.index, loc.dist);
   hitBumpers(race, car);
   hitHazard(race, car);
-  car.surface = surfaceAt(race, car.pos, Math.min(loc.dist, race.track.barrier));
+  car.surface = surfaceAt(race, car.pos, Math.min(loc.dist, race.track.barrier), isAirborne(car));
   if (race.phase === "racing" && car.finishTime === null && car.surface !== "track") car.offTime += dt;
   let delta = loc.index - car.lastIndex;
   if (delta > n / 2) delta -= n;
@@ -498,6 +521,7 @@ export function stepRace(race: Race, playerInput: Input, dt: number, playerIsAi 
       else input = aiInput(race, car, dt);
     }
     if (car.stun > 0) input = { ...input, throttle: false };
+    if (car.isPlayer && race.flight) race.flight.update(dt, car, live && input.fly);
     const before = car.pos;
     stepCar(car, input, dt, race.theme.phys);
     car.hitCooldown -= dt;
@@ -524,7 +548,7 @@ export function stepRace(race: Race, playerInput: Input, dt: number, playerIsAi 
   race.straw = race.straw.filter((p) => p.life > 0).slice(-300);
 
   // Fade the overhead layer when the player is under a covered section (~0.25s either way).
-  const target = isCovered(race.track, race.cars[0].lastIndex) ? 0.3 : 1;
+  const target = isCovered(race.track, race.cars[0].lastIndex) && !isAirborne(race.cars[0]) ? 0.3 : 1; // a Jet overhead sees the whole ceiling
   race.overheadOpacity += (target - race.overheadOpacity) * Math.min(1, dt / 0.25);
 
   if (race.phase === "racing" && race.cars[0].finishTime !== null) race.phase = "finished";

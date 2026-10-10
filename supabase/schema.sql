@@ -43,7 +43,7 @@ create or replace function public.racerz_car_price(p_model text) returns integer
 language sql immutable as $$
   select case p_model
     when 'gt' then 0 when 'mx5' then 5000 when 'p911' then 20000
-    when 'aventador' then 60000 when 'f8' then 150000 end
+    when 'aventador' then 60000 when 'f8' then 150000 when 'jet' then 550000 end
 $$;
 
 create or replace function public.racerz_skin_price(p_skin text) returns integer
@@ -108,6 +108,7 @@ language plpgsql security definer set search_path = public as $$
 declare r public.profiles; price integer := public.racerz_skin_price(p_skin);
 begin
   r := public.racerz_lock_profile();
+  if r.selected = 'jet' then raise exception 'fixed_skin'; end if;  -- la carrosserie de la Racerz Jet est fixe
   if price is null or p_skin = 'factory' then raise exception 'unknown_skin'; end if;
   if p_skin = any (r.skins) then raise exception 'already_owned'; end if;
   if r.money < price then raise exception 'not_enough_money'; end if;
@@ -125,6 +126,7 @@ language plpgsql security definer set search_path = public as $$
 declare r public.profiles;
 begin
   r := public.racerz_lock_profile();
+  if r.selected = 'jet' then raise exception 'fixed_skin'; end if;
   if not (p_skin = any (r.skins)) then raise exception 'skin_not_owned'; end if;
   update public.profiles
      set cars = jsonb_set(cars, array[selected, 'skin'], to_jsonb(p_skin)), updated_at = now()
@@ -217,7 +219,7 @@ begin
       lvl := case when jsonb_typeof(v -> 'level') = 'number' and (v ->> 'level') ~ '^\d+$' then least(greatest((v ->> 'level')::integer, 1), 10) else 1 end;
       pal := case when jsonb_typeof(v -> 'paliers') = 'number' and (v ->> 'paliers') ~ '^\d+$' then least((v ->> 'paliers')::integer, 4) else 0 end;
       skin := v ->> 'skin';
-      if skin is null or not (skin = any (new_skins)) then skin := 'factory'; end if;
+      if skin is null or not (skin = any (new_skins)) or k = 'jet' then skin := 'factory'; end if;
       new_cars := new_cars || jsonb_build_object(k, jsonb_build_object('level', lvl, 'paliers', pal, 'skin', skin));
     end loop;
   end if;

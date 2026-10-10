@@ -329,12 +329,77 @@ class Sound {
     o.stop(now + 0.5);
   }
 
+  /** A jet engine spooling up: a rising roar of air over a low whine (the Racerz Jet taking off). */
+  takeoff() {
+    const ctx = this.ctx, master = this.master, noise = this.noise;
+    if (!ctx || !master || !noise) return;
+    const now = ctx.currentTime, dur = 1.2;
+    const src = ctx.createBufferSource();
+    src.buffer = noise;
+    const lp = ctx.createBiquadFilter();
+    lp.type = "lowpass";
+    lp.Q.value = 0.9;
+    lp.frequency.setValueAtTime(300, now);
+    lp.frequency.exponentialRampToValueAtTime(2600, now + dur * 0.8);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.exponentialRampToValueAtTime(0.3, now + 0.35);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+    src.connect(lp).connect(g).connect(master);
+    src.start(now, Math.random() * 0.3, dur + 0.05);
+    const o = ctx.createOscillator();
+    o.type = "sawtooth";
+    o.frequency.setValueAtTime(70, now);
+    o.frequency.exponentialRampToValueAtTime(420, now + dur * 0.85);
+    const ol = ctx.createBiquadFilter();
+    ol.type = "lowpass";
+    ol.frequency.value = 900;
+    const og = ctx.createGain();
+    og.gain.setValueAtTime(0.0001, now);
+    og.gain.exponentialRampToValueAtTime(0.1, now + 0.4);
+    og.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+    o.connect(ol).connect(og).connect(master);
+    o.start(now);
+    o.stop(now + dur + 0.05);
+  }
+
+  /** The wheels touching down: two short "clac". */
+  land() {
+    const ctx = this.ctx, master = this.master, noise = this.noise;
+    if (!ctx || !master || !noise) return;
+    const now = ctx.currentTime;
+    for (const at of [0, 0.11]) {
+      const t = now + at;
+      const o = ctx.createOscillator();
+      o.frequency.setValueAtTime(190, t);
+      o.frequency.exponentialRampToValueAtTime(70, t + 0.07);
+      const og = ctx.createGain();
+      og.gain.setValueAtTime(0.35, t);
+      og.gain.exponentialRampToValueAtTime(0.001, t + 0.09);
+      o.connect(og).connect(master);
+      o.start(t);
+      o.stop(t + 0.1);
+      const src = ctx.createBufferSource();
+      src.buffer = noise;
+      const bp = ctx.createBiquadFilter();
+      bp.type = "bandpass";
+      bp.frequency.value = 1800;
+      const ng = ctx.createGain();
+      ng.gain.setValueAtTime(0.18, t);
+      ng.gain.exponentialRampToValueAtTime(0.001, t + 0.04);
+      src.connect(bp).connect(ng).connect(master);
+      src.start(t, Math.random() * 0.5, 0.05);
+    }
+  }
+
   /** Plays a sound requested by the simulation (see Cue in scenery.ts). */
-  cue(kind: "growl" | "thud" | "warn" | "sizzle" | "boost", power: number) {
+  cue(kind: "growl" | "thud" | "warn" | "sizzle" | "boost" | "takeoff" | "land", power: number) {
     if (kind === "growl") this.growl(power);
     else if (kind === "thud") this.thud(power);
     else if (kind === "warn") this.warn(power);
     else if (kind === "boost") this.whoosh(power);
+    else if (kind === "takeoff") this.takeoff();
+    else if (kind === "land") this.land();
     else this.sizzle(power);
   }
 

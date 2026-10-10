@@ -57,6 +57,8 @@ const MESSAGES: Record<string, string> = {
   "User already registered": "Un compte existe déjà avec cette adresse e-mail.",
   not_enough_money: "Pas assez d'argent sur le compte.",
   already_owned: "Déjà possédé.",
+  fixed_skin: "La Racerz Jet a une carrosserie fixe : pas de skin.",
+  unknown_car: "Cette voiture n'existe pas encore sur le serveur : rejoue supabase/schema.sql dans Supabase.",
   race_not_valid: "Course non validée par le serveur : gain refusé.",
   bad_result: "Résultat de course refusé par le serveur.",
   already_imported: "La progression locale a déjà été reprise.",

@@ -13,7 +13,7 @@ export type Circle = { x: number; y: number; r: number };
 export type HazardBody = { id: number; x: number; y: number; vx: number; vy: number; angle: number; rx: number; ry: number };
 
 /** A short sound/effect request raised during the simulation; Game.tsx plays it. */
-export type Cue = { kind: "growl" | "thud" | "warn" | "sizzle" | "boost"; power: number };
+export type Cue = { kind: "growl" | "thud" | "warn" | "sizzle" | "boost" | "takeoff" | "land"; power: number };
 
 /** What a hazard may look at (Race satisfies this) and write to (`cues`). */
 export type HazardWorld = {
@@ -21,7 +21,7 @@ export type HazardWorld = {
   phase: "countdown" | "racing" | "finished";
   track: Track;
   /** The cars (the Race's own objects: a hazard may slow one down by writing `speedMul` or `vel`). */
-  cars: ReadonlyArray<{ id: number; isPlayer: boolean; pos: Vec; vel: Vec; angle: number; speedMul: number; lastIndex: number; finishTime: number | null }>;
+  cars: ReadonlyArray<{ id: number; isPlayer: boolean; pos: Vec; vel: Vec; angle: number; speedMul: number; lastIndex: number; finishTime: number | null; alt: number }>;
   cues: Cue[];
 };
 
@@ -71,6 +71,8 @@ export type Scene = {
   bumpers?: Circle[];
   /** Builds this mode's moving obstacle for one race (`rng` is seeded from the race's own PRNG). */
   hazard?(track: Track, rng: Rng): Hazard;
+  /** Spots where nobody may fly (the Racerz Jet lands there). No mode defines one yet. */
+  noFly?(x: number, y: number): boolean;
   /** Ground painted under the track. */
   under(ctx: Ctx): void;
   /** Texture painted over the asphalt (dust, ice streaks…). */
