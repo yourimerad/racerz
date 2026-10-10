@@ -123,12 +123,6 @@ export function createRace(themeId: ThemeId, player: PlayerCar, seed?: number): 
         noFlyAt: (x, y) => race.phase === "countdown" || (race.scene.noFly?.(x, y) ?? false),
         floorAlt: (x, y) => floorAltAt(race, x, y),
         inWorld: (x, y) => x > b.minX && x < b.maxX && y > b.minY && y < b.maxY,
-        nearestRoadPoint: (x, y) => {
-          const i = locate(track, vec(x, y)).index, t = track.tangents[i];
-          return { x: track.path[i].x, y: track.path[i].y, heading: Math.atan2(t.y, t.x) };
-        },
-        respawn: (car, x, y, heading, speedFactor) => respawnCar(race, car, x, y, heading, speedFactor),
-        addTimePenalty: (car, sec) => addPenalty(car, sec),
         onTakeoff: () => cue("takeoff"),
         onLand: () => cue("land"),
       },

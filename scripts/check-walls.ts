@@ -4,7 +4,7 @@
 //   (b) crossing: a Jet at the wall's height flies over it in every mode, one metre lower it hits it (a contact, the usual bounce); the world's outer
 //       limits stay solid at any altitude; every other car — a Racerz GT, a bot, the Jet itself on the ground — is stopped by the walls as before;
 //   (c) energy: 1.5 / s over a wall, 1 / s elsewhere; release Shift over a wall → it glides at the wall's height and lands only on the road; an empty
-//       tank over a wall → back to the nearest road point (heading with the race, 40 % of the speed, +2 s, no contact, no damage, a message);
+//       tank over a wall → no forced return: it keeps gliding at the wall's height and lands when it is over the road again (no jump, no penalty);
 //       no-fly zones over a wall → it cannot land there either; flying is not time off the road and has no ground drag;
 //   (d) a real shortcut in the desert: over the wall to the other side of a bend, back on the road, landing;
 //   (e) checkpoints: 8 gates, in order, forward only, crossed in the air too; a lap with a gate missing is refused (back to the first missing one, +2 s,
@@ -169,7 +169,7 @@ console.log("Racerz Jet walls checks\n");
   }
 }
 
-// ---------- (c) energy, gliding, forced return ----------
+// ---------- (c) energy, gliding, an empty tank ----------
 {
   const rate = (over: boolean) => {
     const { race, car } = solo("desert");
@@ -212,42 +212,40 @@ console.log("Racerz Jet walls checks\n");
   check(car.alt > 65, `pressed again over the wall: altitude ${car.alt}`);
 }
 {
-  // An empty tank over a wall: the forced return.
+  // An empty tank over a wall: there is no forced return — the Jet keeps its place (no jump, no penalty, no message), glides at the wall's height and
+  // lands as soon as it is over the road again. It just cannot climb back up.
   for (const mode of ["desert", "volcano"] as ThemeId[]) {
     const { race, car } = solo(mode);
-    const sp = roadSpot(race), f = race.flight!, s = f.st(car);
+    const sp = roadSpot(race), s = race.flight!.st(car);
     const vz = mode === "volcano" ? (race.hazard as VolcanoHazard) : null;
     if (vz) vz.hazards.armed = false;
-    const px = sp.p.x + sp.nx * (race.track.barrier + 220), py = sp.p.y + sp.ny * (race.track.barrier + 220);
-    tp(race, car, px, py, 0.7, 700);
-    lift(race, car, FLY.MAX_ALT, 0.4);
-    const speed0 = speedOf(car), lapStart0 = car.lapStart, hits0 = car.hits;
-    let landedBy = -1;
-    for (let i = 0; i < 4 / DT && landedBy < 0; i++) {
-      stepRace(race, FLYING, DT);
-      if (s.respawned > 0) landedBy = i * DT;
+    const out = race.track.barrier + 90;
+    tp(race, car, sp.p.x + sp.nx * out, sp.p.y + sp.ny * out, Math.atan2(-sp.ny, -sp.nx), 150); // heading back to the road, slowly
+    lift(race, car, FLY.MAX_ALT, 0.2);
+    const lapStart0 = car.lapStart, hits0 = car.hits, H = wallHeightOf(mode);
+    let maxJump = 0, drained = -1, minAlt = Infinity, touchdown = -1;
+    for (let i = 0; i < 6 / DT; i++) {
+      const before = { ...car.pos };
+      stepRace(race, { ...NO_INPUT, fly: true }, DT); // Shift held, no throttle
+      maxJump = Math.max(maxJump, Math.hypot(car.pos.x - before.x, car.pos.y - before.y));
+      if (drained < 0 && s.energy <= 0) drained = i * DT;
+      if (drained >= 0 && distFromRoad(race, car) > race.track.barrier) minAlt = Math.min(minAlt, car.alt);
+      if (s.mode === "ground" && touchdown < 0) touchdown = i * DT;
+      if (touchdown >= 0) break;
     }
-    check(landedBy >= 0, `${mode}: an empty tank over a wall did not bring the Jet back`);
-    const loc = locate(race.track, car.pos);
-    const road = race.track.path[loc.index], tg = race.track.tangents[loc.index];
-    check(Math.hypot(car.pos.x - road.x, car.pos.y - road.y) < 12, `${mode}: not back on the centre line (${Math.hypot(car.pos.x - road.x, car.pos.y - road.y).toFixed(0)} px off)`);
-    let dh = car.angle - Math.atan2(tg.y, tg.x);
-    while (dh > Math.PI) dh -= 2 * Math.PI;
-    while (dh < -Math.PI) dh += 2 * Math.PI;
-    check(Math.abs(dh) < 0.3, `${mode}: not heading with the race (${dh.toFixed(2)} rad off)`);
-    check(s.mode === "ground" && car.alt === 0 && s.wing === 0, `${mode}: after the return the Jet is ${s.mode} at ${car.alt} m`);
-    check(speedOf(car) < speed0 * 0.55 && speedOf(car) > speed0 * 0.25, `${mode}: speed ${speedOf(car).toFixed(0)} (from ${speed0.toFixed(0)}: expected about 40 %)`);
-    near(`${mode}: time penalty`, car.penalty, 2, 1e-9);
-    near(`${mode}: the lap clock moved back by`, lapStart0 - car.lapStart, 2, 1e-9);
-    check(car.hits === hits0, `${mode}: the return counted a contact`);
-    check(car.shield > 0.5, `${mode}: no grace after the return`);
-    check(s.respawned > 1, `${mode}: no "Retour sur la piste" message`);
-    if (vz) check(vz.hazards.st(car).hp === 100, "the return cost health");
-    console.log(`  ${mode}: empty tank over a wall → on the road after ${landedBy.toFixed(1)} s, ${(speedOf(car) / speed0 * 100).toFixed(0)} % of the speed, +2 s`);
+    check(drained >= 0 && drained < 0.4, `${mode}: the tank did not run dry over the wall (${drained})`);
+    check(maxJump < 15, `${mode}: the Jet jumped ${maxJump.toFixed(0)} px in one step (a return to the road?)`);
+    check(car.penalty === 0 && car.lapStart === lapStart0, `${mode}: a penalty was added (${car.penalty} s)`);
+    check(car.hits === hits0, `${mode}: a contact was counted`);
+    check(minAlt === H, `${mode}: with an empty tank over the wall the Jet was at ${minAlt} m instead of gliding at ${H} m`);
+    check(touchdown >= 0 && car.alt === 0, `${mode}: the Jet never landed once back over the road (mode ${s.mode}, ${car.alt.toFixed(0)} m)`);
+    check(car.shield === 0, `${mode}: grace after a "return" that no longer exists`);
+    if (vz) check(vz.hazards.st(car).hp === 100, "health changed");
+    console.log(`  ${mode}: empty tank over a wall → glides at ${H} m, lands on the road after ${touchdown.toFixed(1)} s, no jump, no penalty`);
   }
 }
 {
-  // A no-fly zone over a wall: the Jet cannot land there either (it glides, then the forced return).
+  // A no-fly zone over a wall: the Jet cannot land there either (it glides on).
   const { race, car } = solo("desert");
   const sp = roadSpot(race), s = race.flight!.st(car);
   race.scene = { ...race.scene, noFly: () => true };
