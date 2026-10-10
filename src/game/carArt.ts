@@ -1,5 +1,6 @@
 import { CAR_LENGTH, CAR_WIDTH } from "./car";
 import type { ModelId, Skin } from "./garage";
+import { drawJetSprite } from "./jetArt";
 
 // Top-down car sprites drawn in code, nose pointing to +x, about CAR_LENGTH × CAR_WIDTH.
 
@@ -450,9 +451,16 @@ function p911(ctx: Ctx, skin: Skin) {
   ctx.fillRect(-L + 0.9, -5.8, 0.6, 11.6);
 }
 
-const ART: Record<ModelId, (ctx: Ctx, skin: Skin) => void> = { gt, mx5, p911, aventador, f8 };
+const ART: Record<Exclude<ModelId, "jet">, (ctx: Ctx, skin: Skin) => void> = { gt, mx5, p911, aventador, f8 };
 
-export function drawCarSprite(ctx: Ctx, model: ModelId, skin: Skin, x: number, y: number, angle: number) {
+/**
+ * `wing` only matters for the Racerz Jet (0 = wings folded): its drawing, shadow included, lives in jetArt.ts and has no skins.
+ */
+export function drawCarSprite(ctx: Ctx, model: ModelId, skin: Skin, x: number, y: number, angle: number, wing = 0) {
+  if (model === "jet") {
+    drawJetSprite(ctx, x, y, angle, { wing });
+    return;
+  }
   ctx.save();
   // Soft drop shadow, offset in world space (fixed light): a wide faint layer under a tighter darker one.
   ctx.translate(x + 2, y + 2.5);

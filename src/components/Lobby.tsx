@@ -10,6 +10,7 @@ import {
 import { formatTime } from "@/game/render";
 import { type ThemeId, THEMES, THEME_ORDER } from "@/game/themes";
 import AccountPanel from "./AccountPanel";
+import JetCard from "./JetCard";
 import SoundButton from "./SoundButton";
 import styles from "./Game.module.css";
 
@@ -76,6 +77,7 @@ export default function Lobby({ profile, actions, mode, setMode, record, onStart
           <h2>Garage</h2>
           <div className={styles.cars}>
             {MODEL_ORDER.map((id) => {
+              if (id === "jet") return <JetCard key={id} profile={profile} actions={actions} />;
               const owned = profile.cars[id];
               const m = MODELS[id];
               const st = carStats(id, owned?.level ?? 1);
@@ -115,26 +117,34 @@ export default function Lobby({ profile, actions, mode, setMode, record, onStart
         <section className={styles.panel}>
           <h2>Boutique de skins</h2>
           <p className={styles.sub}>Pour : {MODELS[profile.selected].name}. Un skin acheté sert sur toutes vos voitures.</p>
-          <div className={styles.skins}>
-            {SKIN_ORDER.map((id) => {
-              const owned = profile.skins.includes(id);
-              const equipped = selected?.skin === id;
-              const price = id === "factory" ? 0 : SKINS[id].price;
-              const skin = skinOf(profile.selected, id);
-              return (
-                <button
-                  key={id}
-                  className={`${styles.skin} ${equipped ? styles.skinOn : ""}`}
-                  disabled={!owned && profile.money < price}
-                  onClick={() => (owned ? actions.equipSkin(id) : actions.buySkin(id))}
-                >
-                  <CarPreview model={profile.selected} skin={id} size={1.4} />
-                  <span>{skin.name}</span>
-                  <small>{equipped ? "Équipé" : owned ? "Équiper" : formatMoney(price)}</small>
-                </button>
-              );
-            })}
-          </div>
+          {MODELS[profile.selected].fixedSkin && (
+            <p className={styles.fixedSkin}>
+              La {MODELS[profile.selected].name} a une carrosserie fixe (blanc et rouge) : les skins ne s&apos;appliquent pas à elle. Choisissez une autre voiture
+              pour en acheter ou en équiper un.
+            </p>
+          )}
+          {!MODELS[profile.selected].fixedSkin && (
+            <div className={styles.skins}>
+              {SKIN_ORDER.map((id) => {
+                const owned = profile.skins.includes(id);
+                const equipped = selected?.skin === id;
+                const price = id === "factory" ? 0 : SKINS[id].price;
+                const skin = skinOf(profile.selected, id);
+                return (
+                  <button
+                    key={id}
+                    className={`${styles.skin} ${equipped ? styles.skinOn : ""}`}
+                    disabled={!owned && profile.money < price}
+                    onClick={() => (owned ? actions.equipSkin(id) : actions.buySkin(id))}
+                  >
+                    <CarPreview model={profile.selected} skin={id} size={1.4} />
+                    <span>{skin.name}</span>
+                    <small>{equipped ? "Équipé" : owned ? "Équiper" : formatMoney(price)}</small>
+                  </button>
+                );
+              })}
+            </div>
+          )}
 
           <h2>Course</h2>
           <div className={styles.modes} role="radiogroup" aria-label="Environnement">
@@ -161,6 +171,7 @@ export default function Lobby({ profile, actions, mode, setMode, record, onStart
           <button className={styles.cta} onClick={onStart}>Démarrer (Entrée / Espace)</button>
           <ul className={styles.help}>
             <li><kbd>↑</kbd>/<kbd>W</kbd>/<kbd>Z</kbd> accélérer · <kbd>↓</kbd>/<kbd>S</kbd> freiner · <kbd>←</kbd><kbd>→</kbd>/<kbd>A</kbd><kbd>Q</kbd><kbd>D</kbd> tourner · <kbd>Espace</kbd> frein à main</li>
+            <li><kbd>Shift</kbd> (maintenu) voler, avec la Racerz Jet</li>
             <li>
               <kbd>1</kbd>–<kbd>4</kbd> mode · <kbd>R</kbd> recommencer{debug && <> · <kbd>H</kbd> panneau debug</>}
             </li>

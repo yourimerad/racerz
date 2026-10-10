@@ -1,4 +1,4 @@
-import type { Car } from "./car";
+import { type Car, isAirborne } from "./car";
 import { type Rng, TAU, mulberry32 } from "./scenery";
 import { isCovered, locate, type Track } from "./track";
 
@@ -277,7 +277,7 @@ export class BoostSystem {
       if (!this.enabled) continue;
       const c = Math.cos(pad.heading), s = Math.sin(pad.heading);
       for (const car of cars) {
-        if (car.finishTime !== null || pad.cool.has(car.id)) continue;
+        if (car.finishTime !== null || pad.cool.has(car.id) || isAirborne(car)) continue; // a flying car passes over the pads
         const dx = car.pos.x - pad.x, dy = car.pos.y - pad.y;
         const along = dx * c + dy * s, across = -dx * s + dy * c;
         if (Math.abs(along) < (BOOST.PAD_L * k) / 2 && Math.abs(across) < (BOOST.PAD_W * k) / 2) this.trigger(car, pad, onTrigger);

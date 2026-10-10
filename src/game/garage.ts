@@ -3,7 +3,7 @@
 // is signed in (see account.ts) the account's profile replaces it, and localStorage is left
 // untouched as the guest save.
 
-export type ModelId = "gt" | "mx5" | "p911" | "aventador" | "f8";
+export type ModelId = "gt" | "mx5" | "p911" | "aventador" | "f8" | "jet";
 export type SkinId = "factory" | "pearl" | "electric" | "mantis" | "arancio" | "stripes" | "carbon" | "gold";
 
 export type CarModel = {
@@ -18,6 +18,10 @@ export type CarModel = {
   grip: number;
   /** Factory paint. */
   factory: Skin;
+  /** The paint is fixed: no skin applies to this car (the Racerz Jet). */
+  fixedSkin?: boolean;
+  /** Can fly (hold Shift, see flight.ts). It has its own "Vol" bar in the garage and stays out of the stat bars' scale. */
+  flying?: boolean;
 };
 
 export type Skin = {
@@ -49,8 +53,16 @@ export const MODELS: Record<ModelId, CarModel> = {
     id: "f8", name: "Ferrari F8 Spider", tagline: "La plus rapide, mais glissante", price: 150_000, speed: 1.24, accel: 1.3, grip: 0.8,
     factory: { name: "Rosso Corsa", body: "#d40000", accent: "#8a0000" },
   },
+  // Speed / accel / grip are set so the garage bars read 92 / 85 / 70 at level 1 on the existing scale (STAT_RANGE below).
+  jet: {
+    id: "jet", name: "Racerz Jet", tagline: "Elle vole : Shift maintenu", price: 550_000, speed: 1.422, accel: 1.542, grip: 1.132,
+    factory: { name: "Blanc et rouge", body: "#f2f6fa", accent: "#d63a2f" }, fixedSkin: true, flying: true,
+  },
 };
-export const MODEL_ORDER: ModelId[] = ["gt", "mx5", "p911", "aventador", "f8"];
+export const MODEL_ORDER: ModelId[] = ["gt", "mx5", "p911", "aventador", "f8", "jet"];
+
+/** The Jet's own flight bar in the garage, out of 100. */
+export const FLY_BAR = 100;
 
 export const SKINS: Record<Exclude<SkinId, "factory">, Skin & { price: number }> = {
   pearl: { name: "Blanc nacré", body: "#f2f0ea", accent: "#c9c4b8", price: 4_000 },
@@ -64,7 +76,7 @@ export const SKINS: Record<Exclude<SkinId, "factory">, Skin & { price: number }>
 export const SKIN_ORDER: SkinId[] = ["factory", "pearl", "electric", "mantis", "arancio", "stripes", "carbon", "gold"];
 
 export function skinOf(model: ModelId, skin: SkinId): Skin {
-  return skin === "factory" ? MODELS[model].factory : SKINS[skin];
+  return skin === "factory" || MODELS[model].fixedSkin ? MODELS[model].factory : SKINS[skin];
 }
 
 export type OwnedCar = { level: number; paliers: number; skin: SkinId };
@@ -97,9 +109,10 @@ export type StatKey = "speed" | "accel" | "grip";
 /**
  * Display range per stat, derived from MODELS: from the weakest base car (level 1) to the
  * strongest at MAX_LEVEL, with a small margin below so the weakest value stays visible.
+ * The flying Jet is left out, so adding it did not move any other car's bars.
  */
 export const STAT_RANGE: Record<StatKey, { min: number; max: number }> = (() => {
-  const ids = Object.keys(MODELS) as ModelId[];
+  const ids = (Object.keys(MODELS) as ModelId[]).filter((id) => !MODELS[id].flying);
   const range = (key: StatKey) => {
     const lo = Math.min(...ids.map((id) => carStats(id, 1)[key]));
     const hi = Math.max(...ids.map((id) => carStats(id, MAX_LEVEL)[key]));
@@ -146,13 +159,14 @@ export function buyCar(p: Profile, id: ModelId): Profile {
 }
 
 export function buySkin(p: Profile, id: SkinId): Profile {
+  if (MODELS[p.selected].fixedSkin) return p; // nothing to paint (the Jet's body is fixed)
   if (id === "factory" || p.skins.includes(id) || p.money < SKINS[id].price) return p;
   return equipSkin({ ...p, money: p.money - SKINS[id].price, skins: [...p.skins, id] }, id);
 }
 
 export function equipSkin(p: Profile, id: SkinId): Profile {
   const car = p.cars[p.selected];
-  if (!car || !p.skins.includes(id)) return p;
+  if (!car || !p.skins.includes(id) || MODELS[p.selected].fixedSkin) return p;
   return { ...p, cars: { ...p.cars, [p.selected]: { ...car, skin: id } } };
 }
 
@@ -197,7 +211,7 @@ export function parseProfile(raw: unknown): Profile {
       const o = owned as Record<string, unknown>;
       const level = Number.isInteger(o.level) && (o.level as number) >= 1 && (o.level as number) <= MAX_LEVEL ? (o.level as number) : 1;
       const paliers = Number.isInteger(o.paliers) && (o.paliers as number) >= 0 && (o.paliers as number) < PALIERS_PER_LEVEL ? (o.paliers as number) : 0;
-      const skin = isSkinId(o.skin) && skins.includes(o.skin) ? o.skin : "factory";
+      const skin = isSkinId(o.skin) && skins.includes(o.skin) && !MODELS[id].fixedSkin ? o.skin : "factory";
       cars[id] = { level, paliers, skin };
     }
   }

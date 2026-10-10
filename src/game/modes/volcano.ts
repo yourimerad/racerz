@@ -2,7 +2,7 @@ import type { Fx } from "../fx";
 import { disc, mulberry32, range, rock, scatter, TAU, type Circle, type Hazard, type HazardDanger, type HazardWorld, type Rng, type Scene, softBlob } from "../scenery";
 import { locate, type Track, type TrackLayout } from "../track";
 import { cachedPadSpots, nearPad } from "../boost";
-import { CAR_RADIUS } from "../car";
+import { CAR_RADIUS, isAirborne } from "../car";
 import { vec } from "../vec";
 
 // Volcano: one big cone in the middle of the map, seen from above with the sun at the top-left.
@@ -744,6 +744,7 @@ export class VolcanoHazards {
       }
       if (pl.age >= HZ.POOL_LIFE) continue; // cooled: harmless
       for (const car of cars) {
+        if (isAirborne(car)) continue; // a flying car passes over the pools
         const p = this.A.pos(car);
         if (Math.hypot(p.x - pl.x, p.y - pl.y) < HZ.POOL_RADIUS) burning.add(car);
       }
@@ -814,8 +815,11 @@ export class VolcanoHazards {
   }
 
   private trySpawn(cars: readonly HzCar[]): boolean {
-    const players = cars.filter((c) => this.A.isPlayer(c));
-    const car = players.length && this.rng() < HZ.PLAYER_SHARE ? players[0] : cars[Math.floor(this.rng() * cars.length)];
+    // A flying car is never aimed at (its bomb would fall short anyway).
+    const grounded = cars.filter((c) => !isAirborne(c));
+    if (!grounded.length) return false;
+    const players = grounded.filter((c) => this.A.isPlayer(c));
+    const car = players.length && this.rng() < HZ.PLAYER_SHARE ? players[0] : grounded[Math.floor(this.rng() * grounded.length)];
     // Where the car will be when the bomb lands (so a target on the line it drives cannot simply be passed before it falls),
     // never closer than the prototype's 120..320 and never so far it is off screen for good.
     const reach = (this.A.speed(car) * HZ.WARN_TIME) * this.R(HZ.AIM_SPREAD[0], HZ.AIM_SPREAD[1]);
@@ -843,7 +847,7 @@ export class VolcanoHazards {
     this.pools.push({ id: this.nextId++, x: tg.x, y: tg.y, age: 0, shape: Array.from({ length: 9 }, () => this.R(0.85, 1.15)) });
     for (const car of cars) {
       const p = this.A.pos(car), s = this.st(car);
-      if (s.invuln <= 0 && Math.hypot(p.x - tg.x, p.y - tg.y) < HZ.TARGET_R + this.A.radius(car)) {
+      if (s.invuln <= 0 && !isAirborne(car) && Math.hypot(p.x - tg.x, p.y - tg.y) < HZ.TARGET_R + this.A.radius(car)) {
         const before = s.hp;
         this.damage(car, HZ.BOMB_DAMAGE, false);
         if (before > 0) {
