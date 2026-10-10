@@ -97,6 +97,7 @@ if (Number.isFinite(minGap) && minGap < 20 - 1e-6) fail(`two bears only ${minGap
 // ---------- (c): drive straight into a bear ----------
 {
   const race = newRace(11);
+  race.boost.enabled = false; // plain physics for the scripted impact
   const hz = race.hazard!;
   const player = race.cars[0];
   let bear: HazardBody | null = null;

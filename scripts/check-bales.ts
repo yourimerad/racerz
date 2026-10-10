@@ -23,6 +23,7 @@ console.log("Hay-bale checks (countryside)\n");
 let trials = 0, worstSpeed = 0, worstStep = 0, noBounce = 0;
 for (const side of [-1, 1]) for (const ang of [0, 15, 30, 45, 60, 80, 90]) for (const speed of [80, 200, 380, 540]) for (let k = 0; k < 6; k++) {
   const race = createRace("countryside", { model: "gt", skin: "factory", level: 1 }, 1);
+  race.boost.enabled = false; // plain physics: these cars must not pick up a boost pad on the way
   const me = race.cars[0];
   race.cars.slice(1).forEach((c, i) => (c.pos = { x: c.pos.x + 9000 * (i + 1), y: c.pos.y })); // keep the others out of the way
   const rows = race.scene.bumpers!.filter((b) => Math.sign(locate(race.track, b).offset) === side);

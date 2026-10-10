@@ -1,10 +1,50 @@
-import { speedOf } from "./car";
+import { BOOST } from "./boost";
+import { type Car, speedOf } from "./car";
 import { drawCarSprite } from "./carArt";
 import type { FxView } from "./fx";
 import { overheadLayer, staticLayer, tracePath } from "./layer";
 import { type Race, TOTAL_LAPS, standings } from "./race";
 
 const VIEW_SIZE = 1000; // world units visible across the smaller screen dimension
+
+/**
+ * Frame-rate watchdog for the turbo's optional effects: a second under BOOST.LOW_FPS drops the ghost images (level 1),
+ * the next one the speed streaks (level 2); three good seconds in a row bring one level back. Render side only.
+ */
+const frames = { last: 0, acc: 0, n: 0, level: 0, good: 0 };
+function watchFrameRate(): number {
+  const now = performance.now();
+  const dt = now - frames.last;
+  frames.last = now;
+  if (dt > 0 && dt < 1000) {
+    frames.acc += dt;
+    frames.n++;
+  }
+  if (frames.acc >= 1000) {
+    const fps = (frames.n * 1000) / frames.acc;
+    if (fps < BOOST.LOW_FPS) {
+      frames.level = Math.min(2, frames.level + 1);
+      frames.good = 0;
+    } else if (fps > BOOST.LOW_FPS + 15 && frames.level > 0 && ++frames.good >= 3) {
+      frames.level--;
+      frames.good = 0;
+    }
+    frames.acc = 0;
+    frames.n = 0;
+  }
+  return frames.level;
+}
+
+/** Draws a car like the normal sprite (skin included), translucent: the turbo's ghost images. */
+function drawGhost(ctx: CanvasRenderingContext2D, car: Car, x: number, y: number, angle: number, alpha: number) {
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  drawCarSprite(ctx, car.model, car.skin, x, y, angle);
+  ctx.restore();
+}
+
+/** Same scale the volcano's overlays use: the design car is 16 × 28, ours 40 × 22 (front toward +x). */
+const DESIGN_SCALE = BOOST.SCALE;
 
 export function formatTime(t: number | null): string {
   if (t === null || t < 0) return "--:--.---";
@@ -136,6 +176,10 @@ export function render(ctx: CanvasRenderingContext2D, race: Race, w: number, h: 
   ctx.lineWidth = 12;
   ctx.strokeRect(b.minX, b.minY, b.maxX - b.minX, b.maxY - b.minY);
 
+  // Boost pads: over the track and the finish line, under everything that moves.
+  const boost = race.boost;
+  boost.quality = watchFrameRate();
+  boost.drawGround(ctx, view);
   theme.fx.ground?.(ctx, scene, view);
   race.hazard?.drawGround?.(ctx, race.time, view);
 
@@ -149,7 +193,17 @@ export function render(ctx: CanvasRenderingContext2D, race: Race, w: number, h: 
     ctx.stroke();
   }
 
+  boost.drawBehind(ctx, (car, x, y, angle, alpha) => drawGhost(ctx, car, x, y, angle, alpha), race.cars);
   for (const car of race.cars) {
+    if (boost.isBoosting(car)) {
+      // The flame comes out of the rear, under the body (local frame: front toward -y).
+      ctx.save();
+      ctx.translate(car.pos.x, car.pos.y);
+      ctx.rotate(car.angle + Math.PI / 2);
+      ctx.scale(DESIGN_SCALE, DESIGN_SCALE);
+      boost.drawCarFlame(ctx, car);
+      ctx.restore();
+    }
     drawCarSprite(ctx, car.model, car.skin, car.pos.x, car.pos.y, car.angle);
     race.hazard?.drawCarOverlay?.(ctx, car.id, car.pos.x, car.pos.y, car.angle);
   }
@@ -178,5 +232,6 @@ export function render(ctx: CanvasRenderingContext2D, race: Race, w: number, h: 
   theme.fx.screen?.(ctx, view);
   drawMinimap(ctx, race, w);
   drawHud(ctx, race, w, h);
+  boost.drawHud(ctx, player, w, h);
   race.hazard?.drawHud?.(ctx, w, h);
 }

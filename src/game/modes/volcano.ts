@@ -1,6 +1,7 @@
 import type { Fx } from "../fx";
 import { disc, mulberry32, range, rock, scatter, TAU, type Circle, type Hazard, type HazardDanger, type HazardWorld, type Rng, type Scene, softBlob } from "../scenery";
 import { locate, type Track, type TrackLayout } from "../track";
+import { cachedPadSpots, nearPad } from "../boost";
 import { CAR_RADIUS } from "../car";
 import { vec } from "../vec";
 
@@ -613,6 +614,8 @@ type HzAdapter = {
   /** Point of the centre line `ahead` design units in front of the car; null when it is too close to the start / finish. */
   roadAhead(car: HzCar, ahead: number): HzRoadPoint | null;
   nearFinish(x: number, y: number): boolean;
+  /** Whether a spot is on a boost pad (bombs, and so lava pools, never land there). */
+  nearPad(x: number, y: number): boolean;
   /** Top speed and acceleration are scaled together by this factor. */
   setSpeedMultiplier(car: HzCar, f: number): void;
   scaleSpeedOnce(car: HzCar, f: number): void;
@@ -821,7 +824,7 @@ export class VolcanoHazards {
     if (!rp) return false;
     const off = this.R(-0.5, 0.5) * rp.halfWidth;
     const x = rp.x + rp.nx * off, y = rp.y + rp.ny * off;
-    if (this.A.nearFinish(x, y)) return false;
+    if (this.A.nearFinish(x, y) || this.A.nearPad(x, y)) return false;
     for (const c of cars) {
       const p = this.A.pos(c);
       if (Math.hypot(p.x - x, p.y - y) < HZ.MIN_SPAWN_DIST) return false;
@@ -1162,6 +1165,7 @@ export function createVolcano(track: Track, rng: Rng): VolcanoHazard {
     speed: (car) => Math.hypot(car.vel.x, car.vel.y) / S,
     isPlayer: (car) => car.isPlayer,
     nearFinish: (x, y) => Math.hypot(x * S - track.path[0].x, y * S - track.path[0].y) < HZ.SAFE_FINISH_DIST * S,
+    nearPad: (x, y) => nearPad(cachedPadSpots("volcano"), track.width, x * S, y * S, (HZ.TARGET_R + 6) * S),
     roadAhead(car, ahead) {
       const n = track.path.length;
       let i = car.lastIndex, d = 0;

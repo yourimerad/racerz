@@ -1,3 +1,4 @@
+import { type BoostSystem, createBoost } from "./boost";
 import { type Car, type Input, type Surface, NO_INPUT, CAR_RADIUS, PHYS, stepCar, slipOf, speedOf } from "./car";
 import { type ModelId, type SkinId, MODELS, carStats, skinOf } from "./garage";
 import { type Circle, type Cue, type Hazard, type HazardBody, type Rng, type Scene, mulberry32 } from "./scenery";
@@ -7,6 +8,9 @@ import { type Vec, vec, add, sub, scale, len, dot, angleDiff, clamp, fromAngle }
 
 export const TOTAL_LAPS = 3;
 const COUNTDOWN = 3;
+/** The starting grid: the first row is GRID_FIRST samples behind the line, each further row GRID_ROW more. */
+const GRID_FIRST = 8;
+const GRID_ROW = 7;
 
 export type Phase = "countdown" | "racing" | "finished";
 export type Skid = { a: Vec; b: Vec; life: number };
@@ -40,8 +44,10 @@ export type Race = {
   crashes: number[];
   /** The mode's moving obstacle for this race (null in modes without one). */
   hazard: Hazard | null;
-  /** Sound requests raised by the hazard, emptied by Game.tsx. */
+  /** Sound requests raised by the hazard and the boost pads, emptied by Game.tsx. */
   cues: Cue[];
+  /** The mode's boost pads and every car's turbo (see boost.ts). */
+  boost: BoostSystem;
 };
 
 export type Straw = { x: number; y: number; vx: number; vy: number; rot: number; life: number };
@@ -69,7 +75,7 @@ export function createRace(themeId: ThemeId, player: PlayerCar, seed?: number): 
   const cars: Car[] = ROSTER.map((r, i) => {
     // 2-wide staggered grid behind the line; player starts at the back.
     const slot = ROSTER.length - 1 - i;
-    const idx = (n - 8 - slot * 7) % n;
+    const idx = (n - GRID_FIRST - slot * GRID_ROW) % n;
     const p = track.path[idx], t = track.tangents[idx];
     const side = slot % 2 === 0 ? -1 : 1;
     const pos = add(p, scale(vec(-t.y, t.x), side * track.width * 0.22));
@@ -80,7 +86,7 @@ export function createRace(themeId: ThemeId, player: PlayerCar, seed?: number): 
     const skin = isPlayer ? skinOf(player.model, player.skin) : { name: r.name, body: r.color, accent: r.color };
     return {
       id: i, name: isPlayer ? `Toi (${MODELS[player.model].name})` : r.name, color: skin.body, isPlayer,
-      model: isPlayer ? player.model : "gt", skin, skill: stats.speed, accelMul: stats.accel, gripMul: stats.grip, speedMul: 1,
+      model: isPlayer ? player.model : "gt", skin, skill: stats.speed, accelMul: stats.accel, gripMul: stats.grip, speedMul: 1, boostMul: 1,
       offTime: 0, hits: 0, hitCooldown: 0, stun: 0,
       pos, vel: vec(0, 0), angle: Math.atan2(t.y, t.x),
       progress: idx - n, lastIndex: idx, lap: 0, lapStart: 0, bestLap: null, finishTime: null, surface: "track",
@@ -89,10 +95,16 @@ export function createRace(themeId: ThemeId, player: PlayerCar, seed?: number): 
   const rng = mulberry32(seed ?? ((Math.random() * 2 ** 32) >>> 0));
   const ai: AiState[] = cars.map(() => ({ mistake: null, until: 0, cooldown: 0, sign: 1, count: 0, hazardId: 0, hazardPass: 0 }));
   const scene = sceneFor(theme, track);
+  // Built before the hazard: the volcano's bombs keep clear of the pads (see boost.ts `nearPad`).
+  const boost = createBoost(theme.id, track, { bumpers: scene.bumpers, lava: scene.lava }, GRID_FIRST + (ROSTER.length - 1) * GRID_ROW);
   // Only modes with a moving obstacle consume the PRNG here, so the other modes replay as before.
   const hazard = scene.hazard ? scene.hazard(track, mulberry32((rng() * 2 ** 32) >>> 0)) : null;
-  return { track, theme, scene, cars, phase: "countdown", time: -COUNTDOWN, skids: [], overheadOpacity: 1, rng, ai, straw: [], crashes: [], hazard, cues: [] };
+  return { track, theme, scene, cars, phase: "countdown", time: -COUNTDOWN, skids: [], overheadOpacity: 1, rng, ai, straw: [], crashes: [], hazard, cues: [], boost };
 }
+
+/** Bots under a turbo: how far ahead (× their usual look-ahead) they check bends, and the deceleration they plan their braking with (u/s², under the real 950). */
+const TURBO_REACH = [1.5, 2, 3];
+const TURBO_BRAKE = 650;
 
 const MISTAKE_KINDS: MistakeKind[] = ["lateBrake", "liftOff", "wideLine", "twitch"];
 /** [min, max] seconds a mistake lasts, once triggered. */
@@ -221,8 +233,25 @@ export function aiInput(race: Race, car: Car, dt: number, allowMistakes = true):
   if (mistake === "twitch") diff += state!.sign * 0.9;
   const far = track.tangents[(car.lastIndex + look * 2) % n];
   const bend = Math.abs(angleDiff(Math.atan2(t.y, t.x), Math.atan2(far.y, far.x)));
+  const turbo = race.boost.factor(car);
   const cornerK = 0.45 + (1 - grip) * 0.55;
-  const limit = PHYS.maxSpeed * car.skill * Math.max(0.3, 1 - clamp(bend, 0, 1.2) * cornerK) * (car.surface === "track" ? 1 : 0.6) * hazardSlow;
+  const corner = Math.max(0.3, 1 - clamp(bend, 0, 1.2) * cornerK);
+  // The turbo raises the straight-line limit only: into a bend (or off the road) the bot brakes to its usual speed.
+  const turboBonus = car.surface === "track" ? 1 + (turbo - 1) * clamp((corner - 0.5) / 0.5, 0, 1) : 1;
+  let limit = PHYS.maxSpeed * car.skill * corner * (car.surface === "track" ? 1 : 0.6) * hazardSlow * turboBonus;
+  if (turbo > 1 || speed > PHYS.maxSpeed * car.skill * 1.05) {
+    // Boosting (see boost.ts), or still carrying the turbo's speed: that needs a longer braking distance than the bend window above
+    // covers. Judge the bends further ahead too, each allowing the speed from which a firm brake (TURBO_BRAKE) still gets down to its
+    // corner speed. At its usual speeds a bot never gets here.
+    const spacing = Math.hypot(track.path[(car.lastIndex + look) % n].x - track.path[car.lastIndex].x, track.path[(car.lastIndex + look) % n].y - track.path[car.lastIndex].y) / look;
+    for (const reach of TURBO_REACH) {
+      const m = Math.round(look * reach);
+      const a = track.tangents[(car.lastIndex + m) % n], b = track.tangents[(car.lastIndex + m * 2) % n];
+      const bendAhead = Math.abs(angleDiff(Math.atan2(a.y, a.x), Math.atan2(b.y, b.x)));
+      const cornerSpeed = PHYS.maxSpeed * car.skill * Math.max(0.3, 1 - clamp(bendAhead, 0, 1.2) * cornerK);
+      limit = Math.min(limit, Math.sqrt(cornerSpeed * cornerSpeed + 2 * TURBO_BRAKE * m * spacing));
+    }
+  }
   const tooFast = speed > limit;
   return {
     // "liftOff": brief lift, no risk. "lateBrake": brake late and run wide instead.
@@ -239,6 +268,12 @@ function noteCrash(race: Race, car: Car, speed: number) {
   if (car.isPlayer && race.crashes.length < 16) race.crashes.push(clamp(speed / 500, 0, 1));
 }
 
+/** A real impact (any car, wall, bale or hazard): the car's turbo stops almost at once, and the player's crash is heard. */
+function noteImpact(race: Race, car: Car, speed: number) {
+  race.boost.cut(car);
+  noteCrash(race, car, speed);
+}
+
 function collide(race: Race, a: Car, b: Car) {
   const d = sub(b.pos, a.pos);
   const dist = len(d);
@@ -253,7 +288,10 @@ function collide(race: Race, a: Car, b: Car) {
     const imp = scale(nrm, rel * 0.85);
     a.vel = sub(a.vel, imp);
     b.vel = add(b.vel, imp);
-    if (rel > 80) noteCrash(race, a.isPlayer ? a : b, rel);
+    if (rel > 80) {
+      noteImpact(race, a, rel);
+      noteImpact(race, b, rel);
+    }
   }
 }
 
@@ -273,10 +311,13 @@ function hitBarrier(race: Race, car: Car, index: number, dist: number) {
   const vn = dot(car.vel, n);
   if (vn <= 0) return;
   car.vel = scale(sub(car.vel, scale(n, vn * 1.3)), 0.95);
-  if (vn > 80 && car.hitCooldown <= 0) {
-    car.hits++;
-    car.hitCooldown = 0.5;
-    noteCrash(race, car, vn);
+  if (vn > 80) {
+    race.boost.cut(car);
+    if (car.hitCooldown <= 0) {
+      car.hits++;
+      car.hitCooldown = 0.5;
+      noteCrash(race, car, vn);
+    }
   }
 }
 
@@ -334,6 +375,7 @@ function hitBumpers(race: Race, car: Car) {
   const fwd = fromAngle(car.angle);
   car.angle += 0.3 * Math.sign(fwd.x * nrm.y - fwd.y * nrm.x);
   car.stun = BUMPER_STUN;
+  if (-vn > 80) race.boost.cut(car);
   if (-vn > 80 && car.hitCooldown <= 0) {
     car.hits++;
     car.hitCooldown = 0.5;
@@ -384,6 +426,7 @@ function hitHazard(race: Race, car: Car) {
       car.vel = vec(b.vx + rv.x - n.x * vn, b.vy + rv.y - n.y * vn); // just stop closing in
       continue;
     }
+    race.boost.cut(car); // a real hit, not a slide-off
     const k = -(1 + restitution) * vn;
     car.vel = vec(b.vx + (rv.x + n.x * k) * speedKeep, b.vy + (rv.y + n.y * k) * speedKeep);
     const power = clamp(-vn / 500, 0, 1);
@@ -423,6 +466,18 @@ function containCar(race: Race, car: Car) {
   if (car.pos.y < b.minY || car.pos.y > b.maxY) { car.pos.y = clamp(car.pos.y, b.minY, b.maxY); car.vel.y *= -0.4; }
 }
 
+/** Sound hook for a car taking a pad: the player's whoosh, a quieter one for a bot close to the player. */
+function takePad(race: Race) {
+  return (car: Car) => {
+    if (race.cues.length >= 16) return;
+    if (car.isPlayer) race.cues.push({ kind: "boost", power: 1 });
+    else {
+      const d = len(sub(car.pos, race.cars[0].pos));
+      if (d < 600) race.cues.push({ kind: "boost", power: 0.4 * (1 - d / 600) + 0.1 });
+    }
+  };
+}
+
 /**
  * `playerIsAi` lets `scripts/sim-bots.ts` drive the player slot with the mistake-free
  * AI (a "proxy" of a given car model) instead of `playerInput`; Game.tsx never sets it.
@@ -431,6 +486,8 @@ export function stepRace(race: Race, playerInput: Input, dt: number, playerIsAi 
   race.time += dt;
   if (race.phase === "countdown" && race.time >= 0) race.phase = "racing";
   race.hazard?.step(race, dt);
+  // The pads wait for the green light: cars standing on the grid never take one.
+  if (race.phase !== "countdown") race.boost.update(dt, race.cars, takePad(race));
 
   const live = race.phase !== "countdown";
   for (const car of race.cars) {

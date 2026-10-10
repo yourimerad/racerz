@@ -157,10 +157,11 @@ function gt(ctx: Ctx, skin: Skin) {
   // Discreet twin bonnet stripes (the "stripes" skin already runs full-length ones).
   if (skin.pattern !== "stripes") {
     ctx.fillStyle = skin.accent;
-    ctx.globalAlpha = 0.6;
+    const a0 = ctx.globalAlpha; // the caller's alpha (ghost images of a turbo are drawn translucent)
+    ctx.globalAlpha = a0 * 0.6;
     ctx.fillRect(12, -2.7, L - 13.5, 1.2);
     ctx.fillRect(12, 1.5, L - 13.5, 1.2);
-    ctx.globalAlpha = 1;
+    ctx.globalAlpha = a0;
   }
   seams(ctx, GT_SEAMS);
   // Greenhouse: windscreen, side windows, rear window; the roof between keeps the body colour.
