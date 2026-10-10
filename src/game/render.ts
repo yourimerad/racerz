@@ -198,6 +198,7 @@ export function render(ctx: CanvasRenderingContext2D, race: Race, w: number, h: 
   // The Jet's shadow slides away from it while it climbs (before the cars; only above 1 m).
   const flight = race.flight;
   flight?.drawShadow(ctx, player);
+  flight?.drawDust(ctx); // the takeoff's cloud of sand, snow or ash
   boost.drawBehind(ctx, (car, x, y, angle, alpha) => drawGhost(ctx, car, x, y, angle, alpha, car.isPlayer && flight ? flight.look(car).wing : 0), race.cars);
   for (const car of race.cars) {
     if (car.isPlayer && flight && isAirborne(car)) continue; // drawn in the high layer below, over the scenery
@@ -248,5 +249,5 @@ export function render(ctx: CanvasRenderingContext2D, race: Race, w: number, h: 
   drawHud(ctx, race, w, h);
   boost.drawHud(ctx, player, w, h);
   race.hazard?.drawHud?.(ctx, w, h);
-  flight?.drawHud(ctx, player, w, h, mapBottom);
+  flight?.drawHud(ctx, player, w, h, mapBottom, race.guard?.pill(player) ?? null);
 }

@@ -27,6 +27,10 @@ export type Car = {
   flyMul: number;
   /** Altitude in metres (0 on the ground; only the Racerz Jet's pilot ever leaves it). */
   alt: number;
+  /** Seconds added to this car's clock (a forced return to the road, a missed checkpoint). Part of its finish time. */
+  penalty: number;
+  /** Seconds of grace left after a forced return to the road: no contact counted, no damage. */
+  shield: number;
   // Race bookkeeping (see race.ts).
   progress: number;
   lastIndex: number;
