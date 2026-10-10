@@ -25,8 +25,8 @@ export const BOOST = {
   HIT_LEFT: 0.3,
   /** Impacts weaker than this closing speed (u/s) are brushes, not collisions (same threshold as race.ts's crash counter). */
   HIT_SPEED: 80,
-  /** Pad size in design units (the arrows are ~60 wide) and its width as a share of the road. Slim: it was 114 wide / 74 % of the road; the length is unchanged. */
-  PAD_W: 80, PAD_L: 92, PAD_RATIO: 0.52,
+  /** Pad size in design units (the arrows are ~60 wide) and its width as a share of the road; the whole pad (plate, arrows, trigger area) is scaled with it, so length shrinks with width. Small: it was 74 % of the road (114 × 114 on a 190 road), then 52 % (99 × 114), now 36 % (68 × 79). */
+  PAD_W: 80, PAD_L: 92, PAD_RATIO: 0.36,
   /** Design units → world units for what is drawn around the car (the design car is 16 × 28, ours 22 × 40). */
   SCALE: 40 / 28,
   GHOSTS: 6, GHOST_EVERY: 0.04, STREAK_EVERY: 0.03, PART_EVERY: 0.02, MAX_PARTS: 200, MAX_STREAKS: 80,
