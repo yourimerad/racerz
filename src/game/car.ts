@@ -27,6 +27,14 @@ export type Car = {
   flyMul: number;
   /** Altitude in metres (0 on the ground; only the Racerz Jet's pilot ever leaves it). */
   alt: number;
+  /** Hit points, 0..HEALTH.MAX (health.ts): worn down by what a mode throws at the car (the volcano's bombs and lava, the yeti's landing). 0 = it blows up. */
+  hp: number;
+  /** The white segment of the HP bar: it catches up with `hp` after a loss. Display only. */
+  hpShown: number;
+  /** Race time of the last damage (-99 = never): drives the red screen. */
+  hurtAt: number;
+  /** Race time the car blew up, or null. A destroyed car is out of the race. */
+  destroyedAt: number | null;
   // Race bookkeeping (see race.ts).
   progress: number;
   lastIndex: number;

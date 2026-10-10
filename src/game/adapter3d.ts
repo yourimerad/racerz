@@ -1,7 +1,10 @@
 import { type Car, PHYS, isAirborne, speedOf } from "./car";
 import { FLY } from "./flight";
+import { HEALTH, wreckAge, wreckAlpha } from "./health";
 import type { ModelId, Skin } from "./garage";
+import type { NorthPoleHazard } from "./modes/northpole";
 import { CONE, ERUPTION, HZ, HZ_SCALE, type VolcanoHazard } from "./modes/volcano";
+import { YETI, type YetiPhase, type YetiPopup } from "./modes/yeti";
 import type { Race } from "./race";
 import type { SceneProp } from "./scenery";
 import type { ThemeId } from "./themes";
@@ -40,8 +43,11 @@ export type CarView = {
   alt: number;
   speed: number;
   boosting: boolean;
-  /** 1 = new, 0 = wrecked (the volcano's damage); 1 outside the volcano. */
+  /** 1 = new, 0 = blown up (what the modes' hazards wear down, see health.ts). */
   health: number;
+  /** Seconds since the car blew up, or -1 while it is still in the race; and how much of its wreck is left (1 .. 0, fading out). */
+  destroyed: number;
+  wreck: number;
   /** Wings 0 (folded) .. 1 (open) and engine flame 0..1 of the Jet; 0 for a normal car. */
   wing: number;
   flame: number;
@@ -50,11 +56,21 @@ export type CarView = {
   stunned: boolean;
 };
 
+/** A car that blew up: where (world units), how long ago (s), and how near the player is (0..1). */
+export type BlastView = { id: number; carId: number; x: number; y: number; age: number; power: number };
+
 export type PadView = { x: number; y: number; heading: number; flash: number; /** The player's turbo can take this pad now (it is not in its 3 s recharge). */ ready: boolean; /** Metres along / across the road. */ length: number; width: number };
 export type TargetView = { id: number; x: number; y: number; /** Seconds left before the bomb lands. */ left: number; /** Metres. */ radius: number };
 export type PoolView = { id: number; x: number; y: number; /** 1 hot .. 0 cooled; fade-out in the last second. */ heat: number; fade: number; radius: number; shape: readonly number[] };
 export type BearView = { id: number; x: number; y: number; angle: number; /** Fade in / out at both ends of the crossing. */ alpha: number; age: number };
 export type BearWarning = { x: number; y: number; signX: number; signY: number; age: number };
+/** The yeti's jump: where it is now (world units, and metres up), where it will land, and the seconds left before it does (0 once it has). */
+export type YetiView = {
+  id: number; phase: YetiPhase; age: number; x: number; y: number; z: number; heading: number;
+  fromX: number; fromY: number; toX: number; toY: number; left: number;
+  /** Metres: the radius of the landing ring (where a car is hurt). */
+  radius: number;
+};
 export type BombView = { x: number; y: number; /** Metres above the ground. */ z: number; r: number };
 
 /** The player's numbers: the variables the 3D view is plugged into. */
@@ -96,14 +112,18 @@ export type Dangers = {
   /** The polar bears on the road and the blinking alert before the next one. */
   bears: BearView[];
   warning: BearWarning | null;
+  /** The yeti's jump in progress (north pole), and the damage numbers over the cars it hurt. */
+  yeti: YetiView | null;
+  yetiPopups: readonly YetiPopup[];
 };
 
 const emptyCar = (): CarView => ({
-  id: 0, isPlayer: false, model: "gt", skin: { name: "", body: "#e63946", accent: "#9d1c27" }, x: 0, y: 0, heading: 0, alt: 0, speed: 0, boosting: false, health: 1,
+  id: 0, isPlayer: false, model: "gt", skin: { name: "", body: "#e63946", accent: "#9d1c27" }, x: 0, y: 0, heading: 0, alt: 0, speed: 0, boosting: false, health: 1, destroyed: -1, wreck: 1,
   wing: 0, flame: 0, finished: false, stunned: false,
 });
 
 const isVolcano = (h: unknown): h is VolcanoHazard => !!h && typeof h === "object" && "eruption" in h && "hazards" in h;
+const isNorthPole = (h: unknown): h is NorthPoleHazard => !!h && typeof h === "object" && "bear" in h && "yeti" in h;
 type BearBody = { id: number; x: number; y: number; angle: number; age?: number; life?: number };
 
 /**
@@ -118,7 +138,9 @@ export class Adapter3D {
   readonly player: PlayerView;
   readonly cars: CarView[];
   readonly pads: PadView[];
-  readonly dangers: Dangers = { targets: [], pools: [], bombs: [], bears: [], warning: null };
+  readonly dangers: Dangers = { targets: [], pools: [], bombs: [], bears: [], warning: null, yeti: null, yetiPopups: [] };
+  /** The cars that blew up, for the explosion (kept 6 s). */
+  readonly blasts: BlastView[] = [];
   /** The scenery: props with the same positions as the 2D art, hay-bale bumpers (physical), ground lava. */
   readonly props: readonly SceneProp[];
   private bearViews: BearView[] = [];
@@ -164,6 +186,8 @@ export class Adapter3D {
       v.speed = speedOf(c);
       v.boosting = race.boost.isBoosting(c);
       v.health = this.healthOf(c);
+      v.destroyed = c.destroyedAt === null ? -1 : wreckAge(c, race.time);
+      v.wreck = wreckAlpha(c, race.time);
       v.finished = c.finishTime !== null;
       v.stunned = c.stun > 0;
       if (c.isPlayer && flight) {
@@ -190,13 +214,14 @@ export class Adapter3D {
       this.pads[i].flash = race.boost.pads[i].flash;
       this.pads[i].ready = !race.boost.pads[i].cool.has(me.id);
     }
+    this.blasts.length = 0;
+    for (const b of race.blasts) this.blasts.push({ id: b.id, carId: b.carId, x: b.x, y: b.y, age: race.time - b.time, power: b.power });
     this.readDangers();
   }
 
-  /** The damage of a car as 1 (untouched) .. 0 (wrecked): only the volcano wears cars down. */
+  /** The health of a car as 1 (untouched) .. 0 (blown up): the points every mode's hazards wear down (health.ts). */
   private healthOf(c: Car): number {
-    const hz = this.race.hazard;
-    return isVolcano(hz) ? hz.hazards.st(c).hp / HZ.MAX_HP : 1;
+    return c.hp / HEALTH.MAX;
   }
 
   private readDangers() {
@@ -221,7 +246,9 @@ export class Adapter3D {
       }
     }
     this.bearViews.length = 0;
-    const bodies = hz && !isVolcano(hz) ? hz.bodies?.() : undefined;
+    // The north pole holds two hazards side by side: the bears are read from the bear's own, the yeti from its own.
+    const pole = isNorthPole(hz) ? hz : null, bearHz = pole ? pole.bear : hz;
+    const bodies = bearHz && !isVolcano(bearHz) ? bearHz.bodies?.() : undefined;
     if (bodies) {
       for (const b of bodies as readonly BearBody[]) {
         const age = b.age ?? 1, life = b.life ?? 99;
@@ -229,8 +256,16 @@ export class Adapter3D {
       }
     }
     d.bears = this.bearViews;
-    const w = hz && !isVolcano(hz) ? hz.warning?.() : null;
+    const w = bearHz && !isVolcano(bearHz) ? bearHz.warning?.() : null;
     if (w) d.warning = w;
+    d.yeti = null;
+    d.yetiPopups = [];
+    const j = pole?.yeti.state.jump;
+    if (pole && j) {
+      const left = j.phase === "warn" ? YETI.WARN - j.age + YETI.FLIGHT : j.phase === "flight" ? Math.max(0, YETI.FLIGHT - j.age) : 0;
+      d.yeti = { id: j.id, phase: j.phase, age: j.age, x: j.x, y: j.y, z: j.z, heading: j.phase === "leave" ? Math.atan2(j.awayY, j.awayX) : j.heading, fromX: j.fromX, fromY: j.fromY, toX: j.toX, toY: j.toY, left, radius: YETI.LAND_R * K };
+    }
+    if (pole) d.yetiPopups = pole.yeti.state.popups;
   }
 
   /** The volcano's eruption state for the 3D smoke, glow and flash (null in the other modes). */

@@ -4,6 +4,7 @@ import { locate, type Track, type TrackLayout } from "../track";
 import { cachedPadSpots, nearPad } from "../boost";
 import { WALLS } from "../flight";
 import { CAR_RADIUS, isAirborne } from "../car";
+import { HEALTH, hurt, isDestroyed } from "../health";
 import { vec } from "../vec";
 
 // Volcano: one big cone in the middle of the map, seen from above with the sun at the top-left.
@@ -576,7 +577,7 @@ export class VolcanoEruption {
 // During the eruption, red targets appear on the road; 1.5 s later a lava bomb falls on each one. A car
 // inside the target loses 20 HP (explosion, "-20", shake, red screen), every impact leaves a lava pool that
 // burns 5 HP per second for 9 s before it cools, and a damaged car smokes, burns and slows down. It is an
-// obstacle, never a death: at 0 HP the car keeps rolling at 35 % speed and can lose nothing more. The
+// obstacle until the points run out: at 0 HP the car blows up (health.ts: the points, the slowdown, the HUD and the explosion are shared by every mode). The
 // decorative bombs of VolcanoEruption never hurt anyone: only these aimed ones do.
 //
 // The code runs in a "design" frame in which a car is 16 × 28 (ours are 22 × 40 world units): one design
@@ -585,14 +586,14 @@ export class VolcanoEruption {
 export const HZ_SCALE = 40 / 28;
 
 export const HZ = {
-  MAX_HP: 100, BOMB_DAMAGE: 20, POOL_DPS: 5, POOL_LIFE: 9, POOL_RADIUS: 24,
+  BOMB_DAMAGE: 20, POOL_DPS: 5, POOL_LIFE: 9, POOL_RADIUS: 24,
   TARGET_R: 20, // target radius = real radius of the hit (the car's own radius is added: any part of the car inside the ring is hit)
   WARN_TIME: 1.5, FALL_TIME: 0.6, MAX_TARGETS: 3,
   SPAWN_MIN: 1.2, SPAWN_MAX: 2.0,
   ACTIVE_FROM: 2.2, ACTIVE_TO: 7.0, // window within the eruption cycle (s)
   NO_HAZARD_FIRST: 8, SAFE_FINISH_DIST: 150,
   MIN_SPAWN_DIST: 90, AHEAD_MIN: 120, AHEAD_MAX: 320,
-  INVULN: 1.0, HIT_SLOW: 0.6, LOW_HP: 25, LOW_SLOW: 0.6, ZERO_HP_CAP: 0.35,
+  INVULN: 1.0, HIT_SLOW: 0.6,
   // Added for this game's speeds (design units; cars here are several times faster than in the 680 × 460 prototype):
   /** Share of targets aimed at the player (the others at any car). */
   PLAYER_SHARE: 0.7,
@@ -617,8 +618,6 @@ type HzAdapter = {
   nearFinish(x: number, y: number): boolean;
   /** Whether a spot is on a boost pad (bombs, and so lava pools, never land there). */
   nearPad(x: number, y: number): boolean;
-  /** Top speed and acceleration are scaled together by this factor. */
-  setSpeedMultiplier(car: HzCar, f: number): void;
   scaleSpeedOnce(car: HzCar, f: number): void;
   onWarn(tg: HzTarget): void;
   onImpact(tg: HzTarget): void;
@@ -627,7 +626,7 @@ type HzAdapter = {
 
 type HzTarget = { id: number; x: number; y: number; age: number };
 type HzPool = { id: number; x: number; y: number; age: number; shape: number[] };
-type HzState = { hp: number; shown: number; invuln: number; smokeAcc: number; markDist: number; poolT: number; inPool: boolean };
+type HzState = { invuln: number; smokeAcc: number; markDist: number; poolT: number; inPool: boolean };
 type HzPopup = { x: number; y: number; text: string; size: number; age: number };
 type HzDot = { x: number; y: number; vx: number; vy: number; age: number; life: number };
 type HzPuff = { x: number; y: number; vx: number; vy: number; r: number; g: number; age: number; life: number; dark: boolean };
@@ -671,7 +670,8 @@ export class VolcanoHazards {
   puffs: HzPuff[] = [];
   marks: { x: number; y: number; age: number }[] = [];
   shake = 0;
-  vignette = 0;
+  /** Race clock at the last update (the time damage is stamped with). */
+  raceTime = 0;
   cars: readonly HzCar[] = [];
   private state = new Map<HzCar, HzState>();
   private nextId = 1;
@@ -699,14 +699,14 @@ export class VolcanoHazards {
     this.puffs = [];
     this.marks = [];
     this.shake = 0;
-    this.vignette = 0;
+    this.raceTime = 0;
     this.state = new Map();
   }
 
   st(car: HzCar): HzState {
     let s = this.state.get(car);
     if (!s) {
-      s = { hp: HZ.MAX_HP, shown: HZ.MAX_HP, invuln: 0, smokeAcc: 0, markDist: 0, poolT: 0, inPool: false };
+      s = { invuln: 0, smokeAcc: 0, markDist: 0, poolT: 0, inPool: false };
       this.state.set(car, s);
     }
     return s;
@@ -716,6 +716,7 @@ export class VolcanoHazards {
   update(dt: number, cars: readonly HzCar[], raceTime: number) {
     dt = Math.min(dt, 0.05);
     this.t += dt;
+    this.raceTime = raceTime;
     this.cars = cars;
     const et = this.eruption ? this.eruption.t : this.t % 10.5; // time within the eruption cycle
     const active = et >= HZ.ACTIVE_FROM && et <= HZ.ACTIVE_TO;
@@ -765,20 +766,15 @@ export class VolcanoHazards {
       const s = this.st(car), p = this.A.pos(car);
       if (!s.inPool) s.poolT = 0;
       s.invuln = Math.max(0, s.invuln - dt);
-      s.shown = s.hp < s.shown ? Math.max(s.hp, s.shown - 30 * dt) : s.hp; // the white segment catches up with the real value
-      const ratio = s.hp / HZ.MAX_HP;
-      let f = 1;
-      if (s.hp === 0) f = HZ.ZERO_HP_CAP;
-      else if (ratio * 100 <= HZ.LOW_HP) f = HZ.LOW_SLOW;
-      this.A.setSpeedMultiplier(car, f);
+      const ratio = car.hp / HEALTH.MAX;
 
-      const rate = ratio <= 0.25 ? 12 : ratio <= 0.5 ? 4 : 0; // smoke
+      const rate = isDestroyed(car) ? 0 : ratio <= 0.25 ? 12 : ratio <= 0.5 ? 4 : 0; // smoke (a wreck smokes in its own way: the explosion)
       s.smokeAcc += rate * dt;
       while (s.smokeAcc >= 1 && this.puffs.length < 150) {
         s.smokeAcc -= 1;
         this.puffs.push({ x: p.x + this.R(-4, 4), y: p.y + this.R(-4, 4), vx: this.R(4, 14), vy: -this.R(14, 30), r: this.R(6, 10), g: this.R(10, 18), age: 0, life: this.R(1.2, 2.0), dark: ratio <= 0.25 });
       }
-      if (ratio <= 0.25) {
+      if (ratio <= 0.25 && !isDestroyed(car)) {
         // Black marks behind the car.
         s.markDist += this.A.speed(car) * dt;
         if (s.markDist > 14) {
@@ -802,7 +798,6 @@ export class VolcanoHazards {
     age(this.puffs, 2, (o) => { o.x += o.vx * dt; o.y += o.vy * dt; o.r += o.g * dt; });
     age(this.marks, 6);
     this.shake *= Math.exp(-dt * 6);
-    this.vignette *= Math.exp(-dt * 3);
     if (this.calm) return { x: 0, y: 0 };
     return { x: this.R(-1, 1) * this.shake, y: this.R(-1, 1) * this.shake };
   }
@@ -848,8 +843,8 @@ export class VolcanoHazards {
     this.pools.push({ id: this.nextId++, x: tg.x, y: tg.y, age: 0, shape: Array.from({ length: 9 }, () => this.R(0.85, 1.15)) });
     for (const car of cars) {
       const p = this.A.pos(car), s = this.st(car);
-      if (s.invuln <= 0 && !isAirborne(car) && Math.hypot(p.x - tg.x, p.y - tg.y) < HZ.TARGET_R + this.A.radius(car)) {
-        const before = s.hp;
+      if (s.invuln <= 0 && !isAirborne(car) && !isDestroyed(car) && Math.hypot(p.x - tg.x, p.y - tg.y) < HZ.TARGET_R + this.A.radius(car)) {
+        const before = car.hp;
         this.damage(car, HZ.BOMB_DAMAGE, false);
         if (before > 0) {
           this.A.scaleSpeedOnce(car, HZ.HIT_SLOW);
@@ -861,15 +856,11 @@ export class VolcanoHazards {
   }
 
   damage(car: HzCar, amount: number, small: boolean) {
-    const s = this.st(car);
-    if (s.hp <= 0) return;
-    s.hp = Math.max(0, s.hp - amount);
+    if (car.hp <= 0) return;
+    hurt(car, amount, this.raceTime);
     const p = this.A.pos(car);
     this.popups.push({ x: p.x + 10, y: p.y - 20, text: "-" + amount, size: small ? 15 : 26, age: 0 });
-    if (this.A.isPlayer(car)) {
-      this.vignette = 1;
-      if (!small) this.shake = Math.max(this.shake, 6);
-    }
+    if (this.A.isPlayer(car) && !small) this.shake = Math.max(this.shake, 6);
     this.A.onDamage(car, amount, small);
   }
 
@@ -958,8 +949,8 @@ export class VolcanoHazards {
   drawCarOverlay(ctx: Ctx, carId: number, x: number, y: number, angle: number) {
     const car = this.cars.find((c) => c.id === carId);
     if (!car) return;
-    const ratio = this.st(car).hp / HZ.MAX_HP;
-    if (ratio > 0.25) return;
+    const ratio = car.hp / HEALTH.MAX;
+    if (ratio > 0.25 || isDestroyed(car)) return; // a wreck is drawn by the explosion
     ctx.save();
     ctx.translate(x, y);
     ctx.rotate(angle + Math.PI / 2); // our sprites face +x; the overlay's front is -y
@@ -1062,57 +1053,13 @@ export class VolcanoHazards {
     }
   }
 
-  /** HUD in SCREEN pixels, for the player's car only. */
-  drawHud(ctx: Ctx, W: number, H: number) {
+  /** HUD in SCREEN pixels, for the player's car only (the points, the red screen and the slowdown badge are health.ts's). */
+  drawHud(ctx: Ctx, W: number) {
     const car = this.cars.find((c) => this.A.isPlayer(c));
     if (!car) return;
     ctx.save();
     ctx.textAlign = "start";
     ctx.textBaseline = "alphabetic";
-    const s = this.st(car), ratio = s.hp / HZ.MAX_HP;
-    const v = Math.min(0.9, Math.max(0, 0.5 - ratio) * 1.8) + this.vignette * 0.5; // red edges
-    if (v > 0.01) {
-      const g = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.35, W / 2, H / 2, Math.max(W, H) * 0.65);
-      g.addColorStop(0, "rgba(208,0,0,0)");
-      g.addColorStop(1, `rgba(208,0,0,${Math.min(0.8, v)})`);
-      ctx.fillStyle = g;
-      ctx.fillRect(0, 0, W, H);
-    }
-    // Under the race HUD, to the right of the sound button.
-    const x = 58, y = 148;
-    ctx.fillStyle = "rgba(0,0,0,0.6)";
-    ctx.beginPath();
-    ctx.roundRect(x, y, 240, 26, 10);
-    ctx.fill();
-    ctx.fillStyle = "#fff";
-    ctx.font = "bold 12px sans-serif";
-    ctx.fillText("PV", x + 12, y + 18);
-    ctx.fillStyle = "rgba(0,0,0,0.5)";
-    ctx.beginPath();
-    ctx.roundRect(x + 36, y + 7, 150, 12, 6);
-    ctx.fill();
-    ctx.fillStyle = "rgba(255,255,255,0.85)";
-    ctx.beginPath();
-    ctx.roundRect(x + 36, y + 7, Math.max(0, (150 * s.shown) / HZ.MAX_HP), 12, 6); // white segment: the recent loss
-    ctx.fill();
-    ctx.fillStyle = ratio > 0.5 ? "#3ddc84" : ratio > 0.25 ? "#ff9f1c" : "#d63a2f";
-    if (s.hp > 0) {
-      ctx.beginPath();
-      ctx.roundRect(x + 36, y + 7, 150 * ratio, 12, 6);
-      ctx.fill();
-    }
-    ctx.fillStyle = ratio <= 0.25 ? "#ff6b5f" : "#fff";
-    ctx.fillText(Math.round(ratio * 100) + "%", x + 198, y + 18);
-    if (ratio * 100 <= HZ.LOW_HP) {
-      // Slowdown badge.
-      const cut = Math.round((1 - (s.hp === 0 ? HZ.ZERO_HP_CAP : HZ.LOW_SLOW)) * 100);
-      ctx.fillStyle = "rgba(0,0,0,0.6)";
-      ctx.beginPath();
-      ctx.roundRect(x, y + 34, 130, 24, 8);
-      ctx.fill();
-      ctx.fillStyle = "#fff";
-      ctx.fillText(`↓ Vitesse −${cut} %`, x + 12, y + 51);
-    }
     if (this.targets.length && (this.calm || Math.sin(performance.now() / 120) > -0.3)) {
       // Blinking warning triangle, top centre (the minimap is on the right).
       const ax = W / 2, ay = 14;
@@ -1183,9 +1130,6 @@ export function createVolcano(track: Track, rng: Rng): VolcanoHazard {
       if (this.nearFinish(p.x / S, p.y / S)) return null;
       return { x: p.x / S, y: p.y / S, nx: -t.y, ny: t.x, halfWidth: track.width / 2 / S };
     },
-    setSpeedMultiplier: (car, f) => {
-      car.speedMul = f;
-    },
     scaleSpeedOnce: (car, f) => {
       car.vel = { x: car.vel.x * f, y: car.vel.y * f };
     },
@@ -1251,7 +1195,7 @@ export function createVolcano(track: Track, rng: Rng): VolcanoHazard {
       inDesign(ctx, () => hz.drawAir(ctx));
     },
     drawCarOverlay: (ctx, carId, x, y, angle) => hz.drawCarOverlay(ctx, carId, x, y, angle),
-    drawHud: (ctx, w, h) => hz.drawHud(ctx, w, h),
+    drawHud: (ctx, w) => hz.drawHud(ctx, w),
     shake(at) {
       // Eruption: frame px → world units, fading out with distance from the crater. Hazard hits: the player's own, undiminished.
       const d = Math.hypot(at.x - CONE.x, at.y - CONE.y);

@@ -5,6 +5,7 @@ import {
 } from "../scenery";
 import { isCovered, type Track, type TrackLayout } from "../track";
 import { angleDiff, clamp, type Vec } from "../vec";
+import { createYeti, type YetiHazard } from "./yeti";
 
 // North pole: a mountain pass. The circuit climbs into a translucent ice massif and dives
 // through a tunnel bored straight through it (~15% of the lap), then loops back across the
@@ -424,6 +425,37 @@ function createBears(track: Track, rng: Rng): Hazard {
   };
 }
 
+/** The north pole's hazard: the polar bear that crosses the road and the yeti that leaps from the massif (yeti.ts), side by side. The 3D view reads each one. */
+export type NorthPoleHazard = Hazard & { bear: Hazard; yeti: YetiHazard };
+
+function createNorthPole(track: Track, rng: Rng): NorthPoleHazard {
+  const bear = createBears(track, rng);
+  // The yeti has its own PRNG (drawn from the race's once): what it does never moves the bear's dice.
+  const yeti = createYeti(track, mulberry32(Math.floor(rng() * 0x100000000)));
+  return {
+    bear,
+    yeti,
+    // The standing yeti is a solid ellipse like the bear (same bounce, same bot manoeuvres); its landing ring is a danger zone bots brake for.
+    avoid: bear.avoid,
+    impact: bear.impact,
+    bodies: () => (yeti.bodies().length ? [...(bear.bodies?.() ?? []), ...yeti.bodies()] : (bear.bodies?.() ?? [])),
+    dangers: () => yeti.dangers(),
+    warning: () => bear.warning?.() ?? null,
+    step(world, dt) {
+      bear.step(world, dt);
+      yeti.step(world, dt);
+    },
+    touch: (body, carId, at, power) => (yeti.owns(body) ? yeti.touch(body, carId, at, power) : (bear.touch?.(body, carId, at, power) ?? false)),
+    drawGround: (ctx, time, view) => yeti.drawGround(ctx, time, view),
+    draw(ctx, time, view) {
+      bear.draw(ctx, time, view);
+      yeti.draw(ctx, time, view);
+    },
+    drawHud: (ctx, w, h) => yeti.drawHud(ctx, w, h),
+    shake: (at) => yeti.shake(at),
+  };
+}
+
 // ---------- ice-mountain tunnel ----------
 
 /** Sample indices along the loop from `from`, `len` samples long, every `step`. */
@@ -584,7 +616,7 @@ export function scene(track: Track): Scene {
     ],
     lava: [],
     vents: [],
-    hazard: createBears,
+    hazard: createNorthPole,
     under(ctx) {
       for (const d of drifts)
         softBlob(ctx, d.x, d.y, d.rx, d.ry, d.rot, d.light ? "255,255,255" : "170,200,225", d.light ? 0.85 : 0.45);

@@ -1,6 +1,7 @@
 import { type BoostSystem, createBoost } from "./boost";
 import { type Car, type Input, type Surface, NO_INPUT, CAR_RADIUS, PHYS, isAirborne, stepCar, slipOf, speedOf } from "./car";
 import { FlightController, distToLine, dustOf, wallHeightOf } from "./flight";
+import { HEALTH, healthSpeed, isDestroyed, stepHealth } from "./health";
 import { type ModelId, type SkinId, MODELS, carStats, skinOf } from "./garage";
 import { type Circle, type Cue, type Hazard, type HazardBody, type Rng, type Scene, mulberry32 } from "./scenery";
 import { type Theme, type ThemeId, THEMES, sceneFor } from "./themes";
@@ -51,7 +52,14 @@ export type Race = {
   boost: BoostSystem;
   /** The human's flight (Shift) when they drive the Racerz Jet, else null (see flight.ts). */
   flight: FlightController | null;
+  /** Cars that blew up (0 HP, see health.ts), kept 6 s for the views: the explosion is drawn from these. */
+  blasts: Blast[];
+  /** How many blasts there have been (their ids). */
+  blastCount: number;
 };
+
+/** A car that blew up: where, when (race clock) and `power` 0..1 (how near the player is: the sound and the camera shake). */
+export type Blast = { id: number; carId: number; x: number; y: number; time: number; power: number };
 
 export type Straw = { x: number; y: number; vx: number; vy: number; rot: number; life: number };
 
@@ -89,7 +97,7 @@ export function createRace(themeId: ThemeId, player: PlayerCar, seed?: number): 
     const skin = isPlayer ? skinOf(player.model, player.skin) : { name: r.name, body: r.color, accent: r.color };
     return {
       id: i, name: isPlayer ? `Toi (${MODELS[player.model].name})` : r.name, color: skin.body, isPlayer,
-      model: isPlayer ? player.model : "gt", skin, skill: stats.speed, accelMul: stats.accel, gripMul: stats.grip, speedMul: 1, boostMul: 1, flyMul: 1, alt: 0,
+      model: isPlayer ? player.model : "gt", skin, skill: stats.speed, accelMul: stats.accel, gripMul: stats.grip, speedMul: 1, boostMul: 1, flyMul: 1, alt: 0, hp: HEALTH.MAX, hpShown: HEALTH.MAX, hurtAt: -99, destroyedAt: null,
       offTime: 0, hits: 0, hitCooldown: 0, stun: 0,
       pos, vel: vec(0, 0), angle: Math.atan2(t.y, t.x),
       progress: idx - n, lastIndex: idx, lap: 0, lapStart: 0, bestLap: null, finishTime: null, surface: "track",
@@ -102,7 +110,7 @@ export function createRace(themeId: ThemeId, player: PlayerCar, seed?: number): 
   const boost = createBoost(theme.id, track, { bumpers: scene.bumpers, lava: scene.lava }, GRID_FIRST + (ROSTER.length - 1) * GRID_ROW);
   // Only modes with a moving obstacle consume the PRNG here, so the other modes replay as before.
   const hazard = scene.hazard ? scene.hazard(track, mulberry32((rng() * 2 ** 32) >>> 0)) : null;
-  const race: Race = { track, theme, scene, cars, phase: "countdown", time: -COUNTDOWN, skids: [], overheadOpacity: 1, rng, ai, straw: [], crashes: [], hazard, cues: [], boost, flight: null };
+  const race: Race = { track, theme, scene, cars, phase: "countdown", time: -COUNTDOWN, skids: [], overheadOpacity: 1, rng, ai, straw: [], crashes: [], hazard, cues: [], boost, flight: null, blasts: [], blastCount: 0 };
   if (MODELS[player.model].flying) {
     const cue = (kind: "takeoff" | "land") => {
       if (race.cues.length < 16) race.cues.push({ kind, power: 1 });
@@ -315,6 +323,7 @@ function noteImpact(race: Race, car: Car, speed: number) {
 
 function collide(race: Race, a: Car, b: Car) {
   if (isAirborne(a) || isAirborne(b)) return; // a flying car passes over the others
+  if (isDestroyed(a) || isDestroyed(b)) return; // a wreck is solid for nobody: nothing to get stuck on
   const d = sub(b.pos, a.pos);
   const dist = len(d);
   const min = CAR_RADIUS * 2;
@@ -481,8 +490,10 @@ function updateProgress(race: Race, car: Car, dt: number) {
   const n = race.track.path.length;
   const loc = locate(race.track, car.pos);
   hitBarrier(race, car, loc.index, loc.dist);
-  hitBumpers(race, car);
-  hitHazard(race, car);
+  if (!isDestroyed(car)) {
+    hitBumpers(race, car);
+    hitHazard(race, car);
+  }
   // In the air the ground's drag and lava mean nothing (and it is not time spent off the road).
   car.surface = isAirborne(car) ? "track" : surfaceAt(race, car.pos, Math.min(loc.dist, race.track.barrier));
   if (race.phase === "racing" && car.finishTime === null && car.surface !== "track") car.offTime += dt;
@@ -536,16 +547,22 @@ export function stepRace(race: Race, playerInput: Input, dt: number, playerIsAi 
 
   const live = race.phase !== "countdown";
   for (const car of race.cars) {
+    // What the hazards just did: a car out of points blows up (the hazards ran first, so it happens in the same step).
+    if (car.hp <= 0 && car.destroyedAt === null) explodeCar(race, car);
     let input = NO_INPUT;
-    if (live) {
+    if (isDestroyed(car)) input = NO_INPUT; // the wreck slides to a stop (below)
+    else if (live) {
       if (car.isPlayer) input = playerIsAi ? aiInput(race, car, dt, false) : playerInput;
       else if (car.finishTime !== null) input = { ...NO_INPUT, brake: speedOf(car) > 0 };
       else input = aiInput(race, car, dt);
     }
     if (car.stun > 0) input = { ...input, throttle: false };
+    car.speedMul = healthSpeed(car); // a worn car is slower (health.ts); no other system lowers it
+    stepHealth(car, dt);
     if (car.isPlayer && race.flight) race.flight.update(dt, car, live && input.fly);
     const before = car.pos;
     stepCar(car, input, dt, race.theme.phys);
+    if (isDestroyed(car)) car.vel = scale(car.vel, Math.exp(-3 * dt)); // a wreck loses its speed in about a second, never rolling backwards
     car.hitCooldown -= dt;
     car.stun = Math.max(0, car.stun - dt);
     containCar(race, car);
@@ -573,11 +590,30 @@ export function stepRace(race: Race, playerInput: Input, dt: number, playerIsAi 
   const target = isCovered(race.track, race.cars[0].lastIndex) && !isAirborne(race.cars[0]) ? 0.3 : 1; // a Jet overhead sees the whole ceiling
   race.overheadOpacity += (target - race.overheadOpacity) * Math.min(1, dt / 0.25);
 
-  if (race.phase === "racing" && race.cars[0].finishTime !== null) race.phase = "finished";
+  race.blasts = race.blasts.filter((b) => race.time - b.time < 6);
+  // The race is over for the player when they cross the line, or when their car blows up.
+  if (race.phase === "racing" && (race.cars[0].finishTime !== null || isDestroyed(race.cars[0]))) race.phase = "finished";
+}
+
+/** A car with no points left blows up where it stands: out of the race, a blast for the views and the sound, the player's camera shakes. */
+function explodeCar(race: Race, car: Car) {
+  car.destroyedAt = race.time;
+  car.hp = 0;
+  car.hpShown = Math.max(car.hpShown, 0);
+  car.vel = scale(car.vel, 0.35); // the blast takes most of its speed; its brakes do the rest
+  car.stun = 0;
+  car.alt = 0;
+  race.boost.cut(car);
+  const d = len(sub(car.pos, race.cars[0].pos)), power = car.isPlayer ? 1 : clamp(1 - d / 1400, 0, 1);
+  if (race.blasts.length < 8) race.blasts.push({ id: ++race.blastCount, carId: car.id, x: car.pos.x, y: car.pos.y, time: race.time, power });
+  if (power > 0.05 && race.cues.length < 16) race.cues.push({ kind: "explode", power });
+  if (car.isPlayer && race.crashes.length < 16) race.crashes.push(1);
 }
 
 export function standings(race: Race): Car[] {
   return [...race.cars].sort((a, b) => {
+    // A car that blew up never finishes: it ranks behind every car still in the race (the later it blew up, the better).
+    if (isDestroyed(a) || isDestroyed(b)) return isDestroyed(a) && isDestroyed(b) ? (b.destroyedAt as number) - (a.destroyedAt as number) : isDestroyed(a) ? 1 : -1;
     if (a.finishTime !== null && b.finishTime !== null) return a.finishTime - b.finishTime;
     if (a.finishTime !== null) return -1;
     if (b.finishTime !== null) return 1;

@@ -188,7 +188,7 @@ console.log("3D garage checks\n");
 
   // Every car in every paint it can wear, at the wing openings the lists use.
   const blank = (model: ModelId, skin: ReturnType<typeof skinOf>): CarView => ({
-    id: 0, isPlayer: false, model, skin, x: 0, y: 0, heading: 0, alt: TURNTABLE.H, speed: 0, boosting: false, health: 1, wing: 0, flame: 0, finished: false, stunned: false,
+    id: 0, isPlayer: false, model, skin, x: 0, y: 0, heading: 0, alt: TURNTABLE.H, speed: 0, boosting: false, health: 1, destroyed: -1, wreck: 1, wing: 0, flame: 0, finished: false, stunned: false,
   });
   let n = 0;
   for (const model of MODEL_ORDER) {

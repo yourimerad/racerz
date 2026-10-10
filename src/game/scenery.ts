@@ -13,7 +13,7 @@ export type Circle = { x: number; y: number; r: number };
 export type HazardBody = { id: number; x: number; y: number; vx: number; vy: number; angle: number; rx: number; ry: number };
 
 /** A short sound/effect request raised during the simulation; Game.tsx plays it. */
-export type Cue = { kind: "growl" | "thud" | "warn" | "sizzle" | "boost" | "takeoff" | "land"; power: number };
+export type Cue = { kind: "growl" | "thud" | "warn" | "sizzle" | "boost" | "takeoff" | "land" | "roar" | "quake" | "explode"; power: number };
 
 /** What a hazard may look at (Race satisfies this) and write to (`cues`). */
 export type HazardWorld = {
@@ -21,7 +21,7 @@ export type HazardWorld = {
   phase: "countdown" | "racing" | "finished";
   track: Track;
   /** The cars (the Race's own objects: a hazard may slow one down by writing `speedMul` or `vel`). */
-  cars: ReadonlyArray<{ id: number; isPlayer: boolean; pos: Vec; vel: Vec; angle: number; speedMul: number; lastIndex: number; finishTime: number | null; alt: number }>;
+  cars: ReadonlyArray<{ id: number; isPlayer: boolean; pos: Vec; vel: Vec; angle: number; speedMul: number; lastIndex: number; finishTime: number | null; alt: number; hp: number; hpShown: number; hurtAt: number; destroyedAt: number | null }>;
   cues: Cue[];
 };
 

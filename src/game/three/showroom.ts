@@ -98,7 +98,7 @@ export function buildStage(d: Disposer) {
 type Entry = { key: string; model: ModelId; skin: Skin; car: Car3D; view: CarView; d: Disposer };
 
 const blank = (model: ModelId, skin: Skin): CarView => ({
-  id: 0, isPlayer: false, model, skin, x: 0, y: 0, heading: 0, alt: 0, speed: 0, boosting: false, health: 1, wing: 0, flame: 0, finished: false, stunned: false,
+  id: 0, isPlayer: false, model, skin, x: 0, y: 0, heading: 0, alt: 0, speed: 0, boosting: false, health: 1, destroyed: -1, wreck: 1, wing: 0, flame: 0, finished: false, stunned: false,
 });
 
 /** Asks for a throw-away context first: Three.js logs an error for every renderer it fails to make, and an old phone would log it on every visit. */

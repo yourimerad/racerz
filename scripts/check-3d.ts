@@ -7,11 +7,12 @@
 //       the polar bear and its alert — finite, in range;
 //   (d) the chase camera: 9.5 m behind and 4.2 m up on the ground whatever the speed, higher and further back in flight, a wider field of view
 //       with speed and the turbo, no jump when switched on mid-race;
-//   (e) every mode's world, all six cars and the effects build into finite geometry within a triangle budget, and `dispose` frees all of it.
+//   (e) every mode's world, all six cars and the effects build into finite geometry within a triangle budget, and `dispose` frees all of it;
+//   (g) the yeti's jump (four moments) and a car's explosion with its wreck are read by the adapter and drawn without a leak.
 
 import { Adapter3D, CAM, ChaseCamera, K, toScene, type CamTarget } from "../src/game/adapter3d";
 import { type ModelId, MODEL_ORDER, skinFits, skinOf } from "../src/game/garage";
-import { createRace, stepRace, type Race } from "../src/game/race";
+import { aiInput, createRace, stepRace, type Race } from "../src/game/race";
 import { Car3D } from "../src/game/three/cars";
 import { Disposer, THREE, liveResources, qualityOf } from "../src/game/three/core";
 import { Effects3D, Fireworks3D } from "../src/game/three/effects";
@@ -82,7 +83,7 @@ console.log("3D view checks\n");
         if (p.hp < 0 || p.hp > 100) fail(`${mode}: hp ${p.hp}`);
         if (model === "gt" && p.flightEnergy !== null) fail("a normal car has no flight energy");
         if (model === "jet" && (p.flightEnergy === null || p.flightEnergy < 0 || p.flightEnergy > 1)) fail(`jet energy ${p.flightEnergy}`);
-        if (mode !== "volcano" && p.hp !== 100) fail(`${mode}: hp ${p.hp} outside the volcano`);
+        if (mode !== "volcano" && mode !== "northpole" && p.hp !== 100) fail(`${mode}: hp ${p.hp} outside the modes that hurt`);
         if (p.boosting) boosted = true;
         maxKmh = Math.max(maxKmh, p.kmh);
         for (const c of a.cars) finite(`${mode} car ${c.id}`, c.x, c.y, c.heading, c.alt, c.speed, c.health, c.wing);
@@ -244,6 +245,73 @@ console.log("3D view checks\n");
   d.dispose();
   if (liveResources() !== base) fail(`${liveResources() - base} resources alive after the cars were freed`);
   console.log("  cars: 6 models × their skins build, wings fold and open, everything freed");
+}
+
+// ---------- (g) the yeti's jump and a car's explosion, drawn ----------
+{
+  const base = liveResources();
+  const race = fresh("northpole", "gt", 7), adapter = new Adapter3D(race), d = new Disposer(), scene = new THREE.Scene(), q = qualityOf(0, 1);
+  const camera = new THREE.PerspectiveCamera(60, 1.6, 0.3, 2400);
+  scene.add(camera);
+  const cars = adapter.cars.map((v) => {
+    const c = new Car3D(d, v, null);
+    scene.add(c.group);
+    return c;
+  });
+  const play = new Gameplay3D({ adapter, d, scene, camera, quality: q, reduced: false, cars, mode: "northpole", heightAt: () => 0, craterY: 25 });
+  const phases = new Set<string>();
+  let blastAt = -1, sawBlast = false, sawWreck = false, wreckBack = 1;
+  for (let i = 0; i < 120 * 60; i++) {
+    stepRace(race, aiInput(race, race.cars[0], DT, false), DT);
+    if (i % 3) continue;
+    adapter.refresh(0.002);
+    const y = adapter.dangers.yeti;
+    if (y) {
+      phases.add(y.phase);
+      finite("yeti view", y.x, y.y, y.z, y.heading, y.left, y.toX, y.toY, y.radius, y.age);
+      // The first time it stands, one of the bots runs out of points: it blows up.
+      if (y.phase === "stand" && blastAt < 0) {
+        blastAt = i;
+        race.cars[1].hp = 0;
+      }
+    }
+    for (const b of adapter.blasts) {
+      sawBlast = true;
+      finite("blast", b.x, b.y, b.age, b.power);
+    }
+    const w = adapter.cars[1];
+    if (w.destroyed >= 0) {
+      sawWreck = true;
+      finite("wreck", w.destroyed, w.wreck);
+      wreckBack = w.wreck;
+    }
+    cars.forEach((c, k) => c.update(adapter.cars[k], 1 / 40, i / 120));
+    play.update(1 / 40, i / 120, camera, 720);
+  }
+  if (phases.size < 4) fail(`northpole: the 3D view saw only ${[...phases].join("/")} of the yeti's four moments`);
+  if (!sawBlast) fail("a car blew up and the adapter reported no blast");
+  if (!sawWreck) fail("a car blew up and the adapter reported no wreck");
+  if (!(wreckBack >= 0 && wreckBack <= 1)) fail(`wreck opacity ${wreckBack}`);
+  const { n, bad } = (() => {
+    let tris = 0, broken = 0;
+    scene.traverse((o) => {
+      const g = (o as THREE.Mesh).geometry as THREE.BufferGeometry | undefined;
+      if (!g || !g.attributes.position) return;
+      const pos = g.attributes.position;
+      for (let k = 0; k < pos.array.length; k++) if (!Number.isFinite(pos.array[k])) {
+        broken++;
+        break;
+      }
+      tris += (g.index ? g.index.count : pos.count) / 3;
+    });
+    return { n: tris, bad: broken };
+  })();
+  if (bad) fail(`yeti scene: ${bad} geometries with non-finite vertices`);
+  if (n > 420_000) fail(`yeti scene: ${Math.round(n)} triangles (budget 420 000)`);
+  play.dispose();
+  d.dispose();
+  if (liveResources() !== base) fail(`yeti scene: ${liveResources() - base} resources alive after dispose`);
+  console.log(`  yeti and explosion: the four moments of a jump (${[...phases].join(", ")}), a blast and its wreck drawn · finite · all freed`);
 }
 
 // ---------- (f) the winner's fireworks ----------

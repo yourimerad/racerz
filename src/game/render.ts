@@ -1,6 +1,7 @@
 import { BOOST } from "./boost";
 import { type Car, isAirborne, speedOf } from "./car";
 import { drawCarSprite } from "./carArt";
+import { drawHealthHud, hasHealth, isDestroyed, wreckAge, wreckAlpha } from "./health";
 import type { FxView } from "./fx";
 import { overheadLayer, staticLayer, tracePath } from "./layer";
 import { type Race, TOTAL_LAPS, standings } from "./race";
@@ -41,6 +42,44 @@ function drawGhost(ctx: CanvasRenderingContext2D, car: Car, x: number, y: number
   ctx.globalAlpha = alpha;
   drawCarSprite(ctx, car.model, car.skin, x, y, angle, wing);
   ctx.restore();
+}
+
+/** A car that blew up (2D view): its burnt shell with flames for a few seconds, and the fireball of the first instant. */
+function drawWreck(ctx: CanvasRenderingContext2D, race: Race, car: Car) {
+  const a = wreckAlpha(car, race.time), age = wreckAge(car, race.time);
+  if (a > 0) {
+    ctx.save();
+    ctx.globalAlpha = a;
+    drawCarSprite(ctx, car.model, car.skin, car.pos.x, car.pos.y, car.angle);
+    ctx.translate(car.pos.x, car.pos.y);
+    ctx.rotate(car.angle);
+    ctx.fillStyle = "rgba(12,9,8,0.72)";
+    ctx.beginPath();
+    ctx.roundRect(-20, -11, 40, 22, 6);
+    ctx.fill();
+    const f = 0.8 + 0.4 * Math.sin(race.time * 18 + car.id);
+    ctx.fillStyle = "#ff8a24";
+    ctx.beginPath();
+    [[-14, -8], [-8, -16 * f], [-2, -6], [5, -17 * f], [13, -8], [13, 8], [5, 17 * f], [-2, 6], [-8, 16 * f], [-14, 8]].forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = "#ffd45a";
+    ctx.beginPath();
+    ctx.arc(0, 0, 6 * f, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+  if (age < 0.9) {
+    const k = age / 0.9, r = 20 + 90 * k;
+    const g = ctx.createRadialGradient(car.pos.x, car.pos.y, 0, car.pos.x, car.pos.y, r);
+    g.addColorStop(0, `rgba(255,240,170,${(0.95 * (1 - k)).toFixed(2)})`);
+    g.addColorStop(0.45, `rgba(255,130,30,${(0.8 * (1 - k)).toFixed(2)})`);
+    g.addColorStop(1, "rgba(255,60,10,0)");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(car.pos.x, car.pos.y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
 }
 
 /** Same scale the volcano's overlays use: the design car is 16 × 28, ours 40 × 22 (front toward +x). */
@@ -201,6 +240,10 @@ export function render(ctx: CanvasRenderingContext2D, race: Race, w: number, h: 
   flight?.drawDust(ctx); // the takeoff's cloud of sand, snow or ash
   boost.drawBehind(ctx, (car, x, y, angle, alpha) => drawGhost(ctx, car, x, y, angle, alpha, car.isPlayer && flight ? flight.look(car).wing : 0), race.cars);
   for (const car of race.cars) {
+    if (isDestroyed(car)) {
+      drawWreck(ctx, race, car);
+      continue;
+    }
     if (car.isPlayer && flight && isAirborne(car)) continue; // drawn in the high layer below, over the scenery
     if (boost.isBoosting(car)) {
       // The flame comes out of the rear, under the body (local frame: front toward -y).
@@ -254,6 +297,7 @@ function drawOverlay(ctx: CanvasRenderingContext2D, race: Race, w: number, h: nu
   const mapBottom = drawMinimap(ctx, race, w);
   drawHud(ctx, race, w, h);
   race.boost.drawHud(ctx, player, w, h);
+  if (hasHealth(race.theme.id)) drawHealthHud(ctx, player, race.time, w, h);
   race.hazard?.drawHud?.(ctx, w, h);
   race.flight?.drawHud(ctx, player, w, h, mapBottom);
 }

@@ -8,13 +8,15 @@
 //       below 0, and every car still finishes without stalling;
 //   (b) a bomb on the player: -20 HP, shake, red screen, "-20", a pool left behind; 1 s of invulnerability
 //       to bombs afterwards; the pool burns 5 HP per second for 9 s then is harmless;
-//   (c) HP states: speed -40 % at 25 %, 35 % speed and no more loss at 0 HP, smoke from 50 %, and a
-//       player at 0 HP can still finish the race; bombs and pools never count as contacts;
+//   (c) HP states: speed -40 % at 25 %, smoke from 50 %; at 0 HP a car BLOWS UP (health.ts): a blast for the views and the
+//       sound, it stops, never finishes and ranks behind every car still racing, it can lose nothing more, and when it is
+//       the player's the race is over for them; bombs and pools never count as contacts;
 //   (d) the decorative eruption bombs hurt nobody, and the race is identical with the aimed bombs off;
 //   (e) bots brake for a target in their way (and go round it when they can).
 
-import { aiInput, createRace, stepRace, TOTAL_LAPS, type Race } from "../src/game/race";
+import { aiInput, createRace, standings, stepRace, TOTAL_LAPS, type Race } from "../src/game/race";
 import { NO_INPUT, speedOf } from "../src/game/car";
+import { HEALTH, isDestroyed } from "../src/game/health";
 import { ERUPTION, HZ, HZ_SCALE as S, type VolcanoHazard } from "../src/game/modes/volcano";
 
 const DT = 1 / 120;
@@ -40,10 +42,9 @@ function toGreen(race: Race) {
 const runFor = (race: Race, seconds: number) => {
   for (let i = 0, n = Math.round(seconds / DT); i < n; i++) stepRace(race, NO_INPUT, DT);
 };
-type HzCar = Parameters<VolcanoHazard["hazards"]["st"]>[0];
-const hp = (vz: VolcanoHazard, c: HzCar) => vz.hazards.st(c).hp;
+const hp = (_vz: VolcanoHazard, c: { hp: number }) => c.hp;
 const aiRace = (race: Race, until: number) => {
-  while (race.time < until && race.cars.some((c) => c.finishTime === null)) stepRace(race, aiInput(race, race.cars[0], DT, false), DT);
+  while (race.time < until && race.cars.some((c) => c.finishTime === null && !isDestroyed(c))) stepRace(race, aiInput(race, race.cars[0], DT, false), DT);
 };
 /** Moves the bots far away so a scripted scene is not disturbed. */
 const parkOthers = (race: Race) => race.cars.slice(1).forEach((c, i) => (c.pos = { x: c.pos.x + 6000 * (i + 1), y: c.pos.y }));
@@ -73,7 +74,7 @@ console.log("Volcano aimed-bomb checks\n");
     const born = new Map<number, number>();
     let lastBirth = -Infinity;
     const prevHp = race.cars.map(() => 100), still = race.cars.map(() => 0);
-    while (race.time < 400 && race.cars.some((c) => c.finishTime === null)) {
+    while (race.time < 400 && race.cars.some((c) => c.finishTime === null && !isDestroyed(c))) {
       const before = hzs.targets.map((t) => t.id);
       stepRace(race, aiInput(race, race.cars[0], DT, false), DT);
       if (hzs.targets.length > HZ.MAX_TARGETS) fail(`seed ${seed}: ${hzs.targets.length} targets at once`);
@@ -103,7 +104,7 @@ console.log("Volcano aimed-bomb checks\n");
         if (h > prevHp[i]) fail(`seed ${seed}: ${c.name} gained HP (${prevHp[i]} → ${h})`);
         if (h < 0) fail(`seed ${seed}: ${c.name} below 0 HP`);
         prevHp[i] = h;
-        still[i] = c.finishTime === null && Math.abs(speedOf(c)) < 5 ? still[i] + DT : 0;
+        still[i] = c.finishTime === null && !isDestroyed(c) && Math.abs(speedOf(c)) < 5 ? still[i] + DT : 0;
         if (still[i] > 5) {
           fail(`seed ${seed}: ${c.name} stayed almost still for over 5 s (t=${race.time.toFixed(1)}s)`);
           still[i] = -1e9;
@@ -114,7 +115,8 @@ console.log("Volcano aimed-bomb checks\n");
     for (const c of race.cars) {
       if (100 - hp(vz, c) !== (lost.get(c.id) ?? 0)) fail(`seed ${seed}: ${c.name} HP ${hp(vz, c)} does not match the damage dealt (${lost.get(c.id) ?? 0})`);
       if (hp(vz, c) < 100) damagedCars++;
-      if (c.finishTime === null) fail(`seed ${seed}: ${c.name} did not finish ${TOTAL_LAPS} laps`);
+      if (c.finishTime === null && !isDestroyed(c)) fail(`seed ${seed}: ${c.name} did not finish ${TOTAL_LAPS} laps`);
+      if (isDestroyed(c) && c.hp !== 0) fail(`seed ${seed}: ${c.name} blew up with ${c.hp} HP left`);
     }
     console.log(`  seed ${seed}: race ${race.time.toFixed(0)}s · ${born.size} targets · HP ${race.cars.map((c) => hp(vz, c)).join("/")} · contacts ${race.cars.map((c) => c.hits).join("/")}`);
   }
@@ -138,17 +140,16 @@ console.log("Volcano aimed-bomb checks\n");
   hzs.addTarget(x0, y0); // lands 0.5 s after the first one: inside the 1 s of invulnerability
   runFor(race, HZ.WARN_TIME - 0.5 - 0.05);
   if (hp(vz, p) !== 100) fail(`the car lost HP before the bomb landed (${hp(vz, p)})`);
-  let maxShake = 0, maxVignette = 0, sawPopup = false;
+  let maxShake = 0, sawPopup = false;
   for (let i = 0; i < Math.round(0.3 / DT); i++) {
     stepRace(race, NO_INPUT, DT);
     const sh = vz.shake!(p.pos);
     maxShake = Math.max(maxShake, Math.hypot(sh.x, sh.y));
-    maxVignette = Math.max(maxVignette, hzs.vignette);
     if (hzs.popups.some((q) => q.text === "-20")) sawPopup = true;
   }
   if (hp(vz, p) !== 80) fail(`direct hit: HP ${hp(vz, p)} (expected 80)`);
   if (maxShake < 1) fail(`direct hit: no camera shake (max ${maxShake.toFixed(2)})`);
-  if (maxVignette < 0.5) fail(`direct hit: no red screen (max ${maxVignette.toFixed(2)})`);
+  if (Math.abs(p.hurtAt - race.time) > 0.6) fail(`direct hit: the red screen's clock was not stamped (hurtAt ${p.hurtAt.toFixed(2)}, now ${race.time.toFixed(2)})`);
   if (!sawPopup) fail('direct hit: no "-20" shown');
   if (race.cues.filter((c) => c.kind === "thud").length < 1) fail("no impact sound requested");
   runFor(race, 0.4); // the second bomb lands 0.5 s after the first
@@ -163,7 +164,7 @@ console.log("Volcano aimed-bomb checks\n");
   if (hp(vz, p) !== final) fail("a cooled pool still hurts");
   if (hzs.pools.length) fail(`${hzs.pools.length} pool(s) still there after cooling`);
   if (p.hits !== 0) fail(`pools counted as ${p.hits} contact(s)`);
-  console.log(`  direct hit 100 → 80, shake ${maxShake.toFixed(1)}, red screen ${maxVignette.toFixed(2)}, pools then left HP at ${final} (${(80 - final) / 5} ticks of 5)`);
+  console.log(`  direct hit 100 → 80, shake ${maxShake.toFixed(1)}, red screen stamped, pools then left HP at ${final} (${(80 - final) / 5} ticks of 5)`);
 
   // After the invulnerability a bomb hurts again.
   const x1 = p.pos.x / S, y1 = p.pos.y / S;
@@ -178,7 +179,7 @@ console.log("Volcano aimed-bomb checks\n");
   if (hp(vz, p) < h - 5) fail("a bomb far from the car hurt it");
 }
 
-// ---------- (c) HP states ----------
+// ---------- (c) HP states and the explosion ----------
 {
   const topSpeed = (setHp: number) => {
     const { race, vz } = newRace(31);
@@ -195,24 +196,14 @@ console.log("Volcano aimed-bomb checks\n");
     }
     return { top, mul: p.speedMul, smoke: vz.hazards.puffs.length };
   };
-  const full = topSpeed(100), half = topSpeed(50), low = topSpeed(25), dead = topSpeed(0);
-  console.log(`  top speed · 100 HP ${full.top.toFixed(0)} · 50 HP ${half.top.toFixed(0)} · 25 HP ${low.top.toFixed(0)} · 0 HP ${dead.top.toFixed(0)}`);
+  const full = topSpeed(100), half = topSpeed(50), low = topSpeed(25);
+  console.log(`  top speed · 100 HP ${full.top.toFixed(0)} · 50 HP ${half.top.toFixed(0)} · 25 HP ${low.top.toFixed(0)}`);
   near("speedMul at 50 %", half.mul, 1, 1e-9);
-  near("speedMul at 25 %", low.mul, HZ.LOW_SLOW, 1e-9);
-  near("speedMul at 0 HP", dead.mul, HZ.ZERO_HP_CAP, 1e-9);
-  if (low.top > full.top * (HZ.LOW_SLOW + 0.05)) fail(`at 25 % the car still reaches ${(low.top / full.top).toFixed(2)} of full speed`);
-  if (dead.top > full.top * (HZ.ZERO_HP_CAP + 0.05)) fail(`at 0 HP the car still reaches ${(dead.top / full.top).toFixed(2)} of full speed`);
-  if (dead.top < full.top * 0.2) fail(`at 0 HP the car is nearly stopped (${dead.top.toFixed(0)})`);
+  near("speedMul at 25 %", low.mul, HEALTH.LOW_SLOW, 1e-9);
+  if (low.top > full.top * (HEALTH.LOW_SLOW + 0.05)) fail(`at 25 % the car still reaches ${(low.top / full.top).toFixed(2)} of full speed`);
   if (half.smoke < 1) fail("no smoke at 50 % HP");
   if (low.smoke <= half.smoke) fail(`no thicker smoke at 25 % HP (${low.smoke} vs ${half.smoke})`);
 
-  const { race, vz } = newRace(32);
-  const p = race.cars[0];
-  toGreen(race);
-  vz.hazards.damage(p, 100, false);
-  vz.hazards.damage(p, 20, false);
-  vz.hazards.damage(p, 5, true);
-  if (hp(vz, p) !== 0) fail(`a car at 0 HP changed HP (${hp(vz, p)})`);
   const clean = newRace(33);
   clean.vz.hazards.armed = false;
   toGreen(clean.race);
@@ -220,15 +211,74 @@ console.log("Volcano aimed-bomb checks\n");
   if (clean.vz.hazards.puffs.length) fail("smoke on an undamaged car");
 }
 {
-  // A player at 0 HP still finishes; being at 0 HP is not a contact.
-  const { race, vz } = newRace(34);
+  // 0 HP: the PLAYER's car blows up. The blast, the sound and the shake are asked for; it stops; the race is over for them; it ranks last.
+  const { race, vz } = newRace(32);
   vz.hazards.armed = false;
   const p = race.cars[0];
+  toGreen(race);
+  parkOthers(race);
+  runFor(race, 1);
+  for (let i = 0; i < 600; i++) stepRace(race, { ...aiInput(race, p, DT, false), throttle: true, brake: false }, DT); // up to speed, on the road
+  const speed0 = speedOf(p);
+  const hits0 = p.hits;
   vz.hazards.damage(p, 100, false);
+  vz.hazards.damage(p, 20, false);
+  vz.hazards.damage(p, 5, true);
+  if (p.hp !== 0) fail(`a car at 0 HP changed HP (${p.hp})`);
+  if (p.destroyedAt !== null) fail("the car blew up before the next step");
+  stepRace(race, { ...aiInput(race, p, DT, false), throttle: true }, DT);
+  if (p.destroyedAt === null) fail("a car at 0 HP did not blow up");
+  if (race.blasts.length !== 1 || race.blasts[0].carId !== p.id || race.blasts[0].power !== 1) fail(`blast list: ${JSON.stringify(race.blasts)}`);
+  if (!race.cues.some((c) => c.kind === "explode")) fail("no explosion sound requested");
+  if (!race.crashes.includes(1)) fail("no camera shake for the player's explosion");
+  if (race.phase !== "finished") fail(`the race is not over for a destroyed player (${race.phase})`);
+  runFor(race, 4);
+  if (speedOf(p) > 5) fail(`the wreck is still moving at ${speedOf(p).toFixed(0)} u/s (was ${speed0.toFixed(0)})`);
+  if (p.finishTime !== null) fail("a destroyed car finished");
+  if (standings(race)[race.cars.length - 1] !== p) fail("the destroyed player does not rank last");
+  if (p.hp !== 0 || p.hits !== hits0) fail(`a wreck lost points or counted contacts (hp ${p.hp}, hits ${p.hits - hits0})`);
+  console.log(`  player at 0 HP: blast, sound, shake, stopped (${speed0.toFixed(0)} → ${speedOf(p).toFixed(0)} u/s), race over, ranked last, no contact counted`);
+}
+{
+  // A BOT at 0 HP blows up too: it never finishes, it ranks behind the cars still racing, and the race goes on for everyone else.
+  const { race, vz } = newRace(35);
+  vz.hazards.armed = false;
+  const p = race.cars[0], bot = race.cars[2];
+  toGreen(race);
+  runFor(race, 2);
+  vz.hazards.damage(bot, 100, false);
   while (race.time < 900 && p.finishTime === null) stepRace(race, aiInput(race, p, DT, false), DT);
-  console.log(`  player at 0 HP finishes in ${p.finishTime?.toFixed(0) ?? "-"}s · contacts ${p.hits}`);
-  if (p.finishTime === null) fail("a player at 0 HP did not finish within 900 s");
-  if (hp(vz, p) !== 0) fail(`a car at 0 HP ended at ${hp(vz, p)}`);
+  if (!isDestroyed(bot)) fail("a bot at 0 HP did not blow up");
+  if (bot.finishTime !== null) fail("a destroyed bot finished");
+  if (p.finishTime === null) fail("the player could not finish with a bot blown up");
+  const order = standings(race);
+  if (order[order.length - 1] !== bot) fail(`the destroyed bot ranks ${order.indexOf(bot) + 1}, not last`);
+  if (race.blasts.length > 8) fail(`${race.blasts.length} blasts kept`);
+  console.log(`  a bot at 0 HP blows up (never finishes, ranks last); the player finished in ${(p.finishTime ?? 0).toFixed(0)}s · contacts ${p.hits}`);
+  // A blown-up car is solid for nobody: a car driven through its wreck is not bounced or counted.
+  const r2 = newRace(36);
+  r2.vz.hazards.armed = false;
+  const a = r2.race.cars[0], b = r2.race.cars[1];
+  toGreen(r2.race);
+  runFor(r2.race, 1);
+  r2.vz.hazards.damage(b, 100, false);
+  runFor(r2.race, 0.1);
+  // The wreck lies on the road, a car comes up behind it at speed: it drives through (nothing solid, nothing counted).
+  const tr = r2.race.track, ib = 120, tb = tr.tangents[ib], ia = ib - 12;
+  b.pos = { ...tr.path[ib] };
+  b.vel = { x: 0, y: 0 };
+  a.pos = { ...tr.path[ia] };
+  a.angle = Math.atan2(tr.tangents[ia].y, tr.tangents[ia].x);
+  a.vel = { x: tb.x * 400, y: tb.y * 400 };
+  a.lastIndex = ia;
+  let slowest = Infinity;
+  const before = a.hits;
+  for (let i = 0; i < 90; i++) {
+    stepRace(r2.race, { ...aiInput(r2.race, a, DT, false), throttle: true }, DT);
+    slowest = Math.min(slowest, speedOf(a));
+  }
+  if (a.hits !== before) fail("driving through a wreck counted a contact");
+  if (slowest < 300) fail(`a car driving through a wreck was slowed to ${slowest.toFixed(0)} u/s`);
 }
 
 // ---------- (d) decorative bombs hurt nobody; identical race with the aimed bombs off ----------

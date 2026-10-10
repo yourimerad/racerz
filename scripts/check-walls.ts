@@ -239,7 +239,7 @@ console.log("Racerz Jet walls checks\n");
     check(car.hits === hits0, `${mode}: a contact was counted`);
     check(minAlt === H, `${mode}: with an empty tank over the wall the Jet was at ${minAlt} m instead of gliding at ${H} m`);
     check(touchdown >= 0 && car.alt === 0, `${mode}: the Jet never landed once back over the road (mode ${s.mode}, ${car.alt.toFixed(0)} m)`);
-    if (vz) check(vz.hazards.st(car).hp === 100, "health changed");
+    if (vz) check(car.hp === 100, "health changed");
     console.log(`  ${mode}: empty tank over a wall → glides at ${H} m, lands on the road after ${touchdown.toFixed(1)} s, no jump, no penalty`);
   }
 }
