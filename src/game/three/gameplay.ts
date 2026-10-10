@@ -4,7 +4,7 @@ import { slipOf } from "../car";
 import type { ThemeId } from "../themes";
 import type { Car3D } from "./cars";
 import { type Disposer, type Quality, THREE, softDisc } from "./core";
-import { Ambient3D, Effects3D, Skids3D, SpeedLines3D, rgb } from "./effects";
+import { Ambient3D, Effects3D, Fireworks3D, Skids3D, SpeedLines3D, rgb } from "./effects";
 import { BearFx, VolcanoFx } from "./hazards3d";
 import { Pads3D } from "./pads";
 
@@ -36,6 +36,7 @@ export class Gameplay3D {
   private bear: BearFx | null = null;
   private ambient: Ambient3D;
   private lines: SpeedLines3D;
+  private fireworks: Fireworks3D;
   private blob: THREE.Mesh;
   private blobMat: THREE.MeshBasicMaterial;
   private prev: { hits: number; alt: number; straw: number }[];
@@ -56,6 +57,8 @@ export class Gameplay3D {
     if (mode === "northpole") this.bear = new BearFx(d, scene, this.fx);
     this.ambient = new Ambient3D(d, scene, mode, quality);
     this.lines = new SpeedLines3D(d, a.camera);
+    this.fireworks = new Fireworks3D(a.reduced);
+    this.fireworks.setQuality(quality);
     this.blobMat = d.add(new THREE.MeshBasicMaterial({ map: soft, color: "#000000", transparent: true, opacity: 0, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 }));
     this.blob = new THREE.Mesh(d.add(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2)), this.blobMat);
     this.blob.visible = false;
@@ -73,6 +76,7 @@ export class Gameplay3D {
   setQuality(q: Quality) {
     this.a.quality = q;
     this.fx.setQuality(q);
+    this.fireworks.setQuality(q);
   }
 
   update(dt: number, time: number, cam: THREE.PerspectiveCamera, pixelHeight: number) {
@@ -130,6 +134,11 @@ export class Gameplay3D {
       this.blob.scale.set(size * 1.5, 1, size);
       this.blobMat.opacity = Math.max(0, 0.5 * (1 - Math.max(0, me.alt - me.floorAlt) / 130));
     }
+
+    // The winner's fireworks over the finish.
+    const mine = race.cars[0];
+    const won = mine.finishTime !== null && race.cars.every((c) => c === mine || c.finishTime === null || c.finishTime > (mine.finishTime as number));
+    this.fireworks.update(dt, this.fx, won, me.x * K, me.y * K, me.heading);
 
     this.fx.update(dt, pixelScale);
     this.ambient.update(time, cam, pixelScale);

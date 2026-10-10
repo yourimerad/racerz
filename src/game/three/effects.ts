@@ -233,3 +233,85 @@ export class Ambient3D {
     for (const m of this.meshes) m.removeFromParent();
   }
 }
+
+// ---------- the winner's fireworks ----------
+
+const FIREWORK_COLORS = ["#ff3b3b", "#ffd23b", "#3bd1ff", "#7bff3b", "#ff3bd4", "#ffffff", "#ff8a1f", "#b36bff"].map(rgb);
+type Rocket = { x: number; y: number; z: number; vx: number; vy: number; vz: number; apex: number; c: [number, number, number]; kind: number };
+
+/**
+ * Fireworks over the finish for a winner: rockets climb from beside the road ahead of the car and burst into peonies, rings and willows
+ * (additive sparks from the shared pool, so they are bounded like every other effect). Purely visual.
+ */
+export class Fireworks3D {
+  private rockets: Rocket[] = [];
+  private acc = 0;
+  private scale = 1;
+  private reduced: boolean;
+
+  constructor(reduced: boolean) {
+    this.reduced = reduced;
+  }
+
+  setQuality(q: Quality) {
+    this.scale = q.particles;
+  }
+
+  /** `origin`: scene metres and the direction the car faces. Nothing is launched while `active` is false (rockets in flight still burst). */
+  update(dt: number, fx: Effects3D, active: boolean, ox: number, oz: number, heading: number) {
+    const fwdX = Math.cos(heading), fwdZ = Math.sin(heading);
+    if (active) {
+      this.acc += dt;
+      const every = this.reduced ? 0.9 : 0.3;
+      while (this.acc >= every) {
+        this.acc -= every;
+        if (this.rockets.length >= 8) break;
+        const ahead = 35 + Math.random() * 55, side = (Math.random() - 0.5) * 110;
+        this.rockets.push({
+          x: ox + fwdX * ahead - fwdZ * side, y: 1.5, z: oz + fwdZ * ahead + fwdX * side, vx: (Math.random() - 0.5) * 3, vy: 30 + Math.random() * 14, vz: (Math.random() - 0.5) * 3,
+          apex: 42 + Math.random() * 28, c: FIREWORK_COLORS[Math.floor(Math.random() * FIREWORK_COLORS.length)], kind: Math.floor(Math.random() * 3),
+        });
+      }
+    } else this.acc = 0;
+    for (let i = this.rockets.length - 1; i >= 0; i--) {
+      const r = this.rockets[i];
+      r.vy -= 9 * dt;
+      r.x += r.vx * dt;
+      r.y += r.vy * dt;
+      r.z += r.vz * dt;
+      fx.sparks.emit(r.x, r.y, r.z, (Math.random() - 0.5) * 1.5, -3, (Math.random() - 0.5) * 1.5, 0.35, -0.2, 0.45, 1, 0.7, 0.3, 0.9, 4, 0.5);
+      if (r.vy < 3 || r.y >= r.apex) {
+        this.burst(fx, r);
+        this.rockets.splice(i, 1);
+      }
+    }
+  }
+
+  private burst(fx: Effects3D, r: Rocket) {
+    const n = Math.max(24, Math.round(90 * this.scale)), [cr, cg, cb] = r.c;
+    fx.sparks.emit(r.x, r.y, r.z, 0, 0, 0, 9, 10, 0.22, 1, 0.95, 0.8, 0.8, 0, 0); // the flash
+    for (let i = 0; i < n; i++) {
+      let dx: number, dy: number, dz: number, life = 1.3 + Math.random() * 0.9, speed = 13 + Math.random() * 9, grav = 8;
+      if (r.kind === 1) {
+        // A ring in a tilted plane.
+        const a = (i / n) * Math.PI * 2;
+        dx = Math.cos(a);
+        dy = Math.sin(a) * 0.35;
+        dz = Math.sin(a) * 0.9;
+        speed = 17;
+      } else {
+        // A ball (peony), or a willow whose sparks hang and droop.
+        const u = Math.random() * 2 - 1, t = Math.random() * Math.PI * 2, s = Math.sqrt(1 - u * u);
+        dx = s * Math.cos(t);
+        dy = u;
+        dz = s * Math.sin(t);
+        if (r.kind === 2) {
+          life += 0.9;
+          grav = 5;
+          speed *= 0.75;
+        }
+      }
+      fx.sparks.emit(r.x, r.y, r.z, dx * speed, dy * speed, dz * speed, 0.5 + Math.random() * 0.25, -0.15, life, cr, cg, cb, 1, grav, 0.9);
+    }
+  }
+}

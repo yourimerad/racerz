@@ -14,6 +14,7 @@ import { type ModelId, MODEL_ORDER, MODELS, skinOf } from "../src/game/garage";
 import { createRace, stepRace, type Race } from "../src/game/race";
 import { Car3D } from "../src/game/three/cars";
 import { Disposer, THREE, liveResources, qualityOf } from "../src/game/three/core";
+import { Effects3D, Fireworks3D } from "../src/game/three/effects";
 import { Gameplay3D } from "../src/game/three/gameplay";
 import { DistField } from "../src/game/three/terrain";
 import { buildWorld } from "../src/game/three/world";
@@ -243,6 +244,38 @@ console.log("3D view checks\n");
   d.dispose();
   if (liveResources() !== base) fail(`${liveResources() - base} resources alive after the cars were freed`);
   console.log("  cars: 6 models × their skins build, wings fold and open, everything freed");
+}
+
+// ---------- (f) the winner's fireworks ----------
+{
+  const base = liveResources(), d = new Disposer(), scene = new THREE.Scene(), q = qualityOf(0, 1), fx = new Effects3D(d, scene, q), fw = new Fireworks3D(false);
+  fw.setQuality(q);
+  let peak = 0;
+  for (let i = 0; i < 30 * 9; i++) {
+    fw.update(1 / 30, fx, true, 100, 100, 0.5);
+    fx.update(1 / 30, 600);
+    peak = Math.max(peak, fx.sparks.count);
+  }
+  if (peak < 60) fail(`the fireworks never filled the sky (peak ${peak} sparks)`);
+  if (peak > 360) fail(`the spark pool overflowed (${peak})`);
+  for (let i = 0; i < 30 * 8; i++) {
+    fw.update(1 / 30, fx, false, 100, 100, 0.5);
+    fx.update(1 / 30, 600);
+  }
+  if (fx.sparks.count !== 0) fail(`${fx.sparks.count} sparks left 8 s after the fireworks stopped`);
+  const quiet = new Fireworks3D(false);
+  quiet.setQuality(qualityOf(2, 1));
+  let low = 0;
+  for (let i = 0; i < 30 * 9; i++) {
+    quiet.update(1 / 30, fx, true, 100, 100, 0.5);
+    fx.update(1 / 30, 600);
+    low = Math.max(low, fx.sparks.count);
+  }
+  if (low > peak) fail(`the lightest quality level must not use more sparks (${low} > ${peak})`);
+  fx.dispose();
+  d.dispose();
+  if (liveResources() !== base) fail(`${liveResources() - base} resources alive after the fireworks were freed`);
+  console.log(`  fireworks: bursts over the finish for a winner (peak ${peak} sparks of 360, ${low} at the lightest quality), they stop and drain, everything freed`);
 }
 
 if (failed) {
