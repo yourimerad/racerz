@@ -1,4 +1,4 @@
-// Racerz Jet over the walls + checkpoints. Run with `pnpm check:walls` (same Node + hook as check:tracks). Fails (non-zero exit) on any breach.
+// Racerz Jet over the walls. Run with `pnpm check:walls` (same Node + hook as check:tracks). Fails (non-zero exit) on any breach.
 //
 //   (a) floor altitudes: 0 inside the barriers, 60 / 50 / 40 / 35 beyond them (desert / volcano / north pole / any other mode), 25 over the crater lake;
 //   (b) crossing: a Jet at the wall's height flies over it in every mode, one metre lower it hits it (a contact, the usual bounce); the world's outer
@@ -7,8 +7,8 @@
 //       tank over a wall → no forced return: it keeps gliding at the wall's height and lands when it is over the road again (no jump, no penalty);
 //       no-fly zones over a wall → it cannot land there either; flying is not time off the road and has no ground drag;
 //   (d) a real shortcut in the desert: over the wall to the other side of a bend, back on the road, landing;
-//   (e) checkpoints: 8 gates, in order, forward only, crossed in the air too; a lap with a gate missing is refused (back to the first missing one, +2 s,
-//       "Checkpoint manqué"), accepted once all are crossed, gates reset every lap; the line is never crossed in the air over a wall either;
+//   (e) no checkpoints: nothing ever puts the Jet back on the road (a lap flown over a wall counts, with no penalty, no jump, no message);
+//       the line is never crossed in the air over a wall either;
 //   (f) takeoff dust is a small capped cloud.
 
 import { NO_INPUT, isAirborne, speedOf, type Car } from "../src/game/car";
@@ -235,11 +235,10 @@ console.log("Racerz Jet walls checks\n");
     }
     check(drained >= 0 && drained < 0.4, `${mode}: the tank did not run dry over the wall (${drained})`);
     check(maxJump < 15, `${mode}: the Jet jumped ${maxJump.toFixed(0)} px in one step (a return to the road?)`);
-    check(car.penalty === 0 && car.lapStart === lapStart0, `${mode}: a penalty was added (${car.penalty} s)`);
+    check(car.lapStart === lapStart0, `${mode}: the lap clock was moved`);
     check(car.hits === hits0, `${mode}: a contact was counted`);
     check(minAlt === H, `${mode}: with an empty tank over the wall the Jet was at ${minAlt} m instead of gliding at ${H} m`);
     check(touchdown >= 0 && car.alt === 0, `${mode}: the Jet never landed once back over the road (mode ${s.mode}, ${car.alt.toFixed(0)} m)`);
-    check(car.shield === 0, `${mode}: grace after a "return" that no longer exists`);
     if (vz) check(vz.hazards.st(car).hp === 100, "health changed");
     console.log(`  ${mode}: empty tank over a wall → glides at ${H} m, lands on the road after ${touchdown.toFixed(1)} s, no jump, no penalty`);
   }
@@ -296,7 +295,6 @@ console.log("Racerz Jet walls checks\n");
     tp(race, car, a.x, a.y, ang, 450);
     lift(race, car);
     car.progress = best.i;
-    race.guard!.st(car).next = 0;
     let crossed = false, landed = false, maxProgress = best.i, hits = 0;
     const hits0 = car.hits;
     for (let i = 0; i < 8 / DT && !landed; i++) {
@@ -313,140 +311,45 @@ console.log("Racerz Jet walls checks\n");
     }
     check(crossed, "the Jet never went over the wall of the bend");
     check(landed && car.alt === 0, `the Jet did not land on the other side (mode ${st.mode}, altitude ${car.alt.toFixed(0)}, idx ${car.lastIndex} / ${best.j})`);
-    check(car.penalty === 0, "a clean shortcut was penalised");
+    check(car.lapStart === 0, "a shortcut moved the lap clock");
     check(maxProgress - best.i > best.gain / 12, `the shortcut did not gain progress (${(maxProgress - best.i).toFixed(0)} samples)`);
     console.log(`  desert: over the wall from sample ${best.i} to ${best.j} (${best.d.toFixed(0)} px across a ${(best.d + best.gain).toFixed(0)} px bend), landed on the road, ${hits} contact(s)`);
   }
 }
 
-// ---------- (e) checkpoints ----------
+// ---------- (e) no checkpoints ----------
 {
-  const { race } = solo("desert");
-  const guard = race.guard!;
-  check(guard.gates.length === WALLS.GATES && WALLS.GATES === 8, `${guard.gates.length} gates`);
-  check(guard.gates.every((g, i, a) => !i || g.index > a[i - 1].index), "the gates are not in track order");
-  check(guard.gates.every((g) => g.index > 20 && g.index < race.track.path.length - 20), "a gate sits on the start/finish line");
-  const g0 = guard.gates[0];
-  near("gate half width (0.7 × the road)", Math.hypot(g0.a.x - g0.b.x, g0.a.y - g0.b.y) / 2, 0.7 * race.track.width, 0.5);
-  check(createRace("desert", GT, 1).guard === null && createRace("desert", GT, 1).flight === null, "a Racerz GT race has checkpoints / flight");
-
-  // A normal lap in the Jet (driven by the bot AI, on the ground, then in the air): every gate is crossed, in order, and the lap counts.
-  for (const air of [false, true]) {
-    const { race: r, car: c } = solo("desert", JET, 2);
-    c.vel = { x: 0, y: 0 };
-    let maxGates = 0;
-    const lap0 = c.lap;
-    for (let i = 0; i < 60 / DT && c.lap === lap0 + 0; i++) {
-      if (air && r.time > 1 && !r.flight!.isFlying(c)) lift(r, c, 30); // flown at 30 m: low, but over the road
-      stepRace(r, { ...aiInput(r, c, DT, false), fly: air }, DT, false);
-      maxGates = Math.max(maxGates, r.guard!.passed(c));
-      if (c.lap > lap0) break;
-    }
-    // The first lap of the race is the one after the grid: complete one full lap.
-    let guardGuard = 0;
-    while (c.lap === lap0 && guardGuard++ < 90 / DT) {
-      stepRace(r, { ...aiInput(r, c, DT, false), fly: false }, DT, false);
-      maxGates = Math.max(maxGates, r.guard!.passed(c));
-    }
-    check(maxGates === WALLS.GATES && c.lap >= lap0 + 1 && c.penalty === 0, `${air ? "(flying)" : "(driving)"} a normal lap: gates ${maxGates}, lap ${c.lap}, penalty ${c.penalty}`);
-    check(r.guard!.passed(c) < WALLS.GATES, "the gates were not reset for the next lap");
-  }
-}
-{
-  // Skipping gates: the lap is refused, back to the first missing gate, +2 s; then driving through them all is accepted.
-  const { race, car } = solo("desert", JET, 3);
-  const guard = race.guard!, n = race.track.path.length;
-  const gate = (k: number) => guard.gates[k];
-  car.vel = { x: 0, y: 0 };
-  // Teleport to just before gate 5 (index 4) and drive on: gates 1-4 were never crossed.
-  const g5 = gate(4), t5 = race.track.tangents[g5.index];
-  const start = (idx: number, lap = 0) => {
-    const p = race.track.path[idx], tg = race.track.tangents[idx];
+  // What used to send the Jet back: a lap that skipped everything. Now it counts like any other, and nothing moves the car but its own driving.
+  for (const last of [false, true]) {
+    const { race, car } = solo("desert", JET, 3);
+    const n = race.track.path.length, idx = n - 60, p = race.track.path[idx], tg = race.track.tangents[idx], lap = last ? TOTAL_LAPS - 1 : 0;
     car.pos = { ...p };
     car.angle = Math.atan2(tg.y, tg.x);
     car.vel = { x: tg.x * 500, y: tg.y * 500 };
     car.lastIndex = idx;
     car.lap = lap;
     car.progress = lap * n + idx;
-    guard.teleported(car);
-  };
-  void t5;
-  start(gate(4).index - 25);
-  guard.st(car).next = 0;
-  let refused = false, pillBad = false, speedBefore = 0;
-  const lapStart0 = car.lapStart, hits0 = car.hits;
-  for (let i = 0; i < 30 / DT && !refused; i++) {
-    speedBefore = speedOf(car);
-    stepRace(race, { ...aiInput(race, car, DT, false), throttle: true }, DT, false);
-    if (car.penalty > 0) refused = true;
-    pillBad ||= guard.pill(car)?.bad ?? false;
+    let maxJump = 0;
+    for (let i = 0; i < 6 / DT && car.lap === lap && car.finishTime === null; i++) {
+      const before = { ...car.pos };
+      stepRace(race, { ...aiInput(race, car, DT, false), throttle: true }, DT, false);
+      maxJump = Math.max(maxJump, Math.hypot(car.pos.x - before.x, car.pos.y - before.y));
+    }
+    check(maxJump < 15, `${last ? "last lap" : "lap"}: the Jet jumped ${maxJump.toFixed(0)} px in one step (put back on the road?)`);
+    if (last) {
+      check(car.finishTime !== null && Math.abs(car.finishTime - race.time) < 0.05, `the last lap's finish time ${car.finishTime} is not the clock ${race.time} (a penalty?)`);
+      check(race.phase === "finished", "the race did not end");
+    } else {
+      check(car.lap === 1 && Math.abs(car.lapStart - race.time) < 0.05, `a lap with no checkpoint crossed was not counted as it is (lap ${car.lap})`);
+    }
   }
-  check(refused, "a lap with gates skipped was accepted");
-  check(car.lap === 0, `the refused lap was counted (lap ${car.lap})`);
-  const first = gate(0);
-  check(Math.hypot(car.pos.x - first.x, car.pos.y - first.y) < 60, `not sent back to the first missing gate (${Math.hypot(car.pos.x - first.x, car.pos.y - first.y).toFixed(0)} px away)`);
-  near("penalty", car.penalty, 2, 1e-9);
-  near("lap clock", lapStart0 - car.lapStart, 2, 1e-9);
-  check(pillBad && guard.pill(car)?.text === "Checkpoint manqué !", `message ${guard.pill(car)?.text}`);
-  check(car.hits === hits0 && car.shield > 0.5, "the refused lap counted a contact or gave no grace");
-  check(speedOf(car) > speedBefore * 0.25 && speedOf(car) < speedBefore * 0.55, `speed after the return ${speedOf(car).toFixed(0)} (from ${speedBefore.toFixed(0)}: about 40 %)`);
-  // Now through the gates in order: 1 to 8, then the line.
-  for (let i = 0; i < 60 / DT && car.lap === 0; i++) stepRace(race, { ...aiInput(race, car, DT, false), throttle: true }, DT, false);
-  check(car.lap === 1, `after crossing every gate the lap was not accepted (lap ${car.lap})`);
-  console.log("  a lap with gates skipped is refused (+2 s, back to the first missing gate, \"Checkpoint manqué\"), then accepted with every gate");
-}
-{
-  // Order and direction: gate 2 before gate 1 does not count; crossing gate 1 backwards does not count either.
-  const { race, car } = solo("desert", JET, 3);
-  const guard = race.guard!;
-  const step = (x: number, y: number) => {
-    car.pos = { x, y };
-    guard.update(DT, car);
-  };
-  const g1 = guard.gates[0], g2 = guard.gates[1];
-  const across = (g: typeof g1, back: boolean) => {
-    const c = Math.cos(g.heading), s = Math.sin(g.heading), d = 20 * (back ? -1 : 1);
-    step(g.x - c * d, g.y - s * d);
-    step(g.x + c * d, g.y + s * d);
-  };
-  guard.reset();
-  across(g2, false);
-  check(guard.passed(car) === 0, "gate 2 counted before gate 1");
-  across(g1, true);
-  check(guard.passed(car) === 0, "gate 1 counted backwards");
-  across(g1, false);
-  across(g2, false);
-  check(guard.passed(car) === 2, `gates 1 and 2 in order: ${guard.passed(car)}`);
-  console.log("  gates: in order, forward only");
-}
-{
-  // The last lap: refused with a gate missing, accepted with all of them; the penalty is part of the finish time.
-  const { race, car } = solo("volcano", JET, 5);
-  const guard = race.guard!, n = race.track.path.length;
-  const idx = n - 60, p = race.track.path[idx], tg = race.track.tangents[idx];
-  car.pos = { ...p };
-  car.angle = Math.atan2(tg.y, tg.x);
-  car.vel = { x: tg.x * 500, y: tg.y * 500 };
-  car.lastIndex = idx;
-  car.lap = TOTAL_LAPS - 1;
-  car.progress = (TOTAL_LAPS - 1) * n + idx;
-  guard.teleported(car);
-  guard.st(car).next = WALLS.GATES - 1; // the last gate is missing
-  for (let i = 0; i < 6 / DT && car.penalty === 0; i++) stepRace(race, { ...aiInput(race, car, DT, false), throttle: true }, DT, false);
-  check(car.finishTime === null && car.penalty === 2 && car.lap === TOTAL_LAPS - 1, `last lap with a gate missing: finish ${car.finishTime}, penalty ${car.penalty}`);
-  const g8 = guard.gates[WALLS.GATES - 1];
-  check(Math.hypot(car.pos.x - g8.x, car.pos.y - g8.y) < 60, "sent back to the wrong gate");
-  for (let i = 0; i < 60 / DT && car.finishTime === null; i++) stepRace(race, { ...aiInput(race, car, DT, false), throttle: true }, DT, false);
-  check(car.finishTime !== null, "the last lap with every gate crossed did not finish");
-  check(car.finishTime !== null && Math.abs(car.finishTime - (race.time - 0) - 2) < 0.05, `finish time ${car.finishTime} vs clock ${race.time} + penalty`);
-  check(race.phase === "finished", "the race did not end");
+  console.log("  no checkpoints: a lap that skipped everything counts, no jump, no penalty, the finish time is the clock");
 }
 {
   // The line is never crossed in the air, even from over a wall next to it.
   const { race, car } = solo("desert", JET, 6);
   const n = race.track.path.length, idx = n - 8;
   const p = race.track.path[idx], t = race.track.tangents[idx], nx = -t.y, ny = t.x;
-  race.guard!.st(car).next = WALLS.GATES; // every gate crossed: only the line is being tested
   race.scene = { ...race.scene, noFly: () => false };
   tp(race, car, p.x + nx * (race.track.barrier + 120), p.y + ny * (race.track.barrier + 120), Math.atan2(t.y, t.x), 700);
   car.progress = idx;

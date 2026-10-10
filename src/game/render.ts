@@ -255,7 +255,7 @@ function drawOverlay(ctx: CanvasRenderingContext2D, race: Race, w: number, h: nu
   drawHud(ctx, race, w, h);
   race.boost.drawHud(ctx, player, w, h);
   race.hazard?.drawHud?.(ctx, w, h);
-  race.flight?.drawHud(ctx, player, w, h, mapBottom, race.guard?.pill(player) ?? null);
+  race.flight?.drawHud(ctx, player, w, h, mapBottom);
 }
 
 /**

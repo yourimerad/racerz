@@ -745,7 +745,7 @@ export class VolcanoHazards {
       }
       if (pl.age >= HZ.POOL_LIFE) continue; // cooled: harmless
       for (const car of cars) {
-        if (isAirborne(car) || car.shield > 0) continue; // a flying car passes over the pools; a car just put back on the road gets a second of grace
+        if (isAirborne(car)) continue; // a flying car passes over the pools
         const p = this.A.pos(car);
         if (Math.hypot(p.x - pl.x, p.y - pl.y) < HZ.POOL_RADIUS) burning.add(car);
       }
@@ -848,7 +848,7 @@ export class VolcanoHazards {
     this.pools.push({ id: this.nextId++, x: tg.x, y: tg.y, age: 0, shape: Array.from({ length: 9 }, () => this.R(0.85, 1.15)) });
     for (const car of cars) {
       const p = this.A.pos(car), s = this.st(car);
-      if (s.invuln <= 0 && !isAirborne(car) && car.shield <= 0 && Math.hypot(p.x - tg.x, p.y - tg.y) < HZ.TARGET_R + this.A.radius(car)) {
+      if (s.invuln <= 0 && !isAirborne(car) && Math.hypot(p.x - tg.x, p.y - tg.y) < HZ.TARGET_R + this.A.radius(car)) {
         const before = s.hp;
         this.damage(car, HZ.BOMB_DAMAGE, false);
         if (before > 0) {

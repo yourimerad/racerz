@@ -21,7 +21,7 @@ export type HazardWorld = {
   phase: "countdown" | "racing" | "finished";
   track: Track;
   /** The cars (the Race's own objects: a hazard may slow one down by writing `speedMul` or `vel`). */
-  cars: ReadonlyArray<{ id: number; isPlayer: boolean; pos: Vec; vel: Vec; angle: number; speedMul: number; lastIndex: number; finishTime: number | null; alt: number; shield: number }>;
+  cars: ReadonlyArray<{ id: number; isPlayer: boolean; pos: Vec; vel: Vec; angle: number; speedMul: number; lastIndex: number; finishTime: number | null; alt: number }>;
   cues: Cue[];
 };
 
