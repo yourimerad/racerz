@@ -44,13 +44,13 @@ export const BOOST = {
 };
 
 type Pt = [number, number];
-const CHEV: Pt[] = [[-30, 10], [0, -8], [30, 10], [30, 22], [0, 4], [-30, 22]]; // arrow
-const CHEV_Y = [18, -2, -22]; // from the rear to the front (the front is -y)
-const CHEV_A = [0.55, 0.78, 1]; // the front arrow is the brightest
+export const CHEV: Pt[] = [[-30, 10], [0, -8], [30, 10], [30, 22], [0, 4], [-30, 22]]; // arrow
+export const CHEV_Y = [18, -2, -22]; // from the rear to the front (the front is -y)
+export const CHEV_A = [0.55, 0.78, 1]; // the front arrow is the brightest
 
 export type BoostStyleId = "desert" | "volcano" | "north" | "classic";
-type Deco = { x: number; y: number; r: number; fill: string; a: number; stroke?: string };
-type BoostStyle = {
+export type Deco = { x: number; y: number; r: number; fill: string; a: number; stroke?: string };
+export type BoostStyle = {
   glow: string; glowA: number; base: string; stroke: string; inner?: string; rim?: string; gloss?: boolean;
   chevFill: string[]; chevStroke: string[]; deco: Deco[]; flame: [string, string];
   part: { rgb: string; a: number; grow: number; life: number };

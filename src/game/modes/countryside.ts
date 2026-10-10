@@ -486,6 +486,23 @@ export function scene(track: Track): Scene {
     }
 
   return {
+    props: [
+      ...forestTrees.map((c) => ({ kind: "tree" as const, ...c })),
+      ...trees.map((c) => ({ kind: "tree" as const, ...c })),
+      ...[...bales, ...villageBales].map((c, i) => ({ kind: "bale" as const, ...c, a: i * 2.3 })),
+      ...hayBales.map((c) => ({ kind: "strawbale" as const, ...c })),
+      ...hedges.map((c) => ({ kind: "hedge" as const, ...c })),
+      ...grandstands.map((c) => ({ kind: "grandstand" as const, ...c })),
+      ...pits.map((c) => ({ kind: "pit" as const, ...c })),
+      ...tires.map((c) => ({ kind: "tires" as const, ...c })),
+      ...banners.map((c) => ({ kind: "banner" as const, ...c })),
+      ...chapiteaux.map((c) => ({ kind: "tent" as const, ...c })),
+      ...villageStands.map((c) => ({ kind: "stand" as const, ...c })),
+      ...farms.map((c) => ({ kind: "farm" as const, ...c })),
+      ...cows.map((c, i) => ({ kind: "cow" as const, ...c, a: i * 2.9 })),
+      ...archPillars.map((c) => ({ kind: "pillar" as const, ...c })),
+    ],
+    fences,
     lava: [],
     vents: lightGaps,
     bumpers: hayBumpers,

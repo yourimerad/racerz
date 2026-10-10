@@ -245,9 +245,26 @@ export function render(ctx: CanvasRenderingContext2D, race: Race, w: number, h: 
   ctx.restore();
 
   theme.fx.screen?.(ctx, view);
+  drawOverlay(ctx, race, w, h);
+}
+
+/** The HUD over the world: minimap, race readouts, turbo gauge, the mode's own readouts (HP, alerts), the Jet's energy. Screen space. */
+function drawOverlay(ctx: CanvasRenderingContext2D, race: Race, w: number, h: number) {
+  const player = race.cars[0];
   const mapBottom = drawMinimap(ctx, race, w);
   drawHud(ctx, race, w, h);
-  boost.drawHud(ctx, player, w, h);
+  race.boost.drawHud(ctx, player, w, h);
   race.hazard?.drawHud?.(ctx, w, h);
-  flight?.drawHud(ctx, player, w, h, mapBottom, race.guard?.pill(player) ?? null);
+  race.flight?.drawHud(ctx, player, w, h, mapBottom, race.guard?.pill(player) ?? null);
+}
+
+/**
+ * The same HUD alone, on a cleared (transparent) canvas: the 3D view draws the world in WebGL underneath and this canvas goes on top of it.
+ * The 2D world is not drawn at all in this mode.
+ */
+export function renderHud(ctx: CanvasRenderingContext2D, race: Race, w: number, h: number) {
+  ctx.save();
+  ctx.clearRect(0, 0, w, h);
+  drawOverlay(ctx, race, w, h);
+  ctx.restore();
 }

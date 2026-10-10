@@ -307,6 +307,7 @@ export function scene(track: Track): Scene {
   const cracks = Array.from({ length: 90 }, () => ({ x: range(rng, b.minX, b.maxX), y: range(rng, b.minY, b.maxY) }));
 
   return {
+    props: [...rocks.map((c) => ({ kind: "rock" as const, ...c })), ...cacti.map((c) => ({ kind: "cactus" as const, ...c }))],
     lava: [],
     vents: [],
     under(ctx) {

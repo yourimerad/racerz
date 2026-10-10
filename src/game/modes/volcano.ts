@@ -19,10 +19,10 @@ type Ctx = CanvasRenderingContext2D;
 type Pt = [number, number];
 
 /** The volcano (centre of the cone and crater). */
-const CONE = { x: 1500, y: 1150 };
+export const CONE = { x: 1500, y: 1150 };
 /** Radii: three rock rings, crater lip, inner wall, lava lake. */
-const RING_R = [620, 480, 340] as const;
-const LIP_R = 215, WALL_R = 190, LAKE_R = 150;
+export const RING_R = [620, 480, 340] as const;
+export const LIP_R = 215, WALL_R = 190, LAKE_R = 150;
 
 export const layout: TrackLayout = {
   points: [
@@ -1278,6 +1278,7 @@ export function scene(track: Track): Scene {
   const rings = RING_R.map((r, i) => outline(CONE.x, CONE.y, r, 21, 0.07, 22 + i * 3));
 
   return {
+    props: [...blocks.map((c) => ({ kind: "rock" as const, ...c })), ...pools.map((c) => ({ kind: "lavapool" as const, ...c }))],
     lava: [], // the lake is decoration only: nothing slows the car
     vents: [],
     hazard: createVolcano,

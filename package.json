@@ -15,18 +15,21 @@
     "check:hazards": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/resolve-ts.mjs scripts/check-hazards.ts",
     "check:boost": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/resolve-ts.mjs scripts/check-boost.ts",
     "check:flight": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/resolve-ts.mjs scripts/check-flight.ts",
-    "check:walls": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/resolve-ts.mjs scripts/check-walls.ts"
+    "check:walls": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/resolve-ts.mjs scripts/check-walls.ts",
+    "check:3d": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/resolve-ts.mjs scripts/check-3d.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.117.3",
     "next": "16.3.8",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "three": "0.170.0"
   },
   "devDependencies": {
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/three": "0.170.0",
     "eslint": "^9",
     "eslint-config-next": "16.3.8",
     "typescript": "^5"

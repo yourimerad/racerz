@@ -11,7 +11,8 @@ import {
   setDebugMode, subscribeDebugMode, subscribeDebugPanel, toggleDebugMode, toggleDebugPanel,
 } from "@/game/debug";
 import { type Race, createRace, stepRace, standings } from "@/game/race";
-import { formatTime, render } from "@/game/render";
+import type { Renderer3D } from "@/game/render3d";
+import { formatTime, render, renderHud } from "@/game/render";
 import { type ThemeId, THEMES, THEME_ORDER } from "@/game/themes";
 import {
   type Profile, type RaceReport, DEBUG_PROFILE, formatMoney, getPlayerProfile, getServerPlayerProfile, savePlayerProfile, settleRace,
@@ -37,10 +38,29 @@ const KEYS: Record<string, keyof Input> = {
 };
 const STEP = 1 / 120;
 
+/** The moment while the 3D view is being made. */
+function drawLoading(ctx: CanvasRenderingContext2D, w: number, h: number, ground: string) {
+  ctx.save();
+  ctx.fillStyle = ground;
+  ctx.fillRect(0, 0, w, h);
+  ctx.fillStyle = "#ffffffcc";
+  ctx.font = "700 20px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("Chargement de la 3D…", w / 2, h / 2);
+  ctx.restore();
+}
+
 type Result = { name: string; color: string; time: number | null; isPlayer: boolean };
 
 export default function Game() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  // The world is shown in 3D (render3d.ts): a WebGL canvas under the 2D canvas, which only draws the HUD. The 2D drawing (render.ts) stays as
+  // the fallback for a device with no WebGL at all. The race waits ("loading") until the 3D view is ready, so its countdown is not eaten.
+  const glHostRef = useRef<HTMLDivElement>(null);
+  const r3dRef = useRef<Renderer3D | null>(null);
+  const r3dStatus = useRef<"loading" | "ready" | "failed">("loading");
+  const [notice3d, setNotice3d] = useState<string | null>(null);
   const raceRef = useRef<Race | null>(null);
   const inputRef = useRef<Input>({ ...NO_INPUT });
   const [screen, setScreen] = useState<"menu" | "race" | "results">("menu");
@@ -181,13 +201,33 @@ export default function Game() {
     const frame = (now: number) => {
       const race = raceRef.current;
       if (!race) return;
+      if (r3dStatus.current === "loading") {
+        // The 3D view is being made: nothing runs yet, so the countdown starts when the picture does.
+        last = now;
+        drawLoading(ctx, canvas.clientWidth, canvas.clientHeight, race.theme.colors.ground);
+        raf = requestAnimationFrame(frame);
+        return;
+      }
       acc += Math.min(0.1, (now - last) / 1000);
       last = now;
       while (acc >= STEP) {
         stepRace(race, inputRef.current, STEP);
         acc -= STEP;
       }
-      render(ctx, race, canvas.clientWidth, canvas.clientHeight);
+      const r3 = r3dRef.current;
+      if (r3) {
+        // 3D: the world in WebGL (a picture of the race, nothing written back), the same HUD on the 2D canvas over it.
+        try {
+          r3.render(race, acc);
+          renderHud(ctx, race, canvas.clientWidth, canvas.clientHeight);
+        } catch {
+          r3dRef.current = null;
+          r3dStatus.current = "failed";
+          r3.dispose();
+          setNotice3d("La vue 3D a rencontré un problème : le jeu passe en 2D.");
+          render(ctx, race, canvas.clientWidth, canvas.clientHeight);
+        }
+      } else render(ctx, race, canvas.clientWidth, canvas.clientHeight);
 
       const me = race.cars[0];
       for (const power of race.crashes.splice(0)) sound.crash(power);
@@ -245,6 +285,42 @@ export default function Game() {
     };
   }, [screen]);
 
+  // The 3D renderer lives while a race (or its results) is on screen; leaving for the menu frees every GPU resource.
+  const inGame = screen !== "menu";
+  useEffect(() => {
+    if (!inGame) return;
+    let cancelled = false;
+    let inst: Renderer3D | null = null;
+    r3dStatus.current = "loading";
+    const fail = (msg: string) => {
+      if (cancelled) return;
+      r3dStatus.current = "failed"; // the 2D drawing takes over
+      setNotice3d(msg);
+    };
+    import("@/game/render3d")
+      .then((m) => {
+        if (cancelled) return;
+        const host = glHostRef.current;
+        const r = host ? m.createRenderer3D(host) : null;
+        if (!r) return fail("La 3D a besoin de WebGL, que cet appareil ne fournit pas : le jeu s'affiche en 2D.");
+        inst = r;
+        r3dRef.current = r;
+        r3dStatus.current = "ready";
+      })
+      .catch(() => fail("La 3D n'a pas pu se charger : le jeu s'affiche en 2D."));
+    return () => {
+      cancelled = true;
+      r3dStatus.current = "loading";
+      if (inst && r3dRef.current === inst) r3dRef.current = null;
+      inst?.dispose();
+    };
+  }, [inGame]);
+  useEffect(() => {
+    if (!notice3d) return;
+    const t = setTimeout(() => setNotice3d(null), 7000);
+    return () => clearTimeout(t);
+  }, [notice3d]);
+
   const touch = (k: keyof Input) => ({
     onPointerDown: (e: React.PointerEvent) => {
       e.currentTarget.setPointerCapture(e.pointerId);
@@ -263,9 +339,16 @@ export default function Game() {
         if (b && !b.closest("[data-nosound]")) sound.click();
       }}
     >
+      <div ref={glHostRef} className={styles.gl} />
       <canvas ref={canvasRef} className={styles.canvas} />
       <AccountNotice />
       {screen !== "menu" && <SoundButton floating />}
+      {notice3d && (
+        <div className={`${styles.notice} ${styles.noticeErr}`} role="status">
+          <span>{notice3d}</span>
+          <button onClick={() => setNotice3d(null)} aria-label="Fermer">✕</button>
+        </div>
+      )}
       {debugMode && debugPanelOpen && <DebugPanel raceRef={raceRef} mode={mode} />}
 
       {screen === "race" && (
