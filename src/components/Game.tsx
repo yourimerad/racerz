@@ -316,6 +316,26 @@ export default function Game() {
     };
   }, [inGame]);
   useEffect(() => {
+    // Behind the results the 3D scene keeps moving (the winner's fireworks, snow, flames): it is only drawn, the race is not stepped.
+    if (screen !== "results") return;
+    let raf = 0;
+    const tick = () => {
+      const r3 = r3dRef.current, race = raceRef.current;
+      if (r3 && race) {
+        try {
+          r3.render(race, 0);
+        } catch {
+          r3dRef.current = null;
+          r3dStatus.current = "failed";
+          r3.dispose();
+        }
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [screen]);
+  useEffect(() => {
     if (!notice3d) return;
     const t = setTimeout(() => setNotice3d(null), 7000);
     return () => clearTimeout(t);
@@ -373,10 +393,12 @@ export default function Game() {
         <Lobby profile={profile} actions={actions} mode={mode} setMode={setMode} record={record} onStart={start} debug={debugMode} />
       )}
 
+      {/* Victory: a lighter veil over the 3D scene, the fireworks at full brightness above it, the podium above them. */}
+      {screen === "results" && report?.place === 1 && <div className={styles.dim} />}
       {screen === "results" && report?.place === 1 && <Fireworks />}
 
       {screen === "results" && (
-        <div className={styles.overlay}>
+        <div className={report?.place === 1 ? `${styles.overlay} ${styles.overlayClear}` : styles.overlay}>
           <h2 className={styles.title}>{report?.place === 1 ? "Victoire !" : "Arrivée"}</h2>
           <p>{THEMES[mode].emoji} {THEMES[mode].name}</p>
           <ol className={styles.podium}>

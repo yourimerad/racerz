@@ -116,3 +116,5 @@ button.account:hover { background: #fff2; }
 }
 .noticeErr { background: #8a1c2bee; }
 .notice button { background: none; border: 0; color: #fff; cursor: pointer; font-size: 16px; }
+.dim { position: absolute; inset: 0; background: rgba(6, 12, 14, 0.5); pointer-events: none; }
+.overlayClear { background: transparent; }
