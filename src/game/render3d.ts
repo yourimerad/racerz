@@ -95,6 +95,7 @@ class Impl implements Renderer3D {
     sh.camera.far = 520;
     sh.bias = -0.0004;
     sh.normalBias = 0.06;
+    sh.intensity = 0.8; // shadows soft enough that a road under a canopy is still a road
     this.sun.castShadow = true;
     this.scene.add(this.sun, this.sun.target, this.hemi, this.camera);
     this.applyQuality();

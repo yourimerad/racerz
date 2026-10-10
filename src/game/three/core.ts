@@ -143,11 +143,11 @@ export function mat4(x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0, sx = 1, sy = s
   S.set(sx, sy, sz);
   return M.compose(P, Q, S);
 }
-export function merge(parts: THREE.BufferGeometry[]): THREE.BufferGeometry {
+export function merge(parts: THREE.BufferGeometry[], keepNormals = false): THREE.BufferGeometry {
   const g = mergeGeometries(parts, false);
   for (const p of parts) p.dispose();
   if (!g) throw new Error("merge failed");
-  g.computeVertexNormals();
+  if (!keepNormals) g.computeVertexNormals();
   return g;
 }
 

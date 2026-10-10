@@ -1,6 +1,6 @@
 import { K } from "../adapter3d";
 import { mulberry32 } from "../scenery";
-import { THREE, type Placement, hash2, instanced, propMaterial, mat4, merge, part } from "./core";
+import { THREE, type Placement, hash2, instanced, propMaterial, mat4, part } from "./core";
 import { faceRoad, placeOf, propsOf, texturedGround } from "./place";
 import * as models from "./props";
 import { coverSamples } from "./terrain";
@@ -61,10 +61,30 @@ export function buildClassic(ctx: WorldCtx): Scenery {
   const faced = (list: ReturnType<typeof propsOf>, modelR: number, stretch = 1): Placement[] =>
     list.map((p, i) => ({ ...placeOf(p, modelR, i, faceRoad(field, path, p.x, p.y)), s: stretch }));
 
-  // ---- trees (broadleaf), pillars at the canopy entrances ----
-  const trees = propsOf(props, "tree").map((p, i) => placeOf(p, 2.2, i));
-  const pillars = propsOf(props, "pillar").map((p, i) => ({ ...placeOf(p, 2.2, i), s: 1.1 }));
-  put(instanced(d, models.treeModel(), matProp, [...trees, ...pillars]));
+  // ---- trees: oaks, poplars and tall forest trees, a mix by position; the big trunks at the canopy entrances ----
+  const smooth = propMaterial(d, { flatShading: false, roughness: 0.9 });
+  const byVariant: Placement[][] = [[], [], []];
+  const autumn = [0xffffff, 0xf2f6dc, 0xe9f0c8, 0xfff2c0];
+  propsOf(props, "tree").forEach((p, i) => {
+    const h = hash2(i, Math.round(p.x), 77), variant = h < 0.45 ? 0 : h < 0.7 ? 1 : 2, pl = placeOf(p, 2.2, i);
+    byVariant[variant].push({ ...pl, tint: autumn[Math.floor(hash2(i, Math.round(p.y), 78) * autumn.length)] });
+  });
+  byVariant[2].push(...propsOf(props, "pillar").map((p, i) => ({ ...placeOf(p, 2.2, i), s: 1.35 })));
+  // Along the forest road (the two covered stretches): tall trunks either side of the barriers, holding up the canopy.
+  track.covers.forEach((c, ci) => {
+    const { from, count } = coverSamples(track, c);
+    for (let k = -6; k <= count + 6; k += 11) {
+      const i = (((from + k) % path.length) + path.length) % path.length, p = path[i], t = track.tangents[i];
+      for (const side of [-1, 1]) {
+        const lat = side * (track.barrier + 22 + hash2(k, side + 3, ci) * 90), jx = (hash2(k, side, ci + 5) - 0.5) * 60;
+        byVariant[2].push({
+          x: (p.x - t.y * lat + t.x * jx) * K, z: (p.y + t.x * lat + t.y * jx) * K, s: 1.1 + hash2(k, side + 9, ci) * 0.45, ry: hash2(k, side, ci) * 6.28,
+          tint: autumn[Math.floor(hash2(k, side + 20, ci) * autumn.length)],
+        });
+      }
+    }
+  });
+  byVariant.forEach((list, v) => put(instanced(d, models.treeModel(v as 0 | 1 | 2), smooth, list)));
   put(instanced(d, models.hedge(), matProp, propsOf(props, "hedge").slice(0, 900).map((p, i) => placeOf(p, 1, i)), false));
 
   // ---- hay: the square bales that line the village bend (the physical bumpers), irregular, and the round ones in the fields ----
@@ -102,23 +122,22 @@ export function buildClassic(ctx: WorldCtx): Scenery {
   put(instanced(d, part(new THREE.BoxGeometry(0.16, 1.25, 0.16), "#6b4f30", mat4(0, 0.62, 0)), matProp, posts.slice(0, 2500), false));
   put(instanced(d, part(new THREE.BoxGeometry(1, 0.1, 0.07), "#8a6a45"), matProp, rails.slice(0, 5000), false));
 
-  // ---- the two leafy canopies over the road in the forest ----
+  // ---- the two leafy canopies over the road in the forest: masses of leaves held up by the trunks, with gaps for the light ----
   const blobs: Placement[] = [];
   const rng = mulberry32(2010);
   track.covers.forEach((c) => {
     const { from, count } = coverSamples(track, c);
-    for (let k = -3; k <= count + 3; k += 5) {
+    for (let k = -3; k <= count + 3; k += 4) {
       const i = (((from + k) % path.length) + path.length) % path.length, p = path[i], t = track.tangents[i];
       for (let s = 0; s < 3; s++) {
-        if (rng() < 0.1) continue; // a gap: a shaft of light
-        const lat = (s - 1) * track.barrier * 0.7 + (rng() - 0.5) * 80, r = (55 + rng() * 45) * K;
-        const v = 150 + Math.floor(rng() * 70);
-        blobs.push({ x: (p.x - t.y * lat + (rng() - 0.5) * 40) * K, y: 12.5, z: (p.y + t.x * lat + (rng() - 0.5) * 40) * K, s: r, sy: r * 0.5, ry: rng() * 6, tint: ((v * 0.55) << 16) | (v << 8) | (v * 0.45) });
+        if (rng() < 0.14) continue; // a gap: a shaft of light
+        const lat = (s - 1) * track.barrier * 0.7 + (rng() - 0.5) * 80, r = (45 + rng() * 40) * K;
+        const v = 215 + Math.floor(rng() * 40);
+        blobs.push({ x: (p.x - t.y * lat + (rng() - 0.5) * 40) * K, y: 11.5 + rng() * 1.5, z: (p.y + t.x * lat + (rng() - 0.5) * 40) * K, s: r, ry: rng() * 6, tint: ((v * 0.9) << 16) | (v << 8) | (v * 0.75) });
       }
     }
   });
-  const leaf = merge([part(new THREE.IcosahedronGeometry(1, 1), "#2f6b2a"), part(new THREE.IcosahedronGeometry(0.7, 1), "#3e7f33", mat4(-0.2, 0.35, 0.1))]);
-  put(instanced(d, leaf, matProp, blobs));
+  put(instanced(d, models.leafMass(), smooth, blobs));
 
   return {};
 }
