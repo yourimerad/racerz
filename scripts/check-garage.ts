@@ -7,14 +7,20 @@
 //       slows down, the distance eases toward the one that fits (the Jet's open wings need more), `fit` really keeps a sphere in view;
 //   (c) the cache: the least recently used car goes first, never the one on the stage, everything it drops is freed;
 //   (d) the Jet's wing demo (open 3 s, folded 3 s) and the no-motion setting;
-//   (e) the stage's own geometry is finite, small, and `dispose` frees all of it; every car in every paint the lobby can show builds and is freed.
+//   (e) the stage's own geometry is finite, small, and `dispose` frees all of it; every car in every paint the lobby can show builds and is freed;
+//   (f) the Bugatti Chiron: its place and price in the shop (and the SQL's, for every car), its bars, its paints, buying it, its 3D build.
 
-import { MODEL_ORDER, MODELS, NEW_PROFILE, SKINS, SKIN_ORDER, skinFits, skinOf, type ModelId, type Profile } from "../src/game/garage";
+import { MODEL_ORDER, MODELS, NEW_PROFILE, SKINS, SKIN_ORDER, STAT_RANGE, buyCar, carStats, skinFits, skinOf, skinsFor, type ModelId, type Profile } from "../src/game/garage";
+import { readFileSync } from "node:fs";
 import { Lru, Orbit, carKey, carRadius, stageChoice, stageWing } from "../src/game/garageView";
 import { Car3D } from "../src/game/three/cars";
 import { Disposer, THREE, liveResources } from "../src/game/three/core";
 import { TURNTABLE, buildStage } from "../src/game/three/showroom";
 import type { CarView } from "../src/game/adapter3d";
+
+const blankView = (model: ModelId): CarView => ({
+  id: 0, isPlayer: false, model, skin: skinOf(model, "factory"), x: 0, y: 0, heading: 0, alt: 0, speed: 0, boosting: false, health: 1, destroyed: -1, wreck: 1, wing: 0, flame: 0, finished: false, stunned: false,
+});
 
 let failed = false;
 const fail = (msg: string) => {
@@ -213,6 +219,73 @@ console.log("3D garage checks\n");
   check(liveResources() === base, `${liveResources() - base} resources alive after the cars were freed`);
   check(n === Object.values(MODELS).length * 0 + MODEL_ORDER.reduce((k, m) => k + SKIN_ORDER.filter((s) => skinFits(m, s)).length, 0), "cars built");
   console.log(`  stage: ${Math.round(tris)} triangles, finite, freed; ${n} (car, paint) pairs build and are freed`);
+}
+
+// ---------- (f) the Bugatti Chiron ----------
+{
+  const c = MODELS.chiron;
+  check(c.id === "chiron" && c.name === "Bugatti Chiron" && c.price === 300_000, "the Chiron's id / name / price");
+  const at = MODEL_ORDER.indexOf("chiron");
+  check(at === MODEL_ORDER.indexOf("f8") + 1 && at === MODEL_ORDER.indexOf("jet") - 1, "the Chiron comes right after the F8 and right before the Jet in the shop");
+  check(c.price > MODELS.f8.price && c.price < MODELS.jet.price, "the Chiron's price sits between the F8's and the Jet's");
+  // Faster and quicker than the F8 and planted where the F8 slides; out of the scale, so no other car's bars moved.
+  const f8 = carStats("f8", 1), ch = carStats("chiron", 1);
+  check(ch.speed > f8.speed && ch.accel > f8.accel && ch.grip > f8.grip, "the Chiron is not above the F8 on every stat");
+  check(!!c.hypercar && !c.flying, "the Chiron is a hypercar that does not fly");
+  const old = { speed: { min: 0.944416, max: 1.4632 }, accel: { min: 0.92188, max: 1.651 }, grip: { min: 0.74, max: 1.3 } };
+  for (const k of ["speed", "accel", "grip"] as const) {
+    near(`STAT_RANGE.${k}.min`, STAT_RANGE[k].min, old[k].min, 1e-6);
+    near(`STAT_RANGE.${k}.max`, STAT_RANGE[k].max, old[k].max, 1e-6);
+  }
+  const bar = (k: "speed" | "accel" | "grip", v: number) => ((v - STAT_RANGE[k].min) / (STAT_RANGE[k].max - STAT_RANGE[k].min)) * 100;
+  near("Chiron bar: speed", bar("speed", ch.speed), 80, 1);
+  near("Chiron bar: accel", bar("accel", ch.accel), 72, 1);
+  near("Chiron bar: grip", bar("grip", ch.grip), 46, 1);
+  // Buying it, with and without the money; the paints it can wear.
+  const poor: Profile = { ...NEW_PROFILE, money: 299_999 }, rich: Profile = { ...NEW_PROFILE, money: 300_000 };
+  check(buyCar(poor, "chiron") === poor, "bought the Chiron with 299 999 €");
+  const bought = buyCar(rich, "chiron");
+  check(bought.money === 0 && bought.selected === "chiron" && !!bought.cars.chiron && bought.cars.chiron.skin === "factory", "buying the Chiron");
+  check(skinOf("chiron", "factory").name === "Bleu Bugatti" && skinOf("chiron", "factory").accent === "#0b0b0e", "the Chiron's factory paint");
+  check(skinsFor("chiron").length === 8 && skinsFor("chiron").every((id) => id === "factory" || !SKINS[id].jet), "the Chiron wears the shared skins and none of the Jet's");
+  check(!skinFits("chiron", "jetGold") && skinFits("chiron", "gold") && !skinFits("jet", "gold"), "skin fit around the Chiron");
+  // The SQL prices every car like the game does (a drift here would let the server refuse a purchase, or sell it for less).
+  const sql = readFileSync(new URL("../supabase/schema.sql", import.meta.url), "utf8");
+  const fn = sql.slice(sql.indexOf("function public.racerz_car_price"), sql.indexOf("function public.racerz_skin_price"));
+  const prices = new Map([...fn.matchAll(/when '(\w+)' then (\d+)/g)].map((m) => [m[1], Number(m[2])]));
+  for (const id of MODEL_ORDER) check(prices.get(id) === MODELS[id].price, `SQL price of ${id}: ${prices.get(id)} (game ${MODELS[id].price})`);
+  check(prices.size === MODEL_ORDER.length, `the SQL prices ${prices.size} cars, the game has ${MODEL_ORDER.length}`);
+  // The model builds into finite geometry of a sensible size, in its factory paint and in the shop's.
+  const base = liveResources(), d = new Disposer(), view = { ...blankView("chiron") }, car = new Car3D(d, view, null);
+  car.update(view, 1 / 60, 1); // (hides the turbo flame, which is not part of the car's size)
+  let tris = 0, badV = 0;
+  car.group.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh) return;
+    const pos = m.geometry.getAttribute("position");
+    tris += (m.geometry.index ? m.geometry.index.count : pos.count) / 3;
+    for (let i = 0; i < pos.count * 3; i++) if (!Number.isFinite((pos.array as ArrayLike<number>)[i])) badV++;
+  });
+  check(badV === 0, `${badV} non-finite vertices in the Chiron`);
+  check(tris > 3000 && tris < 120_000, `the Chiron has ${Math.round(tris)} triangles`);
+  // (Only what is visible: the hidden turbo flame is not part of the car's size.)
+  const box = new THREE.Box3();
+  car.group.updateMatrixWorld(true);
+  const visit = (o: THREE.Object3D) => {
+    if (!o.visible) return;
+    if ((o as THREE.Mesh).isMesh) {
+      const g = (o as THREE.Mesh).geometry;
+      if (!g.boundingBox) g.computeBoundingBox();
+      box.union(g.boundingBox!.clone().applyMatrix4(o.matrixWorld));
+    }
+    o.children.forEach(visit);
+  };
+  visit(car.group);
+  const size = box.getSize(new THREE.Vector3());
+  check(size.x > 4.2 && size.x < 4.9 && size.z > 1.9 && size.z < 2.3 && size.y > 1.1 && size.y < 1.4, `the Chiron measures ${size.x.toFixed(2)} × ${size.z.toFixed(2)} × ${size.y.toFixed(2)} m (about 4.4 × 2.04 × 1.2)`);
+  d.dispose();
+  check(liveResources() === base, `${liveResources() - base} resources alive after the Chiron was freed`);
+  console.log(`  Chiron: 300 000 €, bars 80 / 72 / 46, SQL prices match for all ${MODEL_ORDER.length} cars, ${Math.round(tris)} triangles, ${size.x.toFixed(2)} × ${size.z.toFixed(2)} × ${size.y.toFixed(2)} m`);
 }
 
 if (failed) {

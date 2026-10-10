@@ -484,7 +484,94 @@ function p911(ctx: Ctx, skin: Skin) {
   ctx.fillRect(-L + 0.9, -5.8, 0.6, 11.6);
 }
 
-const ART: Record<Exclude<ModelId, "jet">, (ctx: Ctx, skin: Skin) => void> = { gt, mx5, p911, aventador, f8 };
+// Bonnet edges, door shuts, the roof scoop's frame.
+const CHIRON_SEAMS = [9.5, -6.2, L - 1.8, -4.4, 9.5, 6.2, L - 1.8, 4.4, 3, -W + 0.8, 3, -7.4, 3, W - 0.8, 3, 7.4];
+/** Bugatti Chiron: wide rounded body, dark glass roof with its scoop, the horseshoe grille, the C lines of the flanks, a light band and a wide wing. */
+function chiron(ctx: Ctx, skin: Skin) {
+  wheels(ctx, 12.5, -12.5, 12, 11, 7);
+  ctx.beginPath();
+  ctx.moveTo(L, -4.5);
+  ctx.bezierCurveTo(L, -8, 14, -W + 0.8, 6, -W + 0.6);
+  ctx.bezierCurveTo(-2, -W + 0.8, -8, -W - 0.6, -14, -W - 0.6);
+  ctx.bezierCurveTo(-L + 1, -W - 0.4, -L, -W + 3, -L, -6.5);
+  ctx.lineTo(-L, 6.5);
+  ctx.bezierCurveTo(-L, W - 3, -L + 1, W + 0.4, -14, W + 0.6);
+  ctx.bezierCurveTo(-8, W + 0.6, -2, W - 0.8, 6, W - 0.6);
+  ctx.bezierCurveTo(14, W - 0.8, L, 8, L, 4.5);
+  ctx.closePath();
+  paint(ctx, skin);
+  seams(ctx, CHIRON_SEAMS);
+  // The long teardrop greenhouse, with the painted roof panel and the air scoop at its back.
+  ctx.beginPath();
+  ctx.moveTo(9.5, -5.6);
+  ctx.bezierCurveTo(5, -8, -5, -8, -10, -5.8);
+  ctx.lineTo(-13, -3.8);
+  ctx.lineTo(-13, 3.8);
+  ctx.lineTo(-10, 5.8);
+  ctx.bezierCurveTo(-5, 8, 5, 8, 9.5, 5.6);
+  ctx.closePath();
+  glass(ctx, -13, 9.5);
+  ctx.fillStyle = skin.pattern === "carbon" ? carbon(ctx) : skin.body;
+  ctx.beginPath();
+  ctx.roundRect(-9, -4, 11, 8, 2.2);
+  ctx.fill();
+  ctx.fillStyle = "rgba(0,0,0,0.78)";
+  ctx.beginPath();
+  ctx.roundRect(-8.2, -2.3, 3.8, 4.6, 1.2);
+  ctx.fill();
+  // The C line of each flank, around the side intake behind the door, in the skin's accent colour.
+  ctx.strokeStyle = skin.accent;
+  ctx.lineWidth = 0.9;
+  ctx.lineCap = "round";
+  for (const s of [-1, 1]) {
+    ctx.beginPath();
+    ctx.moveTo(-12, s * (W - 2.3));
+    ctx.bezierCurveTo(-5.5, s * (W - 1.4), -2.6, s * (W - 1.8), -2.2, s * (W - 4.6));
+    ctx.bezierCurveTo(-2, s * (W - 5.6), -3, s * (W - 6.3), -4.5, s * (W - 6.6));
+    ctx.stroke();
+    poly(ctx, [[-3.4, s * (W - 2.2)], [-9.6, s * (W - 1.7)], [-9.2, s * (W - 4.8)], [-3.8, s * (W - 4.7)]]);
+    ctx.fillStyle = "rgba(0,0,0,0.7)";
+    ctx.fill();
+  }
+  ctx.lineCap = "butt";
+  mirrors(ctx, skin, 6.5, W + 0.5);
+  // The horseshoe grille, with its red macaron, and the slim twin headlights.
+  ctx.beginPath();
+  ctx.moveTo(L - 0.1, -2.7);
+  ctx.quadraticCurveTo(L - 2.7, -3.1, L - 2.8, -0.8);
+  ctx.quadraticCurveTo(L - 3, 0.9, L - 2.8, 0.8);
+  ctx.quadraticCurveTo(L - 2.7, 3.1, L - 0.1, 2.7);
+  ctx.closePath();
+  ctx.fillStyle = "#0c0d10";
+  ctx.fill();
+  ctx.strokeStyle = "#cfd4db";
+  ctx.lineWidth = 0.6;
+  ctx.stroke();
+  ctx.fillStyle = "#c4121c";
+  ctx.beginPath();
+  ctx.ellipse(L - 2.6, 0, 0.45, 0.8, 0, 0, Math.PI * 2);
+  ctx.fill();
+  for (const s of [-1, 1]) {
+    poly(ctx, [[L - 2.6, s * 5.2], [L - 6.4, s * 8], [L - 7.2, s * 7.5], [L - 3.2, s * 4.5]]);
+    ctx.fillStyle = HEAD;
+    ctx.fill();
+  }
+  // The wide wing, a blade over the tail, and the full-width light band.
+  ctx.fillStyle = skin.matte ? "#1a1a1c" : skin.body;
+  poly(ctx, [[-16.4, -8.8], [-19.2, -9.2], [-19.2, 9.2], [-16.4, 8.8]]);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(0,0,0,0.55)";
+  ctx.lineWidth = 0.5;
+  ctx.stroke();
+  ctx.fillStyle = "rgba(255,255,255,0.25)";
+  ctx.fillRect(-17.2, -8.8, 0.6, 17.6);
+  ctx.fillStyle = TAIL;
+  ctx.fillRect(-L + 0.2, -6.8, 1.2, 13.6);
+  ctx.fillStyle = TAIL_CORE;
+  ctx.fillRect(-L + 0.5, -6.1, 0.6, 12.2);
+}
+
+const ART: Record<Exclude<ModelId, "jet">, (ctx: Ctx, skin: Skin) => void> = { gt, mx5, p911, aventador, f8, chiron };
 
 /**
  * `wing` only matters for the Racerz Jet (0 = wings folded): its drawing, shadow included, lives in jetArt.ts, which paints it in the skin.

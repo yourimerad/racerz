@@ -43,7 +43,7 @@ create or replace function public.racerz_car_price(p_model text) returns integer
 language sql immutable as $$
   select case p_model
     when 'gt' then 0 when 'mx5' then 5000 when 'p911' then 20000
-    when 'aventador' then 60000 when 'f8' then 150000 when 'jet' then 550000 end
+    when 'aventador' then 60000 when 'f8' then 150000 when 'chiron' then 300000 when 'jet' then 550000 end
 $$;
 
 create or replace function public.racerz_skin_price(p_skin text) returns integer

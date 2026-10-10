@@ -2,6 +2,7 @@ import type { CarView } from "../adapter3d";
 import { K } from "../adapter3d";
 import type { ModelId } from "../garage";
 import { WHEEL as AVENTADOR_WHEEL, buildAventador } from "./aventador";
+import { WHEEL as CHIRON_WHEEL, buildChiron } from "./chiron";
 import { type Kit, type Parts, type PaintUniforms, type Spec, addExhausts, addWheels, box, ball, cylX, finish, flameGroup, furniture, headlight, interior, makeKit, mesh, shell, taillight, yAt, zAt } from "./carkit";
 import { type Disposer, THREE, clamp, lerp } from "./core";
 import { loft, spline } from "./carbody";
@@ -13,7 +14,7 @@ import { loft, spline } from "./carbody";
 // top (racing stripes, carbon weave, gold). Real size: about 4 m long; the Racerz Jet is 5 m. Nose toward +X, origin on the ground.
 
 
-const SPECS: Record<Exclude<ModelId, "jet" | "aventador">, Spec> = {
+const SPECS: Record<Exclude<ModelId, "jet" | "aventador" | "chiron">, Spec> = {
   gt: {
     x0: -2.1, x1: 2.1, eTop: 3.3, eBot: 7, tumble: 0.08,
     hw: [[-2.1, 0.76], [-1.95, 0.86], [-1.5, 0.95], [-0.8, 0.93], [0.2, 0.92], [0.9, 0.94], [1.45, 0.95], [1.9, 0.88], [2.1, 0.74]],
@@ -47,7 +48,7 @@ const SPECS: Record<Exclude<ModelId, "jet" | "aventador">, Spec> = {
   },
 };
 
-// ---------- the five cars ----------
+// ---------- the cars (the Aventador and the Chiron are in their own files) ----------
 
 /** Racerz GT: a muscular coupé with a ducktail. */
 function buildGT(kit: Kit): Parts {
@@ -206,7 +207,7 @@ function buildJet(kit: Kit): Parts {
   return { group: g, wheels, wheelR: 0.32, rear: -2.95, flame, tail: kit.tail, wings, jetFlames, engineY: 0.7 };
 }
 
-const BUILDERS: Record<ModelId, (kit: Kit) => Parts> = { gt: buildGT, mx5: buildMX5, p911: buildP911, aventador: buildAventador, f8: buildF8, jet: buildJet };
+const BUILDERS: Record<ModelId, (kit: Kit) => Parts> = { gt: buildGT, mx5: buildMX5, p911: buildP911, aventador: buildAventador, f8: buildF8, chiron: buildChiron, jet: buildJet };
 
 /** One car in the scene. `update` places it from the game's numbers; it owns nothing the game reads. */
 export class Car3D {
@@ -226,7 +227,7 @@ export class Car3D {
   constructor(d: Disposer, view: CarView, env: THREE.Texture | null) {
     this.model = view.model;
     this.id = view.id;
-    const wheel = view.model === "jet" ? undefined : view.model === "aventador" ? AVENTADOR_WHEEL : SPECS[view.model].wheel;
+    const wheel = view.model === "jet" ? undefined : view.model === "aventador" ? AVENTADOR_WHEEL : view.model === "chiron" ? CHIRON_WHEEL : SPECS[view.model].wheel;
     const { kit, uniforms } = makeKit(d, view.skin, env, wheel);
     this.parts = BUILDERS[view.model](kit);
     this.uniforms = uniforms;
