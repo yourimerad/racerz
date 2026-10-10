@@ -30,6 +30,7 @@ const near = (what: string, got: number, want: number, tol: number) => {
 
 function newRace(seed: number): { race: Race; vz: VolcanoHazard } {
   const race = createRace("volcano", { model: "gt", skin: "factory", level: 1 }, seed);
+  race.boost.enabled = false; // this check is about the bombs: speeds are measured without a turbo
   return { race, vz: race.hazard as VolcanoHazard };
 }
 /** Steps to the green light, so `race.time >= 0` and the hazard clock is running. */

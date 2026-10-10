@@ -298,11 +298,43 @@ class Sound {
     src.start(now, Math.random() * 0.5, 0.5);
   }
 
+  /** A rising "whoosh": a band of air sweeping up, over a short low swell (a car taking a boost pad). */
+  whoosh(power = 1) {
+    const ctx = this.ctx, master = this.master, noise = this.noise;
+    if (!ctx || !master || !noise) return;
+    const now = ctx.currentTime, p = Math.min(1, Math.max(0.2, power));
+    const src = ctx.createBufferSource();
+    src.buffer = noise;
+    const bp = ctx.createBiquadFilter();
+    bp.type = "bandpass";
+    bp.Q.value = 1.1;
+    bp.frequency.setValueAtTime(350, now);
+    bp.frequency.exponentialRampToValueAtTime(3200, now + 0.5);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.exponentialRampToValueAtTime(0.32 * p, now + 0.14);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + 0.6);
+    src.connect(bp).connect(g).connect(master);
+    src.start(now, Math.random() * 0.4, 0.65);
+    const o = ctx.createOscillator();
+    o.type = "sine";
+    o.frequency.setValueAtTime(90, now);
+    o.frequency.exponentialRampToValueAtTime(220, now + 0.4);
+    const og = ctx.createGain();
+    og.gain.setValueAtTime(0.0001, now);
+    og.gain.exponentialRampToValueAtTime(0.22 * p, now + 0.08);
+    og.gain.exponentialRampToValueAtTime(0.0001, now + 0.45);
+    o.connect(og).connect(master);
+    o.start(now);
+    o.stop(now + 0.5);
+  }
+
   /** Plays a sound requested by the simulation (see Cue in scenery.ts). */
-  cue(kind: "growl" | "thud" | "warn" | "sizzle", power: number) {
+  cue(kind: "growl" | "thud" | "warn" | "sizzle" | "boost", power: number) {
     if (kind === "growl") this.growl(power);
     else if (kind === "thud") this.thud(power);
     else if (kind === "warn") this.warn(power);
+    else if (kind === "boost") this.whoosh(power);
     else this.sizzle(power);
   }
 

@@ -13,7 +13,7 @@ export type Circle = { x: number; y: number; r: number };
 export type HazardBody = { id: number; x: number; y: number; vx: number; vy: number; angle: number; rx: number; ry: number };
 
 /** A short sound/effect request raised during the simulation; Game.tsx plays it. */
-export type Cue = { kind: "growl" | "thud" | "warn" | "sizzle"; power: number };
+export type Cue = { kind: "growl" | "thud" | "warn" | "sizzle" | "boost"; power: number };
 
 /** What a hazard may look at (Race satisfies this) and write to (`cues`). */
 export type HazardWorld = {
