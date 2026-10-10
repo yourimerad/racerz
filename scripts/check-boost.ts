@@ -1,6 +1,6 @@
 // Boost-pad checks. Run with `pnpm check:boost` (same Node + hook as check:tracks). Fails (non-zero exit) on any breach.
 //
-//   (a) placement, every mode: 3 pads spread along the lap, on straights, 200+ from the start/finish and the grid,
+//   (a) placement, every mode: BOOST.COUNT (2) pads spread along the lap, on straights, 200+ from the start/finish and the grid,
 //       400+ apart, never under a covered section (bridge, tunnel, forest) or on hay bales, entirely on the asphalt
 //       and 74 % of the road wide, identical from one race to the next; style per mode (stone, basalt, ice, yellow
 //       asphalt for the others and for an unknown id);
@@ -348,7 +348,7 @@ console.log("Boost pad checks\n");
       races++;
     }
     console.log(`  ${mode}: ${(uses / races).toFixed(1)} pad uses/race · mean finish ${(timeBase / races).toFixed(1)} → ${(timeBoost / races).toFixed(1)} s · off-road ${(offBase / races).toFixed(1)} → ${(offBoost / races).toFixed(1)} s · barrier hits ${(hitsBase / races).toFixed(1)} → ${(hitsBoost / races).toFixed(1)}${mode === "volcano" ? ` · bombs on pads ${bombsOnPads}/${bombs}` : ""}`);
-    if (uses < races * 3) fail(`${mode}: the bots used the pads only ${uses} times over ${races} races`);
+    if (uses < races * 2) fail(`${mode}: the bots used the pads only ${uses} times over ${races} races`);
     if (timeBoost >= timeBase) fail(`${mode}: the pads made the bots slower (${timeBase.toFixed(1)} → ${timeBoost.toFixed(1)} s)`);
     if (offBoost > offBase * 1.5 + 1.5 * races) fail(`${mode}: the bots spend much more time off the road with pads (${(offBase / races).toFixed(1)} → ${(offBoost / races).toFixed(1)} s per race)`);
     // Bots already bounce off the hay bales of the countryside's chicanes (5-6 hits a race): the turbo's extra speed adds a few.
