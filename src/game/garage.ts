@@ -4,7 +4,9 @@
 // untouched as the guest save.
 
 export type ModelId = "gt" | "mx5" | "p911" | "aventador" | "f8" | "jet";
-export type SkinId = "factory" | "pearl" | "electric" | "mantis" | "arancio" | "stripes" | "carbon" | "gold";
+export type SkinId =
+  | "factory" | "pearl" | "electric" | "mantis" | "arancio" | "stripes" | "carbon" | "gold"
+  | "jetSky" | "jetSunset" | "jetCamo" | "jetCarbon" | "jetNight" | "jetGold";
 
 export type CarModel = {
   id: ModelId;
@@ -18,8 +20,6 @@ export type CarModel = {
   grip: number;
   /** Factory paint. */
   factory: Skin;
-  /** The paint is fixed: no skin applies to this car (the Racerz Jet). */
-  fixedSkin?: boolean;
   /** Can fly (hold Shift, see flight.ts). It has its own "Vol" bar in the garage and stays out of the stat bars' scale. */
   flying?: boolean;
 };
@@ -29,7 +29,7 @@ export type Skin = {
   body: string;
   accent: string;
   matte?: boolean;
-  pattern?: "stripes" | "carbon" | "metal";
+  pattern?: "stripes" | "carbon" | "metal" | "camo";
 };
 
 export const MODELS: Record<ModelId, CarModel> = {
@@ -56,7 +56,7 @@ export const MODELS: Record<ModelId, CarModel> = {
   // Speed / accel / grip are set so the garage bars read 92 / 85 / 70 at level 1 on the existing scale (STAT_RANGE below).
   jet: {
     id: "jet", name: "Racerz Jet", tagline: "Elle vole : Shift maintenu", price: 550_000, speed: 1.422, accel: 1.542, grip: 1.132,
-    factory: { name: "Blanc et rouge", body: "#f2f6fa", accent: "#d63a2f" }, fixedSkin: true, flying: true,
+    factory: { name: "Blanc et rouge", body: "#f2f6fa", accent: "#d63a2f" }, flying: true,
   },
 };
 export const MODEL_ORDER: ModelId[] = ["gt", "mx5", "p911", "aventador", "f8", "jet"];
@@ -64,7 +64,8 @@ export const MODEL_ORDER: ModelId[] = ["gt", "mx5", "p911", "aventador", "f8", "
 /** The Jet's own flight bar in the garage, out of 100. */
 export const FLY_BAR = 100;
 
-export const SKINS: Record<Exclude<SkinId, "factory">, Skin & { price: number }> = {
+/** `jet` skins are painted on the Racerz Jet only; the others go on every other car (see `skinFits`). */
+export const SKINS: Record<Exclude<SkinId, "factory">, Skin & { price: number; jet?: true }> = {
   pearl: { name: "Blanc nacré", body: "#f2f0ea", accent: "#c9c4b8", price: 4_000 },
   electric: { name: "Bleu électrique", body: "#1f6fff", accent: "#0b3a99", price: 6_000 },
   mantis: { name: "Verde Mantis", body: "#6fd12a", accent: "#3c7a12", price: 9_000 },
@@ -72,11 +73,29 @@ export const SKINS: Record<Exclude<SkinId, "factory">, Skin & { price: number }>
   stripes: { name: "Bandes racing", body: "#f4f4f4", accent: "#1f4fbf", pattern: "stripes", price: 15_000 },
   carbon: { name: "Carbone", body: "#2a2c30", accent: "#15161a", pattern: "carbon", price: 22_000 },
   gold: { name: "Or", body: "#d4af37", accent: "#8a6d12", pattern: "metal", price: 40_000 },
+  // The Racerz Jet's own paint jobs: `body` is the fuselage and the wings, `accent` the nose, the V-tail, the wing tips and the dorsal stripe.
+  jetSky: { name: "Bleu ciel", body: "#cfe6ff", accent: "#1f6fd6", price: 12_000, jet: true },
+  jetSunset: { name: "Coucher de soleil", body: "#ff9a3c", accent: "#5a1f78", price: 15_000, jet: true },
+  jetCamo: { name: "Camouflage", body: "#6b7a4a", accent: "#2f3a22", pattern: "camo", price: 20_000, jet: true },
+  jetCarbon: { name: "Carbone rouge", body: "#2a2c30", accent: "#d63a2f", pattern: "carbon", price: 28_000, jet: true },
+  jetNight: { name: "Nuit furtive", body: "#2b3038", accent: "#ff6a1f", matte: true, price: 35_000, jet: true },
+  jetGold: { name: "Or et noir", body: "#d4af37", accent: "#1c1c1f", pattern: "metal", price: 70_000, jet: true },
 };
-export const SKIN_ORDER: SkinId[] = ["factory", "pearl", "electric", "mantis", "arancio", "stripes", "carbon", "gold"];
+export const SKIN_ORDER: SkinId[] = [
+  "factory", "pearl", "electric", "mantis", "arancio", "stripes", "carbon", "gold",
+  "jetSky", "jetSunset", "jetCamo", "jetCarbon", "jetNight", "jetGold",
+];
+
+/** Whether `skin` can be painted on `model`: the factory paint always, the Jet's skins on the Jet only, every other skin on every other car. */
+export function skinFits(model: ModelId, skin: SkinId): boolean {
+  return skin === "factory" || !!SKINS[skin].jet === (model === "jet");
+}
+
+/** The skins the shop offers for a car, in shop order. */
+export const skinsFor = (model: ModelId): SkinId[] => SKIN_ORDER.filter((id) => skinFits(model, id));
 
 export function skinOf(model: ModelId, skin: SkinId): Skin {
-  return skin === "factory" || MODELS[model].fixedSkin ? MODELS[model].factory : SKINS[skin];
+  return skin === "factory" || !skinFits(model, skin) ? MODELS[model].factory : SKINS[skin];
 }
 
 export type OwnedCar = { level: number; paliers: number; skin: SkinId };
@@ -159,14 +178,13 @@ export function buyCar(p: Profile, id: ModelId): Profile {
 }
 
 export function buySkin(p: Profile, id: SkinId): Profile {
-  if (MODELS[p.selected].fixedSkin) return p; // nothing to paint (the Jet's body is fixed)
-  if (id === "factory" || p.skins.includes(id) || p.money < SKINS[id].price) return p;
+  if (id === "factory" || !skinFits(p.selected, id) || p.skins.includes(id) || p.money < SKINS[id].price) return p;
   return equipSkin({ ...p, money: p.money - SKINS[id].price, skins: [...p.skins, id] }, id);
 }
 
 export function equipSkin(p: Profile, id: SkinId): Profile {
   const car = p.cars[p.selected];
-  if (!car || !p.skins.includes(id) || MODELS[p.selected].fixedSkin) return p;
+  if (!car || !p.skins.includes(id) || !skinFits(p.selected, id)) return p;
   return { ...p, cars: { ...p.cars, [p.selected]: { ...car, skin: id } } };
 }
 
@@ -211,7 +229,7 @@ export function parseProfile(raw: unknown): Profile {
       const o = owned as Record<string, unknown>;
       const level = Number.isInteger(o.level) && (o.level as number) >= 1 && (o.level as number) <= MAX_LEVEL ? (o.level as number) : 1;
       const paliers = Number.isInteger(o.paliers) && (o.paliers as number) >= 0 && (o.paliers as number) < PALIERS_PER_LEVEL ? (o.paliers as number) : 0;
-      const skin = isSkinId(o.skin) && skins.includes(o.skin) && !MODELS[id].fixedSkin ? o.skin : "factory";
+      const skin = isSkinId(o.skin) && skins.includes(o.skin) && skinFits(id, o.skin) ? o.skin : "factory";
       cars[id] = { level, paliers, skin };
     }
   }

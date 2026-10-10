@@ -50,7 +50,16 @@ create or replace function public.racerz_skin_price(p_skin text) returns integer
 language sql immutable as $$
   select case p_skin
     when 'factory' then 0 when 'pearl' then 4000 when 'electric' then 6000 when 'mantis' then 9000
-    when 'arancio' then 9000 when 'stripes' then 15000 when 'carbon' then 22000 when 'gold' then 40000 end
+    when 'arancio' then 9000 when 'stripes' then 15000 when 'carbon' then 22000 when 'gold' then 40000
+    -- skins propres à la Racerz Jet
+    when 'jetSky' then 12000 when 'jetSunset' then 15000 when 'jetCamo' then 20000
+    when 'jetCarbon' then 28000 when 'jetNight' then 35000 when 'jetGold' then 70000 end
+$$;
+
+-- Un skin « jet… » ne va que sur la Racerz Jet ; les autres skins vont sur toutes les autres voitures ; la peinture d'usine va partout.
+create or replace function public.racerz_skin_fits(p_model text, p_skin text) returns boolean
+language sql immutable as $$
+  select p_skin = 'factory' or (left(p_skin, 3) = 'jet') = (p_model = 'jet')
 $$;
 
 create or replace function public.racerz_payout(p_place integer) returns integer
@@ -108,8 +117,8 @@ language plpgsql security definer set search_path = public as $$
 declare r public.profiles; price integer := public.racerz_skin_price(p_skin);
 begin
   r := public.racerz_lock_profile();
-  if r.selected = 'jet' then raise exception 'fixed_skin'; end if;  -- la carrosserie de la Racerz Jet est fixe
   if price is null or p_skin = 'factory' then raise exception 'unknown_skin'; end if;
+  if not public.racerz_skin_fits(r.selected, p_skin) then raise exception 'skin_mismatch'; end if;  -- les skins de la Jet ne vont que sur la Jet
   if p_skin = any (r.skins) then raise exception 'already_owned'; end if;
   if r.money < price then raise exception 'not_enough_money'; end if;
   update public.profiles
@@ -126,8 +135,8 @@ language plpgsql security definer set search_path = public as $$
 declare r public.profiles;
 begin
   r := public.racerz_lock_profile();
-  if r.selected = 'jet' then raise exception 'fixed_skin'; end if;
   if not (p_skin = any (r.skins)) then raise exception 'skin_not_owned'; end if;
+  if not public.racerz_skin_fits(r.selected, p_skin) then raise exception 'skin_mismatch'; end if;
   update public.profiles
      set cars = jsonb_set(cars, array[selected, 'skin'], to_jsonb(p_skin)), updated_at = now()
    where id = r.id returning * into r;
@@ -219,7 +228,7 @@ begin
       lvl := case when jsonb_typeof(v -> 'level') = 'number' and (v ->> 'level') ~ '^\d+$' then least(greatest((v ->> 'level')::integer, 1), 10) else 1 end;
       pal := case when jsonb_typeof(v -> 'paliers') = 'number' and (v ->> 'paliers') ~ '^\d+$' then least((v ->> 'paliers')::integer, 4) else 0 end;
       skin := v ->> 'skin';
-      if skin is null or not (skin = any (new_skins)) or k = 'jet' then skin := 'factory'; end if;
+      if skin is null or not (skin = any (new_skins)) or not public.racerz_skin_fits(k, skin) then skin := 'factory'; end if;
       new_cars := new_cars || jsonb_build_object(k, jsonb_build_object('level', lvl, 'paliers', pal, 'skin', skin));
     end loop;
   end if;

@@ -1,7 +1,8 @@
 // Racerz Jet checks (flight, garage, shop). Run with `pnpm check:flight` (same Node + hook as check:tracks). Fails (non-zero exit) on any breach.
 //
 //   (a) garage and economy: 550 000 €, bars 92 / 85 / 70 / Vol 100 on the existing scale (the other cars' bars did not move), purchase with and
-//       without enough money, save and reload, a fixed body (no skin applies), payouts unchanged;
+//       without enough money, save and reload, the Jet's own skins (they fit the Jet only, the other cars' skins never fit it, prices, buying, equipping, saving),
+//       payouts unchanged;
 //   (b) the flight state machine: wings 0.6 s, climb to 80 m, energy -1/s in the air and +0.6/s on the ground, 20 % to take off, release → descent,
 //       re-press → climb again, energy 0 → forced landing + 1 s cooldown, the flight speed multiplier ×1 → ×1.10 and its combination with the others;
 //   (c) what a car above 20 m passes over (hay bales, polar bear, other cars, lava pools, volcano targets and bombs, boost pads) — and what stays
@@ -13,8 +14,8 @@ import { BOOST } from "../src/game/boost";
 import { AIRBORNE_ALT, NO_INPUT, PHYS, isAirborne, speedOf, stepCar, type Car } from "../src/game/car";
 import { FLY, FlightController, distToLine, type FlightAdapter } from "../src/game/flight";
 import {
-  FLY_BAR, MODELS, MODEL_ORDER, NEW_PROFILE, PAYOUTS, STAT_RANGE, buyCar, buySkin, carStats, equipSkin, formatMoney, parseProfile, selectCar, settleRace,
-  skinOf, type Profile,
+  FLY_BAR, MODELS, MODEL_ORDER, NEW_PROFILE, PAYOUTS, SKINS, SKIN_ORDER, STAT_RANGE, buyCar, buySkin, carStats, equipSkin, formatMoney, parseProfile, selectCar,
+  settleRace, skinFits, skinOf, skinsFor, type Profile, type SkinId,
 } from "../src/game/garage";
 import { JET_SCALE } from "../src/game/jetArt";
 import { aiInput, createRace, stepRace, TOTAL_LAPS, type Race } from "../src/game/race";
@@ -68,19 +69,67 @@ console.log("Racerz Jet checks\n");
   const back = parseProfile(JSON.parse(JSON.stringify(rich)));
   check(back.cars.jet?.level === 1 && back.selected === "jet" && back.money === 50_000, "the purchase is not kept by save / reload");
   check(selectCar(back, "gt").selected === "gt" && selectCar(selectCar(back, "gt"), "jet").selected === "jet", "selecting the Jet again");
-  // No skin applies: a fixed white and red body.
-  const withSkins: Profile = { ...rich, money: 100_000, skins: ["factory", "gold"] };
-  check(equipSkin(withSkins, "gold") === withSkins, "a skin was equipped on the Jet");
-  check(buySkin(withSkins, "pearl") === withSkins, "a skin was bought while the Jet is selected");
-  const stale = parseProfile({ ...rich, skins: ["factory", "gold"], cars: { jet: { level: 2, paliers: 1, skin: "gold" } } });
-  check(stale.cars.jet?.skin === "factory", "a stored skin stayed on the Jet");
-  check(skinOf("jet", "gold").body === "#f2f6fa" && skinOf("jet", "gold").accent === "#d63a2f", "the Jet's body is not white and red");
-  check(skinOf("gt", "gold").body === "#d4af37", "skins changed on the other cars");
+  // The Jet's own skins: factory white and red by default, six more that fit the Jet only; the other cars' skins never fit the Jet.
+  const JET_SKINS: Record<string, number> = { jetSky: 12_000, jetSunset: 15_000, jetCamo: 20_000, jetCarbon: 28_000, jetNight: 35_000, jetGold: 70_000 };
+  const OLD_SKINS: Record<string, number> = { pearl: 4_000, electric: 6_000, mantis: 9_000, arancio: 9_000, stripes: 15_000, carbon: 22_000, gold: 40_000 };
+  for (const [id, price] of Object.entries(JET_SKINS)) check(SKINS[id as SkinId as Exclude<SkinId, "factory">]?.price === price, `Jet skin ${id}: price ${SKINS[id as Exclude<SkinId, "factory">]?.price}`);
+  for (const [id, price] of Object.entries(OLD_SKINS)) check(SKINS[id as Exclude<SkinId, "factory">].price === price, `the price of the skin ${id} changed`);
+  const hex = /^#[0-9a-f]{6}$/i;
+  for (const id of SKIN_ORDER) {
+    const sk = skinOf(id === "factory" || !SKINS[id].jet ? "gt" : "jet", id);
+    check(hex.test(sk.body) && hex.test(sk.accent) && sk.name.length > 0, `skin ${id}: bad colours or name`);
+  }
+  check(skinsFor("jet").join() === ["factory", ...Object.keys(JET_SKINS)].join(), `skins offered for the Jet: ${skinsFor("jet").join()}`);
+  check(skinsFor("gt").join() === ["factory", ...Object.keys(OLD_SKINS)].join(), `skins offered for the GT: ${skinsFor("gt").join()}`);
+  for (const id of MODEL_ORDER) {
+    check(skinFits(id, "factory"), `the factory paint does not fit ${id}`);
+    for (const sk of SKIN_ORDER) {
+      if (sk === "factory") continue;
+      check(skinFits(id, sk) === (id === "jet" ? sk in JET_SKINS : sk in OLD_SKINS), `skinFits(${id}, ${sk}) is wrong`);
+    }
+  }
+  check(skinOf("jet", "factory").body === "#f2f6fa" && skinOf("jet", "factory").accent === "#d63a2f", "the Jet's factory paint is not white and red");
+  check(skinOf("jet", "gold").body === "#f2f6fa", "an ordinary skin painted the Jet");
+  check(skinOf("gt", "jetGold").body === MODELS.gt.factory.body, "a Jet skin painted the GT");
+  check(skinOf("jet", "jetCamo").pattern === "camo" && skinOf("jet", "jetNight").matte === true && skinOf("jet", "jetGold").pattern === "metal", "a Jet skin lost its finish");
+  const shop: Profile = { ...rich, money: 100_000, skins: ["factory", "gold"] };
+  check(equipSkin(shop, "gold") === shop, "an ordinary skin was equipped on the Jet");
+  check(buySkin(shop, "pearl") === shop, "an ordinary skin was bought while the Jet is selected");
+  const poorBuy = buySkin({ ...shop, money: 11_999 }, "jetSky");
+  check(poorBuy.money === 11_999 && !poorBuy.skins.includes("jetSky"), "a Jet skin was bought below its price");
+  const bought = buySkin(shop, "jetSky");
+  check(bought.money === 88_000 && bought.skins.includes("jetSky") && bought.cars.jet?.skin === "jetSky", `buying jetSky: money ${bought.money}, skin ${bought.cars.jet?.skin}`);
+  check(buySkin(bought, "jetSky") === bought, "a Jet skin was bought twice");
+  const dear = buySkin(bought, "jetGold");
+  check(dear.money === 18_000 && dear.cars.jet?.skin === "jetGold", `buying jetGold: money ${dear.money}`);
+  const back2 = equipSkin(dear, "jetSky");
+  check(back2.cars.jet?.skin === "jetSky" && back2.money === dear.money, "equipping an owned Jet skin");
+  check(equipSkin(back2, "jetCamo") === back2, "an unowned Jet skin was equipped");
+  check(equipSkin(back2, "factory").cars.jet?.skin === "factory", "going back to the factory paint");
+  const onGt = selectCar(bought, "gt");
+  check(buySkin(onGt, "jetCamo") === onGt, "a Jet skin was bought while the GT is selected");
+  check(equipSkin(onGt, "jetSky") === onGt, "a Jet skin was equipped on the GT");
+  check(equipSkin(onGt, "factory").cars.gt?.skin === "factory", "the GT lost its factory paint");
+  const kept = parseProfile(JSON.parse(JSON.stringify(dear)));
+  check(kept.cars.jet?.skin === "jetGold" && kept.skins.includes("jetSky") && kept.skins.includes("jetGold"), "the Jet's skin is not kept by save / reload");
+  const stale = parseProfile({ ...rich, skins: ["factory", "gold", "jetSky"], cars: { gt: { level: 1, paliers: 0, skin: "jetSky" }, jet: { level: 2, paliers: 1, skin: "gold" } } });
+  check(stale.cars.jet?.skin === "factory" && stale.cars.gt?.skin === "factory", "a stored skin stayed on a car it does not fit");
+  const ghost = parseProfile({ ...rich, skins: ["factory", "jetNope"], cars: { jet: { level: 2, paliers: 1, skin: "jetNope" } } });
+  check(ghost.cars.jet?.skin === "factory" && !ghost.skins.includes("jetNope" as SkinId), "an unknown skin id was accepted");
+  // A skin is only paint: the physics, the stats and the bars do not move.
+  check(JSON.stringify(carStats("jet", 3)) === JSON.stringify({ speed: 1.422 * 1.04, accel: 1.542 * 1.06, grip: 1.132 }), "the Jet's stats changed");
+  const plain = createRace("desert", { model: "jet", skin: "factory", level: 1 }, 5), dressed = createRace("desert", { model: "jet", skin: "jetGold", level: 1 }, 5);
+  check(dressed.cars[0].skin.body === "#d4af37" && plain.cars[0].skin.body === "#f2f6fa", "the race did not wear the skin");
+  for (let i = 0; i < 600; i++) {
+    stepRace(plain, { ...NO_INPUT, throttle: i > 120 }, DT);
+    stepRace(dressed, { ...NO_INPUT, throttle: i > 120 }, DT);
+  }
+  check(plain.cars[0].pos.x === dressed.cars[0].pos.x && plain.cars[0].pos.y === dressed.cars[0].pos.y && plain.cars[0].vel.x === dressed.cars[0].vel.x, "a skin changed the driving");
   // Economy untouched: same payouts, same palier rule.
   const settled = settleRace({ ...rich, money: 0 }, 1, 0, 0);
   check(settled.report.earned === PAYOUTS[0] && settled.profile.money === PAYOUTS[0], "payout changed");
   check(PAYOUTS.join() === "5000,2500,1000" && MODELS.gt.price === 0 && MODELS.f8.price === 150_000, "an existing price or payout changed");
-  console.log("  shop: 550 000 € · no purchase below it · saved · fixed body · payouts untouched");
+  console.log("  shop: 550 000 € · no purchase below it · saved · 6 Jet skins (Jet only, bought / equipped / saved) · payouts untouched");
 }
 
 // ---------- (b) the state machine, on its own ----------

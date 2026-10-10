@@ -5,7 +5,7 @@ import type { ProfileActions } from "@/game/actions";
 import { drawCarSprite } from "@/game/carArt";
 import {
   type ModelId, type Profile, type SkinId, type StatKey, CLEAN_MAX_HITS, CLEAN_MAX_OFF, MODEL_ORDER, MODELS, PALIERS_PER_LEVEL, PAYOUTS, SKINS,
-  SKIN_ORDER, STAT_RANGE, carStats, formatMoney, skinOf,
+  STAT_RANGE, carStats, formatMoney, skinOf, skinsFor,
 } from "@/game/garage";
 import { formatTime } from "@/game/render";
 import { type ThemeId, THEMES, THEME_ORDER } from "@/game/themes";
@@ -23,9 +23,11 @@ function CarPreview({ model, skin, size = 3 }: { model: ModelId; skin: SkinId; s
     const dpr = window.devicePixelRatio || 1;
     c.width = c.clientWidth * dpr;
     c.height = c.clientHeight * dpr;
-    ctx.setTransform(dpr * size, 0, 0, dpr * size, 0, 0);
+    // The Jet is 25 % longer than a car: drawn a little smaller so its nose and tail stay in the frame.
+    const k = size * (model === "jet" ? 0.9 : 1);
+    ctx.setTransform(dpr * k, 0, 0, dpr * k, 0, 0);
     ctx.clearRect(0, 0, c.width, c.height);
-    drawCarSprite(ctx, model, skinOf(model, skin), c.clientWidth / 2 / size, c.clientHeight / 2 / size, -Math.PI / 2);
+    drawCarSprite(ctx, model, skinOf(model, skin), c.clientWidth / 2 / k, c.clientHeight / 2 / k, -Math.PI / 2);
   }, [model, skin, size]);
   return <canvas ref={ref} className={styles.preview} style={{ width: 30 * size, height: 48 * size }} />;
 }
@@ -116,35 +118,32 @@ export default function Lobby({ profile, actions, mode, setMode, record, onStart
 
         <section className={styles.panel}>
           <h2>Boutique de skins</h2>
-          <p className={styles.sub}>Pour : {MODELS[profile.selected].name}. Un skin acheté sert sur toutes vos voitures.</p>
-          {MODELS[profile.selected].fixedSkin && (
-            <p className={styles.fixedSkin}>
-              La {MODELS[profile.selected].name} a une carrosserie fixe (blanc et rouge) : les skins ne s&apos;appliquent pas à elle. Choisissez une autre voiture
-              pour en acheter ou en équiper un.
-            </p>
-          )}
-          {!MODELS[profile.selected].fixedSkin && (
-            <div className={styles.skins}>
-              {SKIN_ORDER.map((id) => {
-                const owned = profile.skins.includes(id);
-                const equipped = selected?.skin === id;
-                const price = id === "factory" ? 0 : SKINS[id].price;
-                const skin = skinOf(profile.selected, id);
-                return (
-                  <button
-                    key={id}
-                    className={`${styles.skin} ${equipped ? styles.skinOn : ""}`}
-                    disabled={!owned && profile.money < price}
-                    onClick={() => (owned ? actions.equipSkin(id) : actions.buySkin(id))}
-                  >
-                    <CarPreview model={profile.selected} skin={id} size={1.4} />
-                    <span>{skin.name}</span>
-                    <small>{equipped ? "Équipé" : owned ? "Équiper" : formatMoney(price)}</small>
-                  </button>
-                );
-              })}
-            </div>
-          )}
+          <p className={styles.sub}>
+            Pour : {MODELS[profile.selected].name}.{" "}
+            {profile.selected === "jet"
+              ? "Les skins de la Jet ne vont que sur elle."
+              : "Un skin acheté sert sur toutes vos voitures, sauf la Racerz Jet qui a les siens."}
+          </p>
+          <div className={styles.skins}>
+            {skinsFor(profile.selected).map((id) => {
+              const owned = profile.skins.includes(id);
+              const equipped = (selected?.skin ?? "factory") === id;
+              const price = id === "factory" ? 0 : SKINS[id].price;
+              const skin = skinOf(profile.selected, id);
+              return (
+                <button
+                  key={id}
+                  className={`${styles.skin} ${equipped ? styles.skinOn : ""}`}
+                  disabled={!owned && profile.money < price}
+                  onClick={() => (owned ? actions.equipSkin(id) : actions.buySkin(id))}
+                >
+                  <CarPreview model={profile.selected} skin={id} size={1.4} />
+                  <span>{skin.name}</span>
+                  <small>{equipped ? "Équipé" : owned ? "Équiper" : formatMoney(price)}</small>
+                </button>
+              );
+            })}
+          </div>
 
           <h2>Course</h2>
           <div className={styles.modes} role="radiogroup" aria-label="Environnement">

@@ -3,7 +3,7 @@
 import { useEffect, useRef } from "react";
 import type { ProfileActions } from "@/game/actions";
 import { drawJetSprite } from "@/game/jetArt";
-import { FLY_BAR, MODELS, PALIERS_PER_LEVEL, STAT_RANGE, carStats, formatMoney, type Profile, type StatKey } from "@/game/garage";
+import { FLY_BAR, MODELS, PALIERS_PER_LEVEL, STAT_RANGE, carStats, formatMoney, skinOf, type Profile, type Skin, type StatKey } from "@/game/garage";
 import styles from "./Game.module.css";
 
 /** Showcase scale of the car on its platform, and how long the wings take to open (and to fold again). */
@@ -14,7 +14,7 @@ const DEMO_EVERY = 4000;
 
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 
-function paint(canvas: HTMLCanvasElement, wing: number) {
+function paint(canvas: HTMLCanvasElement, wing: number, skin: Skin) {
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
   const dpr = window.devicePixelRatio || 1;
@@ -48,7 +48,7 @@ function paint(canvas: HTMLCanvasElement, wing: number) {
   ctx.strokeStyle = "#3f4d62";
   ctx.stroke();
   // the Jet, seen from above, at rest (wings folded unless the demo is running)
-  drawJetSprite(ctx, cx, cy, -Math.PI / 2, { wing, scale: SHOW_SCALE, steady: true });
+  drawJetSprite(ctx, cx, cy, -Math.PI / 2, { wing, scale: SHOW_SCALE, steady: true, skin });
 }
 
 /** Wing opening over a demo that began `t` seconds ago: 0 → 1 → 0, WING_LEG each way. */
@@ -80,6 +80,14 @@ export default function JetCard({ profile, actions }: { profile: Profile; action
   const owned = profile.cars.jet;
   const st = carStats("jet", owned?.level ?? 1);
   const affordable = profile.money >= m.price;
+  // The Jet on the stage wears the skin it has on in the garage; the effect below reads it through a ref so it keeps its timers.
+  const skin = skinOf("jet", owned?.skin ?? "factory");
+  const skinRef = useRef(skin);
+  const repaint = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    skinRef.current = skin;
+    repaint.current?.();
+  }, [skin]);
 
   useEffect(() => {
     const canvas = ref.current;
@@ -87,7 +95,7 @@ export default function JetCard({ profile, actions }: { profile: Profile; action
     const still = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
     const draw = (now: number) => {
       const t = demoStart.current === null ? -1 : (now - demoStart.current) / 1000;
-      paint(canvas, demoWing(t));
+      paint(canvas, demoWing(t), skinRef.current);
       if (demoStart.current !== null && t <= 2 * WING_LEG) raf.current = requestAnimationFrame(draw);
       else {
         demoStart.current = null;
@@ -100,11 +108,13 @@ export default function JetCard({ profile, actions }: { profile: Profile; action
       raf.current = requestAnimationFrame(draw);
     };
     demoRef.current = demo;
-    paint(canvas, 0);
-    const onResize = () => !raf.current && paint(canvas, 0);
+    repaint.current = () => !raf.current && paint(canvas, 0, skinRef.current);
+    repaint.current();
+    const onResize = () => repaint.current?.();
     window.addEventListener("resize", onResize);
     const timer = still ? 0 : window.setInterval(demo, DEMO_EVERY);
     return () => {
+      repaint.current = null;
       window.removeEventListener("resize", onResize);
       if (timer) window.clearInterval(timer);
       if (raf.current) cancelAnimationFrame(raf.current);

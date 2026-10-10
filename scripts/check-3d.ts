@@ -10,7 +10,7 @@
 //   (e) every mode's world, all six cars and the effects build into finite geometry within a triangle budget, and `dispose` frees all of it.
 
 import { Adapter3D, CAM, ChaseCamera, K, toScene, type CamTarget } from "../src/game/adapter3d";
-import { type ModelId, MODEL_ORDER, MODELS, skinOf } from "../src/game/garage";
+import { type ModelId, MODEL_ORDER, skinFits, skinOf } from "../src/game/garage";
 import { createRace, stepRace, type Race } from "../src/game/race";
 import { Car3D } from "../src/game/three/cars";
 import { Disposer, THREE, liveResources, qualityOf } from "../src/game/three/core";
@@ -228,8 +228,8 @@ console.log("3D view checks\n");
   // Every car and skin builds (and the Jet's wings fold and unfold).
   const d = new Disposer();
   for (const id of MODEL_ORDER) {
-    for (const skin of ["factory", "stripes", "carbon", "gold"] as const) {
-      if (MODELS[id].fixedSkin && skin !== "factory") continue;
+    for (const skin of ["factory", "stripes", "carbon", "gold", "jetSky", "jetCamo", "jetCarbon", "jetNight", "jetGold"] as const) {
+      if (!skinFits(id, skin)) continue;
       const race = fresh("desert", id, 2), view = new Adapter3D(race).cars[0];
       view.skin = skinOf(id, skin);
       const car = new Car3D(d, view, null);
