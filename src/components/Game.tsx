@@ -6,6 +6,7 @@ import {
   accountStartRace, accountSettleRace, getAccountState, getServerAccountState, initAccount, isSignedIn, remoteActions, subscribeAccount,
 } from "@/game/account";
 import { type Input, NO_INPUT, PHYS, slipOf, speedOf } from "@/game/car";
+import { isDestroyed } from "@/game/health";
 import {
   SECRET_WORD, advanceSecretBuffer, debugModeFromUrl, getDebugMode, getDebugPanelOpen, getServerDebugMode, getServerDebugPanelOpen,
   setDebugMode, subscribeDebugMode, subscribeDebugPanel, toggleDebugMode, toggleDebugPanel,
@@ -51,7 +52,7 @@ function drawLoading(ctx: CanvasRenderingContext2D, w: number, h: number, ground
   ctx.restore();
 }
 
-type Result = { name: string; color: string; time: number | null; isPlayer: boolean };
+type Result = { name: string; color: string; time: number | null; isPlayer: boolean; /** The car blew up (no points left): it never finishes. */ destroyed: boolean };
 
 export default function Game() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -246,7 +247,9 @@ export default function Game() {
         const id = race.theme.id;
         if (best !== null) setRecords((r) => (best < (r[id] ?? Infinity) ? { ...r, [id]: best } : r));
         const player = race.cars[0];
-        const place = standings(race).indexOf(player) + 1;
+        // A car that blew up never finishes: last place, nothing earned (the standings already put it behind every car still racing).
+        const destroyed = isDestroyed(player);
+        const place = destroyed ? race.cars.length : standings(race).indexOf(player) + 1;
         // Settle the profile that was active at race start, not whatever is active now.
         const isDebugRace = raceIsDebugRef.current;
         const current = isDebugRace ? debugProfileRef.current : getPlayerProfile();
@@ -266,12 +269,13 @@ export default function Game() {
             setSettledBalance(getPlayerProfile().money);
           });
         }
-        if (place === 1) sound.victory();
+        if (destroyed) sound.stopEngine();
+        else if (place === 1) sound.victory();
         else sound.finish();
         // Let the other cars run a bit before showing the podium.
         setTimeout(() => {
           if (raceRef.current !== race) return; // restarted with R meanwhile
-          setResults(standings(race).map((c) => ({ name: c.name, color: c.color, time: c.finishTime, isPlayer: c.isPlayer })));
+          setResults(standings(race).map((c) => ({ name: c.name, color: c.color, time: c.finishTime, isPlayer: c.isPlayer, destroyed: isDestroyed(c) })));
           setScreen("results");
         }, 2500);
       }
@@ -399,14 +403,14 @@ export default function Game() {
 
       {screen === "results" && (
         <div className={report?.place === 1 ? `${styles.overlay} ${styles.overlayClear}` : styles.overlay}>
-          <h2 className={styles.title}>{report?.place === 1 ? "Victoire !" : "Arrivée"}</h2>
+          <h2 className={styles.title}>{results.some((r) => r.isPlayer && r.destroyed) ? "Voiture détruite" : report?.place === 1 ? "Victoire !" : "Arrivée"}</h2>
           <p>{THEMES[mode].emoji} {THEMES[mode].name}</p>
           <ol className={styles.podium}>
             {results.map((r) => (
               <li key={r.name} className={r.isPlayer ? styles.me : undefined}>
                 <span className={styles.dot} style={{ background: r.color }} />
                 <span>{r.name}</span>
-                <span>{r.time === null ? "en course" : formatTime(r.time)}</span>
+                <span>{r.destroyed ? "détruite" : r.time === null ? "en course" : formatTime(r.time)}</span>
               </li>
             ))}
           </ol>

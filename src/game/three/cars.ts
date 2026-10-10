@@ -254,11 +254,18 @@ export class Car3D {
     this.lastAlt = v.alt;
     this.lastSpeed = v.speed;
     this.brake += ((accel < -250 && v.speed > 30 ? 1 : 0) - this.brake) * Math.min(1, dt * 14);
-    p.tail.emissiveIntensity = 0.9 + this.brake * 2.6;
+    p.tail.emissiveIntensity = v.destroyed >= 0 ? 0 : 0.9 + this.brake * 2.6;
     const speedK = Math.min(1, Math.abs(v.speed) / 500);
     const roll = clamp(this.yawRate * speedK * 0.06, -0.1, 0.1);
     const pitch = this.model === "jet" ? clamp(this.climb * 0.0035, -0.25, 0.3) : clamp(accel * 0.00012, -0.03, 0.03);
     g.rotation.set(roll, -v.heading, pitch, "YXZ");
+    // A car that blew up stays as a charred wreck, thrown askew by the blast, which sinks out of sight in its last second.
+    g.visible = v.wreck > 0.001;
+    if (v.destroyed >= 0) {
+      const settle = Math.min(1, v.destroyed / 0.25);
+      g.rotation.set(roll + 0.2 * settle, -v.heading, pitch - 0.09 * settle, "YXZ");
+      g.position.y = v.alt - 1.4 * (1 - v.wreck);
+    }
     // Wheels turn with the road (not in the air) and the front pair steers with the car.
     if (dt > 0 && v.alt < 5) this.spin -= (v.speed * K * dt) / p.wheelR;
     const steer = clamp(this.yawRate * 0.08 * (v.speed < 0 ? -1 : 1), -0.45, 0.45);
@@ -267,8 +274,8 @@ export class Car3D {
       if (w.front) w.pivot.rotation.y = -steer;
     }
     // Turbo flame: a flickering cone out of the back.
-    p.flame.visible = v.boosting;
-    if (v.boosting) {
+    p.flame.visible = v.boosting && v.destroyed < 0;
+    if (p.flame.visible) {
       const f = 0.85 + 0.3 * Math.sin(time * 55 + v.id) + 0.1 * Math.sin(time * 91);
       p.flame.scale.set(f, 1 + 0.2 * Math.sin(time * 40), 1 + 0.2 * Math.sin(time * 40));
     }

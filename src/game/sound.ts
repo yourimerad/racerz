@@ -1,7 +1,7 @@
 // Sound effects, synthesized with the Web Audio API (no audio files to ship): an engine whose
 // pitch follows the car's speed with gear shifts, tyre squeal while sliding, gravel off the road,
 // a crash on every impact, a victory fanfare and a click for the menus — plus a growl and a dull
-// thud for the polar bear.
+// thud for the polar bear, a roar and a quake for the yeti, and the explosion of a car.
 //
 // Browsers only let audio start after a user gesture: nothing is created until `unlock()` is
 // called from a key press or click (Game.tsx does it on the first one). Muting just closes the
@@ -392,14 +392,139 @@ class Sound {
     }
   }
 
+  /** The yeti's roar on the massif: a huge, rough voice, much lower and longer than the bear's growl, with a snarling wobble and a gust of air. */
+  roar(power = 1) {
+    const ctx = this.ctx, master = this.master, noise = this.noise;
+    if (!ctx || !master || !noise) return;
+    const p = Math.min(1, Math.max(0.25, power)), now = ctx.currentTime, dur = 1.4;
+    const osc = ctx.createOscillator();
+    osc.type = "sawtooth";
+    osc.frequency.setValueAtTime(70, now);
+    osc.frequency.exponentialRampToValueAtTime(140, now + 0.35);
+    osc.frequency.exponentialRampToValueAtTime(48, now + dur);
+    const lfo = ctx.createOscillator(), lfoGain = ctx.createGain();
+    lfo.frequency.value = 23;
+    lfoGain.gain.value = 18;
+    lfo.connect(lfoGain).connect(osc.frequency);
+    const throat = ctx.createBiquadFilter();
+    throat.type = "bandpass";
+    throat.Q.value = 2.4;
+    throat.frequency.setValueAtTime(280, now);
+    throat.frequency.linearRampToValueAtTime(760, now + 0.4);
+    throat.frequency.linearRampToValueAtTime(240, now + dur);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.exponentialRampToValueAtTime(0.4 * p, now + 0.18);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+    osc.connect(throat);
+    const src = ctx.createBufferSource();
+    src.buffer = noise;
+    const rasp = ctx.createBiquadFilter();
+    rasp.type = "bandpass";
+    rasp.frequency.value = 520;
+    rasp.Q.value = 1.1;
+    const rg = ctx.createGain();
+    rg.gain.value = 0.55;
+    src.connect(rasp).connect(rg).connect(throat);
+    throat.connect(g).connect(master);
+    osc.start(now);
+    lfo.start(now);
+    src.start(now, Math.random() * 0.4, dur);
+    osc.stop(now + dur + 0.05);
+    lfo.stop(now + dur + 0.05);
+  }
+
+  /** Something huge landing: a deep boom that falls away, a rumble of snow and a few cracks of ice. */
+  quake(power = 1) {
+    const ctx = this.ctx, master = this.master, noise = this.noise;
+    if (!ctx || !master || !noise) return;
+    const p = Math.min(1, Math.max(0.25, power)), now = ctx.currentTime;
+    const o = ctx.createOscillator();
+    o.frequency.setValueAtTime(82, now);
+    o.frequency.exponentialRampToValueAtTime(26, now + 0.7);
+    const og = ctx.createGain();
+    og.gain.setValueAtTime(0.95 * p, now);
+    og.gain.exponentialRampToValueAtTime(0.001, now + 0.8);
+    o.connect(og).connect(master);
+    o.start(now);
+    o.stop(now + 0.85);
+    const src = ctx.createBufferSource();
+    src.buffer = noise;
+    const lp = ctx.createBiquadFilter();
+    lp.type = "lowpass";
+    lp.frequency.setValueAtTime(900, now);
+    lp.frequency.exponentialRampToValueAtTime(120, now + 0.9);
+    const ng = ctx.createGain();
+    ng.gain.setValueAtTime(0.5 * p, now);
+    ng.gain.exponentialRampToValueAtTime(0.001, now + 1);
+    src.connect(lp).connect(ng).connect(master);
+    src.start(now, Math.random() * 0.4, 1);
+    for (const at of [0.05, 0.14, 0.27]) {
+      const t = now + at, c = ctx.createBufferSource();
+      c.buffer = noise;
+      const bp = ctx.createBiquadFilter();
+      bp.type = "bandpass";
+      bp.frequency.value = 2400 + at * 3000;
+      const cg = ctx.createGain();
+      cg.gain.setValueAtTime(0.16 * p, t);
+      cg.gain.exponentialRampToValueAtTime(0.001, t + 0.05);
+      c.connect(bp).connect(cg).connect(master);
+      c.start(t, Math.random() * 0.5, 0.06);
+    }
+  }
+
+  /** A car blowing up: a flash of noise that falls from a crack to a rumble, a heavy thump, and debris crackling after it. */
+  explode(power = 1) {
+    const ctx = this.ctx, master = this.master, noise = this.noise;
+    if (!ctx || !master || !noise) return;
+    const p = Math.min(1, Math.max(0.3, power)), now = ctx.currentTime;
+    const src = ctx.createBufferSource();
+    src.buffer = noise;
+    const lp = ctx.createBiquadFilter();
+    lp.type = "lowpass";
+    lp.Q.value = 0.8;
+    lp.frequency.setValueAtTime(5200, now);
+    lp.frequency.exponentialRampToValueAtTime(160, now + 1.1);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.exponentialRampToValueAtTime(0.7 * p, now + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + 1.15);
+    src.connect(lp).connect(g).connect(master);
+    src.start(now, Math.random() * 0.2, 1.2);
+    const o = ctx.createOscillator();
+    o.frequency.setValueAtTime(110, now);
+    o.frequency.exponentialRampToValueAtTime(30, now + 0.5);
+    const og = ctx.createGain();
+    og.gain.setValueAtTime(0.85 * p, now);
+    og.gain.exponentialRampToValueAtTime(0.001, now + 0.6);
+    o.connect(og).connect(master);
+    o.start(now);
+    o.stop(now + 0.65);
+    for (let i = 0; i < 7; i++) {
+      const t = now + 0.2 + i * 0.09 + Math.random() * 0.05, c = ctx.createBufferSource();
+      c.buffer = noise;
+      const hp = ctx.createBiquadFilter();
+      hp.type = "highpass";
+      hp.frequency.value = 1800 + Math.random() * 2500;
+      const cg = ctx.createGain();
+      cg.gain.setValueAtTime(0.1 * p * (1 - i / 9), t);
+      cg.gain.exponentialRampToValueAtTime(0.001, t + 0.05);
+      c.connect(hp).connect(cg).connect(master);
+      c.start(t, Math.random() * 0.5, 0.06);
+    }
+  }
+
   /** Plays a sound requested by the simulation (see Cue in scenery.ts). */
-  cue(kind: "growl" | "thud" | "warn" | "sizzle" | "boost" | "takeoff" | "land", power: number) {
+  cue(kind: "growl" | "thud" | "warn" | "sizzle" | "boost" | "takeoff" | "land" | "roar" | "quake" | "explode", power: number) {
     if (kind === "growl") this.growl(power);
     else if (kind === "thud") this.thud(power);
     else if (kind === "warn") this.warn(power);
     else if (kind === "boost") this.whoosh(power);
     else if (kind === "takeoff") this.takeoff();
     else if (kind === "land") this.land();
+    else if (kind === "roar") this.roar(power);
+    else if (kind === "quake") this.quake(power);
+    else if (kind === "explode") this.explode(power);
     else this.sizzle(power);
   }
 

@@ -5,8 +5,10 @@ import type { ThemeId } from "../themes";
 import type { Car3D } from "./cars";
 import { type Disposer, type Quality, THREE, softDisc } from "./core";
 import { Ambient3D, Effects3D, Fireworks3D, Skids3D, SpeedLines3D, rgb } from "./effects";
+import { Blasts3D } from "./blasts";
 import { BearFx, VolcanoFx } from "./hazards3d";
 import { Pads3D } from "./pads";
+import { YetiFx } from "./yeti3d";
 
 export type GameplayArgs = {
   adapter: Adapter3D;
@@ -34,6 +36,8 @@ export class Gameplay3D {
   private pads: Pads3D;
   private volcano: VolcanoFx | null = null;
   private bear: BearFx | null = null;
+  private yeti: YetiFx | null = null;
+  private blasts: Blasts3D;
   private ambient: Ambient3D;
   private lines: SpeedLines3D;
   private fireworks: Fireworks3D;
@@ -54,7 +58,11 @@ export class Gameplay3D {
     const soft = softDisc(d, 64);
     this.pads = new Pads3D(d, scene, adapter, mode, soft);
     if (adapter.eruption()) this.volcano = new VolcanoFx(d, scene, this.fx, a.heightAt, a.reduced, a.craterY);
-    if (mode === "northpole") this.bear = new BearFx(d, scene, this.fx);
+    if (mode === "northpole") {
+      this.bear = new BearFx(d, scene, this.fx);
+      this.yeti = new YetiFx(d, scene, this.fx);
+    }
+    this.blasts = new Blasts3D(d, scene, this.fx);
     this.ambient = new Ambient3D(d, scene, mode, quality);
     this.lines = new SpeedLines3D(d, a.camera);
     this.fireworks = new Fireworks3D(a.reduced);
@@ -85,6 +93,8 @@ export class Gameplay3D {
     this.pads.update(time);
     this.volcano?.update(dt, time, a);
     this.bear?.update(dt, a);
+    this.yeti?.update(dt, a);
+    this.blasts.update(dt, a);
     this.skids.update(race);
 
     race.cars.forEach((c, i) => {
@@ -102,8 +112,12 @@ export class Gameplay3D {
         cars[i].engineSpot(v, this.spot);
         this.fx.fire.emit(this.spot.x, this.spot.y, this.spot.z, -cx * 8, 0.3, -cz * 8, 0.5, -0.4, 0.4, 1, 0.55, 0.15, 0.8, 0, 1.5);
       }
-      // A worn-out car smokes at half health, and burns at a quarter (the volcano's damage).
-      if (v.health <= 0.5) {
+      // A wreck burns where it stopped, in thick black smoke, until it fades.
+      if (v.destroyed >= 0 && v.wreck > 0.05) {
+        if (Math.random() < dt * 24) this.fx.flame(x + (Math.random() - 0.5) * 2.2, 0.5 + Math.random() * 0.5, z + (Math.random() - 0.5) * 1.6, 1.5 * v.wreck + 0.4);
+        if (Math.random() < dt * 16) this.fx.smokePuff(x + (Math.random() - 0.5) * 1.6, 1.2, z + (Math.random() - 0.5) * 1.2, true, 4.5);
+      } else if (v.health <= 0.5) {
+        // A worn-out car smokes at half health, and burns at a quarter (the damage of the volcano and the yeti).
         const rate = v.health <= 0.25 ? 14 : 4;
         if (Math.random() < dt * rate) {
           cars[i].engineSpot(v, this.spot);
@@ -149,6 +163,8 @@ export class Gameplay3D {
     this.pads.dispose();
     this.volcano?.dispose();
     this.bear?.dispose();
+    this.yeti?.dispose();
+    this.blasts.dispose();
     this.skids.dispose();
     this.ambient.dispose();
     this.lines.dispose();

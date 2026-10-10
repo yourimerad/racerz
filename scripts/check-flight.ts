@@ -404,7 +404,7 @@ function tp(race: Race, car: Car, x: number, y: number) {
       stepRace(race, input, DT);
       if (what === "pool" && air) lift(race, car); // flying all the time
     }
-    return vz.hazards.st(car).hp;
+    return car.hp;
   };
   check(run(true, "bomb") === 100, "a bomb hurt a flying car");
   check(run(false, "bomb") === 80, "a bomb did not hurt a grounded car (control)");
