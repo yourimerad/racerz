@@ -13,19 +13,23 @@ export type Circle = { x: number; y: number; r: number };
 export type HazardBody = { id: number; x: number; y: number; vx: number; vy: number; angle: number; rx: number; ry: number };
 
 /** A short sound/effect request raised during the simulation; Game.tsx plays it. */
-export type Cue = { kind: "growl" | "thud"; power: number };
+export type Cue = { kind: "growl" | "thud" | "warn" | "sizzle"; power: number };
 
 /** What a hazard may look at (Race satisfies this) and write to (`cues`). */
 export type HazardWorld = {
   time: number;
   phase: "countdown" | "racing" | "finished";
   track: Track;
-  cars: ReadonlyArray<{ id: number; pos: Vec; vel: Vec; lastIndex: number; finishTime: number | null }>;
+  /** The cars (the Race's own objects: a hazard may slow one down by writing `speedMul` or `vel`). */
+  cars: ReadonlyArray<{ id: number; isPlayer: boolean; pos: Vec; vel: Vec; angle: number; speedMul: number; lastIndex: number; finishTime: number | null }>;
   cues: Cue[];
 };
 
 /** The visible world rectangle (same fields as fx.ts's FxView), for culling what a hazard draws. */
 export type HazardView = { minX: number; maxX: number; minY: number; maxY: number };
+
+/** A zone bots steer clear of (a round area on the ground, not a solid body): `brake` = they also slow down for it. */
+export type HazardDanger = { id: number; x: number; y: number; r: number; brake: boolean };
 
 /**
  * A mode's dynamic element, built per race by `Scene.hazard` and driven by the simulation clock:
@@ -41,6 +45,8 @@ export type Hazard = {
   impact?: { speedKeep: number; restitution: number; minImpact: number };
   /** Solid bodies cars collide with (none for a purely visual hazard). */
   bodies?(): readonly HazardBody[];
+  /** Round zones on the ground bots avoid (needs `avoid`): where something is about to fall, or is burning. */
+  dangers?(): readonly HazardDanger[];
   step(world: HazardWorld, dt: number): void;
   /** A car hit `body` hard enough to count as an impact at `at`; true when it counts as a contact (clean-race rule). */
   touch?(body: HazardBody, carId: number, at: Vec, power: number): boolean;
@@ -48,6 +54,10 @@ export type Hazard = {
   drawGround?(ctx: Ctx, time: number, view: HazardView): void;
   /** World space, drawn over the cars. */
   draw(ctx: Ctx, time: number, view: HazardView): void;
+  /** World space, right after car `carId` was drawn at (x, y) heading `angle`: damage marks, flames… */
+  drawCarOverlay?(ctx: Ctx, carId: number, x: number, y: number, angle: number): void;
+  /** Screen space (pixels), after the whole HUD: the player's own readouts. */
+  drawHud?(ctx: Ctx, w: number, h: number): void;
   /** Camera shake (world units) to apply to the whole view when the camera is at `at`. */
   shake?(at: Vec): Vec;
 };

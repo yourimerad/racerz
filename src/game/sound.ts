@@ -272,10 +272,38 @@ class Sound {
     src.start(now, Math.random() * 0.5, 0.2);
   }
 
+  /** A short two-tone alert: something is about to land. */
+  warn(power = 1) {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    this.note(880, t, 0.1, 0.1 * power, "square");
+    this.note(660, t + 0.12, 0.14, 0.1 * power, "square");
+  }
+
+  /** A crackling hiss: standing in burning lava. */
+  sizzle(power = 1) {
+    const ctx = this.ctx, master = this.master, noise = this.noise;
+    if (!ctx || !master || !noise) return;
+    const now = ctx.currentTime;
+    const src = ctx.createBufferSource();
+    src.buffer = noise;
+    const hp = ctx.createBiquadFilter();
+    hp.type = "highpass";
+    hp.frequency.value = 2500;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.exponentialRampToValueAtTime(0.14 * power, now + 0.03);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + 0.45);
+    src.connect(hp).connect(g).connect(master);
+    src.start(now, Math.random() * 0.5, 0.5);
+  }
+
   /** Plays a sound requested by the simulation (see Cue in scenery.ts). */
-  cue(kind: "growl" | "thud", power: number) {
+  cue(kind: "growl" | "thud" | "warn" | "sizzle", power: number) {
     if (kind === "growl") this.growl(power);
-    else this.thud(power);
+    else if (kind === "thud") this.thud(power);
+    else if (kind === "warn") this.warn(power);
+    else this.sizzle(power);
   }
 
   click() {

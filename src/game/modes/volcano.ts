@@ -1,6 +1,7 @@
 import type { Fx } from "../fx";
-import { disc, mulberry32, range, rock, scatter, TAU, type Circle, type Hazard, type Rng, type Scene, softBlob } from "../scenery";
+import { disc, mulberry32, range, rock, scatter, TAU, type Circle, type Hazard, type HazardDanger, type HazardWorld, type Rng, type Scene, softBlob } from "../scenery";
 import { locate, type Track, type TrackLayout } from "../track";
+import { CAR_RADIUS } from "../car";
 import { vec } from "../vec";
 
 // Volcano: one big cone in the middle of the map, seen from above with the sun at the top-left.
@@ -9,7 +10,8 @@ import { vec } from "../vec";
 // the cone's east flank, skirts the crater along its right-hand rim and leaves by the top, then
 // loops back round the west side of the map. The only lava anywhere is the lake and two small
 // pools in opposite corners of the terrain. The volcano erupts in a loop (see ERUPTION and
-// VolcanoEruption below): a purely visual hazard, driven by the race clock, that never touches the cars.
+// VolcanoEruption below): a decorative show driven by the race clock that never touches the cars. Only the
+// aimed bombs (VolcanoHazards, further down) hurt: they warn first, then damage, burn and slow a car.
 
 type Ctx = CanvasRenderingContext2D;
 type Pt = [number, number];
@@ -567,13 +569,573 @@ export class VolcanoEruption {
   }
 }
 
+// ---------- eruption hazards: aimed lava bombs, damage, lava pools ----------
+//
+// During the eruption, red targets appear on the road; 1.5 s later a lava bomb falls on each one. A car
+// inside the target loses 20 HP (explosion, "-20", shake, red screen), every impact leaves a lava pool that
+// burns 5 HP per second for 9 s before it cools, and a damaged car smokes, burns and slows down. It is an
+// obstacle, never a death: at 0 HP the car keeps rolling at 35 % speed and can lose nothing more. The
+// decorative bombs of VolcanoEruption never hurt anyone: only these aimed ones do.
+//
+// The code runs in a "design" frame in which a car is 16 × 28 (ours are 22 × 40 world units): one design
+// unit is HZ_SCALE world units, and everything is drawn with ctx.scale(HZ_SCALE) from the world origin.
+
+export const HZ_SCALE = 40 / 28;
+
+export const HZ = {
+  MAX_HP: 100, BOMB_DAMAGE: 20, POOL_DPS: 5, POOL_LIFE: 9, POOL_RADIUS: 24,
+  TARGET_R: 20, // target radius = real radius of the hit (the car's own radius is added: any part of the car inside the ring is hit)
+  WARN_TIME: 1.5, FALL_TIME: 0.6, MAX_TARGETS: 3,
+  SPAWN_MIN: 1.2, SPAWN_MAX: 2.0,
+  ACTIVE_FROM: 2.2, ACTIVE_TO: 7.0, // window within the eruption cycle (s)
+  NO_HAZARD_FIRST: 8, SAFE_FINISH_DIST: 150,
+  MIN_SPAWN_DIST: 90, AHEAD_MIN: 120, AHEAD_MAX: 320,
+  INVULN: 1.0, HIT_SLOW: 0.6, LOW_HP: 25, LOW_SLOW: 0.6, ZERO_HP_CAP: 0.35,
+  // Added for this game's speeds (design units; cars here are several times faster than in the 680 × 460 prototype):
+  /** Share of targets aimed at the player (the others at any car). */
+  PLAYER_SHARE: 0.7,
+  /** A target is aimed where the car will be when the bomb lands: at least AHEAD_MIN..AHEAD_MAX ahead, further when it goes fast, never beyond this. */
+  AIM_MAX: 640, AIM_SPREAD: [0.85, 1.1] as readonly [number, number],
+  /** Bots: slow to this share of their limit when a target is within `AI_RANGE` ahead (+ `AI_LOOKAHEAD` s of their speed) and steer round it with this margin. */
+  AI_RANGE: 100, AI_LOOKAHEAD: 0.8, AI_SLOW: 0.55, AI_MARGIN: 10,
+  /** How close (world units) to the player a target / impact is still heard. */
+  EARSHOT: 1000,
+};
+
+/** The world's way into the hazard code. */
+type HzCar = HazardWorld["cars"][number];
+type HzRoadPoint = { x: number; y: number; nx: number; ny: number; halfWidth: number };
+type HzAdapter = {
+  pos(car: HzCar): { x: number; y: number };
+  radius(car: HzCar): number;
+  speed(car: HzCar): number;
+  isPlayer(car: HzCar): boolean;
+  /** Point of the centre line `ahead` design units in front of the car; null when it is too close to the start / finish. */
+  roadAhead(car: HzCar, ahead: number): HzRoadPoint | null;
+  nearFinish(x: number, y: number): boolean;
+  /** Top speed and acceleration are scaled together by this factor. */
+  setSpeedMultiplier(car: HzCar, f: number): void;
+  scaleSpeedOnce(car: HzCar, f: number): void;
+  onWarn(tg: HzTarget): void;
+  onImpact(tg: HzTarget): void;
+  onDamage(car: HzCar, amount: number, small: boolean): void;
+};
+
+type HzTarget = { id: number; x: number; y: number; age: number };
+type HzPool = { id: number; x: number; y: number; age: number; shape: number[] };
+type HzState = { hp: number; shown: number; invuln: number; smokeAcc: number; markDist: number; poolT: number; inPool: boolean };
+type HzPopup = { x: number; y: number; text: string; size: number; age: number };
+type HzDot = { x: number; y: number; vx: number; vy: number; age: number; life: number };
+type HzPuff = { x: number; y: number; vx: number; vy: number; r: number; g: number; age: number; life: number; dark: boolean };
+
+/** Irregular nine-point lava pool outline. */
+function blob(ctx: Ctx, x: number, y: number, r: number, shape: number[], fill: string, alpha = 1, stroke: string | null = null, lw = 1) {
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.beginPath();
+  shape.forEach((m, i) => {
+    const a = (i / shape.length) * TAU, px = x + Math.cos(a) * r * m * 1.15, py = y + Math.sin(a) * r * m * 0.9;
+    if (i) ctx.lineTo(px, py);
+    else ctx.moveTo(px, py);
+  });
+  ctx.closePath();
+  ctx.fillStyle = fill;
+  ctx.fill();
+  if (stroke) {
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = lw;
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+export class VolcanoHazards {
+  private A: HzAdapter;
+  private rng: Rng;
+  private eruption: VolcanoEruption | null;
+  /** Reduced motion: no shake, no blinking. */
+  private calm: boolean;
+  /** Off = no aimed bomb is ever thrown (the decorative eruption goes on): for the checks. */
+  armed = true;
+  t = 0;
+  spawnIn = 2;
+  targets: HzTarget[] = [];
+  pools: HzPool[] = [];
+  popups: HzPopup[] = [];
+  splashes: HzDot[] = [];
+  flashes: { x: number; y: number; age: number }[] = [];
+  puffs: HzPuff[] = [];
+  marks: { x: number; y: number; age: number }[] = [];
+  shake = 0;
+  vignette = 0;
+  cars: readonly HzCar[] = [];
+  private state = new Map<HzCar, HzState>();
+  private nextId = 1;
+
+  constructor(adapter: HzAdapter, eruption: VolcanoEruption | null, rng: Rng, calm = false) {
+    this.A = adapter;
+    this.eruption = eruption;
+    this.rng = rng;
+    this.calm = calm;
+    this.reset();
+  }
+
+  private R(a: number, b: number) {
+    return a + this.rng() * (b - a);
+  }
+
+  reset() {
+    this.t = 0;
+    this.spawnIn = 2;
+    this.targets = [];
+    this.pools = [];
+    this.popups = [];
+    this.splashes = [];
+    this.flashes = [];
+    this.puffs = [];
+    this.marks = [];
+    this.shake = 0;
+    this.vignette = 0;
+    this.state = new Map();
+  }
+
+  st(car: HzCar): HzState {
+    let s = this.state.get(car);
+    if (!s) {
+      s = { hp: HZ.MAX_HP, shown: HZ.MAX_HP, invuln: 0, smokeAcc: 0, markDist: 0, poolT: 0, inPool: false };
+      this.state.set(car, s);
+    }
+    return s;
+  }
+
+  /** Advances by `dt` (race clock); returns the shake to add to the view, in design px. */
+  update(dt: number, cars: readonly HzCar[], raceTime: number) {
+    dt = Math.min(dt, 0.05);
+    this.t += dt;
+    this.cars = cars;
+    const et = this.eruption ? this.eruption.t : this.t % 10.5; // time within the eruption cycle
+    const active = et >= HZ.ACTIVE_FROM && et <= HZ.ACTIVE_TO;
+
+    this.spawnIn -= dt;
+    if (this.spawnIn < -1) this.spawnIn = 0.5;
+    if (this.armed && active && raceTime > HZ.NO_HAZARD_FIRST && this.spawnIn <= 0 && this.targets.length < HZ.MAX_TARGETS) {
+      // A refused spot is retried soon (it can only be a car in the way, or the start / finish); an accepted one waits SPAWN_MIN..MAX.
+      this.spawnIn = this.trySpawn(cars) ? this.R(HZ.SPAWN_MIN, HZ.SPAWN_MAX) : 0.25;
+    }
+    for (let i = this.targets.length - 1; i >= 0; i--) {
+      const tg = this.targets[i];
+      tg.age += dt;
+      if (tg.age >= HZ.WARN_TIME) {
+        this.impact(tg, cars);
+        this.targets.splice(i, 1);
+      }
+    }
+
+    const burning = new Set<HzCar>(); // a car in several overlapping pools burns once, not once per pool
+    for (let i = this.pools.length - 1; i >= 0; i--) {
+      const pl = this.pools[i];
+      pl.age += dt;
+      if (pl.age > HZ.POOL_LIFE + 1) {
+        this.pools.splice(i, 1);
+        continue;
+      }
+      if (pl.age >= HZ.POOL_LIFE) continue; // cooled: harmless
+      for (const car of cars) {
+        const p = this.A.pos(car);
+        if (Math.hypot(p.x - pl.x, p.y - pl.y) < HZ.POOL_RADIUS) burning.add(car);
+      }
+    }
+    for (const car of cars) {
+      const s = this.st(car);
+      s.inPool = burning.has(car);
+      if (!s.inPool) continue;
+      s.poolT += dt;
+      if (s.poolT >= 1) {
+        s.poolT -= 1;
+        this.damage(car, HZ.POOL_DPS, true); // one tick per second spent in a pool: "-5"
+      }
+    }
+
+    for (const car of cars) {
+      const s = this.st(car), p = this.A.pos(car);
+      if (!s.inPool) s.poolT = 0;
+      s.invuln = Math.max(0, s.invuln - dt);
+      s.shown = s.hp < s.shown ? Math.max(s.hp, s.shown - 30 * dt) : s.hp; // the white segment catches up with the real value
+      const ratio = s.hp / HZ.MAX_HP;
+      let f = 1;
+      if (s.hp === 0) f = HZ.ZERO_HP_CAP;
+      else if (ratio * 100 <= HZ.LOW_HP) f = HZ.LOW_SLOW;
+      this.A.setSpeedMultiplier(car, f);
+
+      const rate = ratio <= 0.25 ? 12 : ratio <= 0.5 ? 4 : 0; // smoke
+      s.smokeAcc += rate * dt;
+      while (s.smokeAcc >= 1 && this.puffs.length < 150) {
+        s.smokeAcc -= 1;
+        this.puffs.push({ x: p.x + this.R(-4, 4), y: p.y + this.R(-4, 4), vx: this.R(4, 14), vy: -this.R(14, 30), r: this.R(6, 10), g: this.R(10, 18), age: 0, life: this.R(1.2, 2.0), dark: ratio <= 0.25 });
+      }
+      if (ratio <= 0.25) {
+        // Black marks behind the car.
+        s.markDist += this.A.speed(car) * dt;
+        if (s.markDist > 14) {
+          s.markDist = 0;
+          if (this.marks.length < 300) this.marks.push({ x: p.x, y: p.y, age: 0 });
+        }
+      }
+    }
+
+    const age = <T extends { age: number; life?: number }>(arr: T[], life: number, fn?: (o: T) => void) => {
+      for (let i = arr.length - 1; i >= 0; i--) {
+        const o = arr[i];
+        o.age += dt;
+        if (fn) fn(o);
+        if (o.age > (o.life || life)) arr.splice(i, 1);
+      }
+    };
+    age(this.popups, 0.9, (o) => { o.y -= 40 * dt; });
+    age(this.flashes, 0.25);
+    age(this.splashes, 0.8, (o) => { o.x += o.vx * dt; o.y += o.vy * dt; });
+    age(this.puffs, 2, (o) => { o.x += o.vx * dt; o.y += o.vy * dt; o.r += o.g * dt; });
+    age(this.marks, 6);
+    this.shake *= Math.exp(-dt * 6);
+    this.vignette *= Math.exp(-dt * 3);
+    if (this.calm) return { x: 0, y: 0 };
+    return { x: this.R(-1, 1) * this.shake, y: this.R(-1, 1) * this.shake };
+  }
+
+  /** Aims a new target (in design coordinates) and announces it. Public so a check can place one. */
+  addTarget(x: number, y: number): HzTarget {
+    const tg = { id: this.nextId++, x, y, age: 0 };
+    this.targets.push(tg);
+    this.A.onWarn(tg);
+    return tg;
+  }
+
+  private trySpawn(cars: readonly HzCar[]): boolean {
+    const players = cars.filter((c) => this.A.isPlayer(c));
+    const car = players.length && this.rng() < HZ.PLAYER_SHARE ? players[0] : cars[Math.floor(this.rng() * cars.length)];
+    // Where the car will be when the bomb lands (so a target on the line it drives cannot simply be passed before it falls),
+    // never closer than the prototype's 120..320 and never so far it is off screen for good.
+    const reach = (this.A.speed(car) * HZ.WARN_TIME) * this.R(HZ.AIM_SPREAD[0], HZ.AIM_SPREAD[1]);
+    const ahead = Math.min(HZ.AIM_MAX, Math.max(this.R(HZ.AHEAD_MIN, HZ.AHEAD_MAX), reach));
+    const rp = this.A.roadAhead(car, ahead);
+    if (!rp) return false;
+    const off = this.R(-0.5, 0.5) * rp.halfWidth;
+    const x = rp.x + rp.nx * off, y = rp.y + rp.ny * off;
+    if (this.A.nearFinish(x, y)) return false;
+    for (const c of cars) {
+      const p = this.A.pos(c);
+      if (Math.hypot(p.x - x, p.y - y) < HZ.MIN_SPAWN_DIST) return false;
+    }
+    for (const t of this.targets) if (Math.hypot(t.x - x, t.y - y) < 60) return false;
+    this.addTarget(x, y);
+    return true;
+  }
+
+  private impact(tg: HzTarget, cars: readonly HzCar[]) {
+    this.flashes.push({ x: tg.x, y: tg.y, age: 0 });
+    for (let i = 0; i < 7; i++) {
+      const a = this.R(0, TAU), sp = this.R(40, 120);
+      this.splashes.push({ x: tg.x, y: tg.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, age: 0, life: this.R(0.4, 0.8) });
+    }
+    this.pools.push({ id: this.nextId++, x: tg.x, y: tg.y, age: 0, shape: Array.from({ length: 9 }, () => this.R(0.85, 1.15)) });
+    for (const car of cars) {
+      const p = this.A.pos(car), s = this.st(car);
+      if (s.invuln <= 0 && Math.hypot(p.x - tg.x, p.y - tg.y) < HZ.TARGET_R + this.A.radius(car)) {
+        const before = s.hp;
+        this.damage(car, HZ.BOMB_DAMAGE, false);
+        if (before > 0) {
+          this.A.scaleSpeedOnce(car, HZ.HIT_SLOW);
+          s.invuln = HZ.INVULN;
+        }
+      }
+    }
+    this.A.onImpact(tg);
+  }
+
+  damage(car: HzCar, amount: number, small: boolean) {
+    const s = this.st(car);
+    if (s.hp <= 0) return;
+    s.hp = Math.max(0, s.hp - amount);
+    const p = this.A.pos(car);
+    this.popups.push({ x: p.x + 10, y: p.y - 20, text: "-" + amount, size: small ? 15 : 26, age: 0 });
+    if (this.A.isPlayer(car)) {
+      this.vignette = 1;
+      if (!small) this.shake = Math.max(this.shake, 6);
+    }
+    this.A.onDamage(car, amount, small);
+  }
+
+  /** What bots steer round, in WORLD units: the targets (they brake for these too) and the burning pools. */
+  dangers(): HazardDanger[] {
+    const out: HazardDanger[] = [];
+    for (const t of this.targets) out.push({ id: 1000 + t.id, x: t.x * HZ_SCALE, y: t.y * HZ_SCALE, r: HZ.TARGET_R * HZ_SCALE, brake: true });
+    for (const p of this.pools) if (p.age < HZ.POOL_LIFE) out.push({ id: 100000 + p.id, x: p.x * HZ_SCALE, y: p.y * HZ_SCALE, r: HZ.POOL_RADIUS * HZ_SCALE, brake: false });
+    return out;
+  }
+
+  /** GROUND layer: after the volcano's scenery, BEFORE the cars (design frame). */
+  drawGround(ctx: Ctx) {
+    for (const m of this.marks) {
+      ctx.fillStyle = `rgba(21,16,14,${0.5 * (1 - m.age / 6)})`;
+      ctx.beginPath();
+      ctx.ellipse(m.x, m.y, 5, 3, 0, 0, TAU);
+      ctx.fill();
+    }
+    for (const pl of this.pools) {
+      // Pools: hot, then cooled.
+      const heat = Math.max(0, 1 - pl.age / HZ.POOL_LIFE);
+      const fade = pl.age > HZ.POOL_LIFE ? 1 - (pl.age - HZ.POOL_LIFE) : 1;
+      ctx.save();
+      ctx.globalAlpha = fade;
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      const g = ctx.createRadialGradient(pl.x, pl.y, 0, pl.x, pl.y, HZ.POOL_RADIUS * 3);
+      g.addColorStop(0, `rgba(255,106,31,${0.25 * heat})`);
+      g.addColorStop(1, "rgba(255,106,31,0)");
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(pl.x, pl.y, HZ.POOL_RADIUS * 3, 0, TAU);
+      ctx.fill();
+      ctx.restore();
+      const crust = `rgb(${Math.round(lerp(58, 90, heat))},${Math.round(lerp(20, 26, heat))},${Math.round(lerp(16, 16, heat))})`;
+      blob(ctx, pl.x, pl.y, HZ.POOL_RADIUS, pl.shape, crust, 1, "#2a0f0a", 3);
+      if (heat > 0.02) {
+        blob(ctx, pl.x, pl.y, HZ.POOL_RADIUS * 0.8, pl.shape, "#e8461a", heat);
+        blob(ctx, pl.x, pl.y, HZ.POOL_RADIUS * 0.55, pl.shape, "#ff8a24", heat);
+        blob(ctx, pl.x, pl.y, HZ.POOL_RADIUS * 0.3, pl.shape, "#ffd45a", heat);
+      }
+      ctx.restore();
+    }
+    for (const t of this.targets) {
+      // Red targets.
+      const left = HZ.WARN_TIME - t.age;
+      const blink = left < 0.5 && !this.calm ? (Math.sin(t.age * 40) > 0 ? 1 : 0.35) : 1;
+      ctx.save();
+      ctx.globalAlpha = blink;
+      ctx.translate(t.x, t.y);
+      ctx.fillStyle = "rgba(255,59,47,0.16)";
+      ctx.beginPath();
+      ctx.arc(0, 0, HZ.TARGET_R, 0, TAU);
+      ctx.fill();
+      ctx.strokeStyle = "#ff3b2f";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(0, 0, HZ.TARGET_R, 0, TAU);
+      ctx.stroke();
+      ctx.strokeStyle = "rgba(255,59,47,0.5)"; // closing ring
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(0, 0, HZ.TARGET_R + 9 + 14 * (left / HZ.WARN_TIME), 0, TAU);
+      ctx.stroke();
+      ctx.strokeStyle = "rgba(255,255,255,0.8)";
+      ctx.beginPath();
+      ctx.moveTo(-7, 0);
+      ctx.lineTo(7, 0);
+      ctx.moveTo(0, -7);
+      ctx.lineTo(0, 7);
+      ctx.stroke();
+      if (left < HZ.FALL_TIME) {
+        // The falling bomb's growing shadow.
+        const k = 1 - left / HZ.FALL_TIME;
+        ctx.fillStyle = "rgba(0,0,0,0.35)";
+        ctx.beginPath();
+        ctx.ellipse(0, 0, 3 + 9 * k, (3 + 9 * k) * 0.6, 0, 0, TAU);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+  }
+
+  /** In the drawing of EACH car, right after its body: burnt body and flames. Local frame of the car (front toward -y, 16 × 28). */
+  drawCarOverlay(ctx: Ctx, carId: number, x: number, y: number, angle: number) {
+    const car = this.cars.find((c) => c.id === carId);
+    if (!car) return;
+    const ratio = this.st(car).hp / HZ.MAX_HP;
+    if (ratio > 0.25) return;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(angle + Math.PI / 2); // our sprites face +x; the overlay's front is -y
+    ctx.scale(HZ_SCALE, HZ_SCALE);
+    ctx.fillStyle = "rgba(0,0,0,0.38)";
+    ctx.beginPath();
+    ctx.roundRect(-8, -14, 16, 28, 4);
+    ctx.fill();
+    const f = this.calm ? 1 : 0.8 + 0.4 * Math.sin(performance.now() / 70); // flickering flames
+    ctx.fillStyle = "#ff8a24";
+    ctx.beginPath();
+    [[-6.4, -11.4], [-3.6, -22.9 * f], [0, -15.7], [2.9, -24.3 * f], [6.4, -11.4]].forEach(([px, py], i) => (i ? ctx.lineTo(px, py) : ctx.moveTo(px, py)));
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = "#ffd45a";
+    ctx.beginPath();
+    [[-2.9, -11.4], [0, -18.6 * f], [2.9, -11.4]].forEach(([px, py], i) => (i ? ctx.lineTo(px, py) : ctx.moveTo(px, py)));
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  /** AIR layer, AFTER the cars: falling bombs, flashes, splashes, smoke, damage numbers (design frame). */
+  drawAir(ctx: Ctx) {
+    for (const t of this.targets) {
+      const left = HZ.WARN_TIME - t.age;
+      if (left > HZ.FALL_TIME) continue;
+      const k = 1 - left / HZ.FALL_TIME, z = 260 * (1 - k * k), sx = t.x, sy = t.y - z * 0.55;
+      ctx.strokeStyle = "rgba(255,138,36,0.5)";
+      ctx.lineWidth = 6;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(sx - 8, sy - 26);
+      ctx.lineTo(sx, sy);
+      ctx.stroke();
+      ctx.fillStyle = "rgba(255,106,31,0.35)";
+      ctx.beginPath();
+      ctx.arc(sx, sy, 14, 0, TAU);
+      ctx.fill();
+      ctx.fillStyle = "#ff8a24";
+      ctx.beginPath();
+      ctx.arc(sx, sy, 7, 0, TAU);
+      ctx.fill();
+      ctx.fillStyle = "#ffd45a";
+      ctx.beginPath();
+      ctx.arc(sx, sy, 3.5, 0, TAU);
+      ctx.fill();
+    }
+    for (const f of this.flashes) {
+      // 16-point star explosion.
+      const a = 1 - f.age / 0.25;
+      ctx.save();
+      ctx.globalAlpha = a;
+      ctx.beginPath();
+      for (let i = 0; i < 16; i++) {
+        const r = i % 2 ? 14 : 30, an = (i / 16) * TAU;
+        const x = f.x + Math.cos(an) * r, y = f.y + Math.sin(an) * r;
+        if (i) ctx.lineTo(x, y);
+        else ctx.moveTo(x, y);
+      }
+      ctx.closePath();
+      ctx.fillStyle = "#ff8a24";
+      ctx.fill();
+      ctx.strokeStyle = "#ffd45a";
+      ctx.lineWidth = 2.5;
+      ctx.stroke();
+      ctx.fillStyle = "#fff3b0";
+      ctx.beginPath();
+      ctx.arc(f.x, f.y, 11, 0, TAU);
+      ctx.fill();
+      ctx.restore();
+    }
+    for (const sp of this.splashes) {
+      ctx.fillStyle = `rgba(255,106,31,${1 - sp.age / sp.life})`;
+      ctx.beginPath();
+      ctx.arc(sp.x, sp.y, 3, 0, TAU);
+      ctx.fill();
+    }
+    for (const p of this.puffs) {
+      const c = p.dark ? "58,53,50" : "90,84,80", a = 0.7 * (1 - p.age / p.life);
+      const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.r);
+      g.addColorStop(0, `rgba(${c},${a})`);
+      g.addColorStop(1, `rgba(${c},0)`);
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r, 0, TAU);
+      ctx.fill();
+    }
+    for (const p of this.popups) {
+      // "-20" / "-5", red with a white outline.
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, 1 - p.age / 0.9);
+      ctx.font = `bold ${p.size}px sans-serif`;
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = "#ffffff";
+      ctx.fillStyle = "#ff3b2f";
+      ctx.strokeText(p.text, p.x, p.y);
+      ctx.fillText(p.text, p.x, p.y);
+      ctx.restore();
+    }
+  }
+
+  /** HUD in SCREEN pixels, for the player's car only. */
+  drawHud(ctx: Ctx, W: number, H: number) {
+    const car = this.cars.find((c) => this.A.isPlayer(c));
+    if (!car) return;
+    ctx.save();
+    ctx.textAlign = "start";
+    ctx.textBaseline = "alphabetic";
+    const s = this.st(car), ratio = s.hp / HZ.MAX_HP;
+    const v = Math.min(0.9, Math.max(0, 0.5 - ratio) * 1.8) + this.vignette * 0.5; // red edges
+    if (v > 0.01) {
+      const g = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.35, W / 2, H / 2, Math.max(W, H) * 0.65);
+      g.addColorStop(0, "rgba(208,0,0,0)");
+      g.addColorStop(1, `rgba(208,0,0,${Math.min(0.8, v)})`);
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, W, H);
+    }
+    // Under the race HUD, to the right of the sound button.
+    const x = 58, y = 148;
+    ctx.fillStyle = "rgba(0,0,0,0.6)";
+    ctx.beginPath();
+    ctx.roundRect(x, y, 240, 26, 10);
+    ctx.fill();
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 12px sans-serif";
+    ctx.fillText("PV", x + 12, y + 18);
+    ctx.fillStyle = "rgba(0,0,0,0.5)";
+    ctx.beginPath();
+    ctx.roundRect(x + 36, y + 7, 150, 12, 6);
+    ctx.fill();
+    ctx.fillStyle = "rgba(255,255,255,0.85)";
+    ctx.beginPath();
+    ctx.roundRect(x + 36, y + 7, Math.max(0, (150 * s.shown) / HZ.MAX_HP), 12, 6); // white segment: the recent loss
+    ctx.fill();
+    ctx.fillStyle = ratio > 0.5 ? "#3ddc84" : ratio > 0.25 ? "#ff9f1c" : "#d63a2f";
+    if (s.hp > 0) {
+      ctx.beginPath();
+      ctx.roundRect(x + 36, y + 7, 150 * ratio, 12, 6);
+      ctx.fill();
+    }
+    ctx.fillStyle = ratio <= 0.25 ? "#ff6b5f" : "#fff";
+    ctx.fillText(Math.round(ratio * 100) + "%", x + 198, y + 18);
+    if (ratio * 100 <= HZ.LOW_HP) {
+      // Slowdown badge.
+      const cut = Math.round((1 - (s.hp === 0 ? HZ.ZERO_HP_CAP : HZ.LOW_SLOW)) * 100);
+      ctx.fillStyle = "rgba(0,0,0,0.6)";
+      ctx.beginPath();
+      ctx.roundRect(x, y + 34, 130, 24, 8);
+      ctx.fill();
+      ctx.fillStyle = "#fff";
+      ctx.fillText(`↓ Vitesse −${cut} %`, x + 12, y + 51);
+    }
+    if (this.targets.length && (this.calm || Math.sin(performance.now() / 120) > -0.3)) {
+      // Blinking warning triangle, top centre (the minimap is on the right).
+      const ax = W / 2, ay = 14;
+      ctx.fillStyle = "#ff9f1c";
+      ctx.strokeStyle = "#000";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(ax, ay);
+      ctx.lineTo(ax + 16, ay + 28);
+      ctx.lineTo(ax - 16, ay + 28);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = "#000";
+      ctx.font = "bold 15px sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("!", ax, ay + 25);
+    }
+    ctx.restore();
+  }
+}
+
 /** Reduced-motion players get a gentler flash and shake (like the victory fireworks). */
 function calmFactor() {
   return typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? 0.35 : 1;
 }
 
-/** The eruption as the volcano's hazard: stepped with the race clock, drawn under and over the cars, shaking the view. */
-function createEruption(track: Track, rng: Rng): Hazard {
+/** The volcano's hazard: the decorative eruption plus the aimed bombs, pools and damage, stepped by the race clock. */
+export type VolcanoHazard = Hazard & { eruption: VolcanoEruption; hazards: VolcanoHazards };
+
+export function createVolcano(track: Track, rng: Rng): VolcanoHazard {
   const { scale, frame } = ERUPTION;
   const toWorld = (x: number, y: number) => vec(CONE.x + (x - frame.cx) * scale, CONE.y + (y - frame.cy) * scale);
   const eruption = new VolcanoEruption(rng, (x, y) => {
@@ -582,6 +1144,55 @@ function createEruption(track: Track, rng: Rng): Hazard {
   });
   const calm = calmFactor();
   let sx = 0, sy = 0;
+  let cues: HazardWorld["cues"] = [];
+  const S = HZ_SCALE;
+
+  /** The player's own car, for sounds. */
+  const heard = (x: number, y: number, cars: readonly HzCar[]) => {
+    const me = cars.find((c) => c.isPlayer);
+    return me ? Math.hypot(me.pos.x - x * S, me.pos.y - y * S) : Infinity;
+  };
+  const cue = (kind: "warn" | "thud" | "sizzle", power: number) => {
+    if (cues.length < 16) cues.push({ kind, power });
+  };
+
+  const adapter: HzAdapter = {
+    pos: (car) => ({ x: car.pos.x / S, y: car.pos.y / S }),
+    radius: () => (CAR_RADIUS * 0.8) / S,
+    speed: (car) => Math.hypot(car.vel.x, car.vel.y) / S,
+    isPlayer: (car) => car.isPlayer,
+    nearFinish: (x, y) => Math.hypot(x * S - track.path[0].x, y * S - track.path[0].y) < HZ.SAFE_FINISH_DIST * S,
+    roadAhead(car, ahead) {
+      const n = track.path.length;
+      let i = car.lastIndex, d = 0;
+      for (let k = 0; k < n && d < ahead * S; k++) {
+        const a = track.path[i], b = track.path[(i + 1) % n];
+        d += Math.hypot(b.x - a.x, b.y - a.y);
+        i = (i + 1) % n;
+      }
+      const p = track.path[i], t = track.tangents[i];
+      if (this.nearFinish(p.x / S, p.y / S)) return null;
+      return { x: p.x / S, y: p.y / S, nx: -t.y, ny: t.x, halfWidth: track.width / 2 / S };
+    },
+    setSpeedMultiplier: (car, f) => {
+      car.speedMul = f;
+    },
+    scaleSpeedOnce: (car, f) => {
+      car.vel = { x: car.vel.x * f, y: car.vel.y * f };
+    },
+    // Sounds: a target appearing within earshot, any impact within earshot (louder the closer), a tick of burning for the player.
+    onWarn: (tg) => {
+      if (heard(tg.x, tg.y, hz.cars) < HZ.EARSHOT) cue("warn", 1);
+    },
+    onImpact: (tg) => {
+      const d = heard(tg.x, tg.y, hz.cars);
+      if (d < HZ.EARSHOT) cue("thud", Math.max(0.25, 1 - d / HZ.EARSHOT));
+    },
+    onDamage: (car, _amount, small) => {
+      if (car.isPlayer && small) cue("sizzle", 1);
+    },
+  };
+  const hz = new VolcanoHazards(adapter, eruption, rng, calm < 1);
 
   /** Runs `draw` in the eruption frame (same transform as the scenery) with the visible area in frame coordinates. */
   const inFrame = (ctx: CanvasRenderingContext2D, view: { minX: number; maxX: number; minY: number; maxY: number }, draw: (v: FrameView) => void) => {
@@ -595,26 +1206,48 @@ function createEruption(track: Track, rng: Rng): Hazard {
     draw(v);
     ctx.restore();
   };
+  /** Runs `draw` in the hazards' design frame (a world scaled by HZ_SCALE about the origin). */
+  const inDesign = (ctx: CanvasRenderingContext2D, draw: () => void) => {
+    ctx.save();
+    ctx.scale(S, S);
+    draw();
+    ctx.restore();
+  };
 
+  let hx = 0, hy = 0; // hazard shake, design px
   return {
+    eruption,
+    hazards: hz,
+    avoid: { range: HZ.AI_RANGE * S, slow: HZ.AI_SLOW, margin: HZ.AI_MARGIN * S, lookahead: HZ.AI_LOOKAHEAD },
+    dangers: () => hz.dangers(),
     step(world, dt) {
       if (world.time < 0) return; // the cycle starts at the green light
+      cues = world.cues;
       const sh = eruption.update(dt);
       sx = sh.x;
       sy = sh.y;
+      const h = hz.update(dt, world.cars, world.time);
+      hx = h.x;
+      hy = h.y;
     },
-    drawGround: (ctx, _time, view) => inFrame(ctx, view, (v) => eruption.drawGround(ctx, v)),
+    drawGround: (ctx, _time, view) => {
+      inFrame(ctx, view, (v) => eruption.drawGround(ctx, v));
+      inDesign(ctx, () => hz.drawGround(ctx));
+    },
     draw: (ctx, _time, view) => {
       const keep = eruption.flash;
       eruption.flash = keep * calm; // gentler flash for reduced motion (restored right after)
       inFrame(ctx, view, (v) => eruption.drawAir(ctx, v));
       eruption.flash = keep;
+      inDesign(ctx, () => hz.drawAir(ctx));
     },
+    drawCarOverlay: (ctx, carId, x, y, angle) => hz.drawCarOverlay(ctx, carId, x, y, angle),
+    drawHud: (ctx, w, h) => hz.drawHud(ctx, w, h),
     shake(at) {
-      // Frame px → world units, fading out with distance from the crater.
+      // Eruption: frame px → world units, fading out with distance from the crater. Hazard hits: the player's own, undiminished.
       const d = Math.hypot(at.x - CONE.x, at.y - CONE.y);
       const k = Math.max(0, 1 - d / ERUPTION.shakeRange) * ERUPTION.shakeScale * calm;
-      return { x: sx * k, y: sy * k };
+      return { x: sx * k + hx * S, y: sy * k + hy * S };
     },
   };
 }
@@ -638,7 +1271,7 @@ export function scene(track: Track): Scene {
   return {
     lava: [], // the lake is decoration only: nothing slows the car
     vents: [],
-    hazard: createEruption,
+    hazard: createVolcano,
     under(ctx) {
       for (const a of ash) softBlob(ctx, a.x, a.y, a.rx, a.ry, a.rot, "105,95,92", 0.3);
       for (const [i, p] of pools.entries()) pool(ctx, p.x, p.y, p.r, 7 + i * 5);

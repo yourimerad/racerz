@@ -18,6 +18,8 @@ export type Car = {
   skill: number;
   accelMul: number;
   gripMul: number;
+  /** Extra multiplier on top speed AND acceleration (1 normally; a mode's hazard lowers it for a damaged car). */
+  speedMul: number;
   // Race bookkeeping (see race.ts).
   progress: number;
   lastIndex: number;
@@ -81,9 +83,9 @@ export function stepCar(car: Car, input: Input, dt: number, mods: PhysMods) {
   const gripMul = s === "track" ? mods.trackGrip : mods.offGrip;
   const drag = s === "track" ? PHYS.drag : PHYS.grassDrag * (s === "lava" ? mods.lavaDrag : mods.offDrag);
   const maxMul = s === "track" ? 1 : PHYS.grassMax * (s === "lava" ? mods.lavaMax : mods.offMax);
-  const maxSpeed = PHYS.maxSpeed * car.skill * maxMul;
+  const maxSpeed = PHYS.maxSpeed * car.skill * car.speedMul * maxMul;
 
-  if (input.throttle) vF += PHYS.accel * car.accelMul * dt * (vF < maxSpeed ? 1 : 0);
+  if (input.throttle) vF += PHYS.accel * car.accelMul * car.speedMul * dt * (vF < maxSpeed ? 1 : 0);
   if (input.brake) vF -= (vF > 0 ? PHYS.brake : PHYS.reverseAccel) * dt;
   vF -= vF * drag * dt;
   if (vF > maxSpeed) vF += (maxSpeed - vF) * Math.min(1, 3 * dt);
