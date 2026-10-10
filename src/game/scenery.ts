@@ -60,9 +60,22 @@ export type Hazard = {
   drawHud?(ctx: Ctx, w: number, h: number): void;
   /** Camera shake (world units) to apply to the whole view when the camera is at `at`. */
   shake?(at: Vec): Vec;
+  /** A warning on the ground before something appears (the polar bear's alert): where, where its sign stands, how long ago it was announced (s). Read by the 3D view. */
+  warning?(): { x: number; y: number; signX: number; signY: number; age: number } | null;
 };
 
+/** What a mode puts on its ground (beyond the barriers). Pure data for the 3D view (render3d.ts), which draws each kind its own way; the 2D art ignores it. */
+export type PropKind =
+  | "tree" | "fir" | "rock" | "cactus" | "igloo" | "penguin" | "iceblock" | "polarbear" | "bale" | "strawbale" | "hedge" | "grandstand" | "pit" | "tires"
+  | "banner" | "tent" | "stand" | "farm" | "cow" | "pillar" | "lavapool";
+/** `r` = the radius the mode reserves for it, `a` = its heading (radians) when it has one. */
+export type SceneProp = { kind: PropKind; x: number; y: number; r: number; a?: number };
+
 export type Scene = {
+  /** The props, with the same positions as the 2D art (optional: only read by the 3D view). */
+  props?: readonly SceneProp[];
+  /** Wooden fences as polylines (3D view only). */
+  fences?: readonly { x: number; y: number }[][];
   /** Lava pools (volcano only): driving into one is the "lava" surface. */
   lava: Circle[];
   /** Smoke sources for the animated layer. */

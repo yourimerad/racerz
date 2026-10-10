@@ -341,6 +341,7 @@ function createBears(track: Track, rng: Rng): Hazard {
     avoid: { range: BEAR.aiRange, slow: BEAR.aiSlow, margin: BEAR.aiMargin, lookahead: BEAR.aiLookahead },
     impact: { speedKeep: BEAR.speedKeep, restitution: BEAR.restitution, minImpact: BEAR.minImpact },
     bodies: () => bears,
+    warning: () => (plan ? { x: plan.x, y: plan.y, signX: plan.signX, signY: plan.signY, age: now - plan.warnAt } : null),
 
     step(world, dt) {
       now = world.time;
@@ -574,6 +575,13 @@ export function scene(track: Track): Scene {
   }));
 
   return {
+    props: [
+      ...igloos.map((c, i) => ({ kind: "igloo" as const, ...c, a: i * 2.1 })),
+      ...colony.map((c) => ({ kind: "penguin" as const, ...c })),
+      ...bears.map((c) => ({ kind: "polarbear" as const, ...c, a: 0.7 })),
+      ...firs.map((c) => ({ kind: "fir" as const, ...c })),
+      ...blocks.map((c, i) => ({ kind: "iceblock" as const, ...c, a: i * 1.7 })),
+    ],
     lava: [],
     vents: [],
     hazard: createBears,
