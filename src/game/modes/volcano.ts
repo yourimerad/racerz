@@ -2,6 +2,7 @@ import type { Fx } from "../fx";
 import { disc, mulberry32, range, rock, scatter, TAU, type Circle, type Hazard, type HazardDanger, type HazardWorld, type Rng, type Scene, softBlob } from "../scenery";
 import { locate, type Track, type TrackLayout } from "../track";
 import { cachedPadSpots, nearPad } from "../boost";
+import { WALLS } from "../flight";
 import { CAR_RADIUS, isAirborne } from "../car";
 import { vec } from "../vec";
 
@@ -744,7 +745,7 @@ export class VolcanoHazards {
       }
       if (pl.age >= HZ.POOL_LIFE) continue; // cooled: harmless
       for (const car of cars) {
-        if (isAirborne(car)) continue; // a flying car passes over the pools
+        if (isAirborne(car) || car.shield > 0) continue; // a flying car passes over the pools; a car just put back on the road gets a second of grace
         const p = this.A.pos(car);
         if (Math.hypot(p.x - pl.x, p.y - pl.y) < HZ.POOL_RADIUS) burning.add(car);
       }
@@ -847,7 +848,7 @@ export class VolcanoHazards {
     this.pools.push({ id: this.nextId++, x: tg.x, y: tg.y, age: 0, shape: Array.from({ length: 9 }, () => this.R(0.85, 1.15)) });
     for (const car of cars) {
       const p = this.A.pos(car), s = this.st(car);
-      if (s.invuln <= 0 && !isAirborne(car) && Math.hypot(p.x - tg.x, p.y - tg.y) < HZ.TARGET_R + this.A.radius(car)) {
+      if (s.invuln <= 0 && !isAirborne(car) && car.shield <= 0 && Math.hypot(p.x - tg.x, p.y - tg.y) < HZ.TARGET_R + this.A.radius(car)) {
         const before = s.hp;
         this.damage(car, HZ.BOMB_DAMAGE, false);
         if (before > 0) {
@@ -1280,6 +1281,8 @@ export function scene(track: Track): Scene {
     lava: [], // the lake is decoration only: nothing slows the car
     vents: [],
     hazard: createVolcano,
+    // The crater lake is no wall (a Jet flies over it at any altitude) but nothing lands on it: its own floor, inside the cone.
+    floorAlt: (x, y) => (Math.hypot(x - CONE.x, y - CONE.y) < LAKE_R ? WALLS.LAVA_FLOOR : undefined),
     under(ctx) {
       for (const a of ash) softBlob(ctx, a.x, a.y, a.rx, a.ry, a.rot, "105,95,92", 0.3);
       for (const [i, p] of pools.entries()) pool(ctx, p.x, p.y, p.r, 7 + i * 5);

@@ -14,7 +14,8 @@
     "check:bales": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/resolve-ts.mjs scripts/check-bales.ts",
     "check:hazards": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/resolve-ts.mjs scripts/check-hazards.ts",
     "check:boost": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/resolve-ts.mjs scripts/check-boost.ts",
-    "check:flight": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/resolve-ts.mjs scripts/check-flight.ts"
+    "check:flight": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/resolve-ts.mjs scripts/check-flight.ts",
+    "check:walls": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/resolve-ts.mjs scripts/check-walls.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.117.3",

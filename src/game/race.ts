@@ -1,6 +1,7 @@
 import { type BoostSystem, createBoost } from "./boost";
 import { type Car, type Input, type Surface, NO_INPUT, CAR_RADIUS, PHYS, isAirborne, stepCar, slipOf, speedOf } from "./car";
-import { FlightController, distToLine } from "./flight";
+import { CheckpointGuard } from "./checkpoints";
+import { FlightController, WALLS, distToLine, dustOf, wallHeightOf } from "./flight";
 import { type ModelId, type SkinId, MODELS, carStats, skinOf } from "./garage";
 import { type Circle, type Cue, type Hazard, type HazardBody, type Rng, type Scene, mulberry32 } from "./scenery";
 import { type Theme, type ThemeId, THEMES, sceneFor } from "./themes";
@@ -51,6 +52,8 @@ export type Race = {
   boost: BoostSystem;
   /** The human's flight (Shift) when they drive the Racerz Jet, else null (see flight.ts). */
   flight: FlightController | null;
+  /** The invisible checkpoints that keep a Jet's shortcut honest (checkpoints.ts); null when nobody can leave the road. */
+  guard: CheckpointGuard | null;
 };
 
 export type Straw = { x: number; y: number; vx: number; vy: number; rot: number; life: number };
@@ -89,7 +92,7 @@ export function createRace(themeId: ThemeId, player: PlayerCar, seed?: number): 
     const skin = isPlayer ? skinOf(player.model, player.skin) : { name: r.name, body: r.color, accent: r.color };
     return {
       id: i, name: isPlayer ? `Toi (${MODELS[player.model].name})` : r.name, color: skin.body, isPlayer,
-      model: isPlayer ? player.model : "gt", skin, skill: stats.speed, accelMul: stats.accel, gripMul: stats.grip, speedMul: 1, boostMul: 1, flyMul: 1, alt: 0,
+      model: isPlayer ? player.model : "gt", skin, skill: stats.speed, accelMul: stats.accel, gripMul: stats.grip, speedMul: 1, boostMul: 1, flyMul: 1, alt: 0, penalty: 0, shield: 0,
       offTime: 0, hits: 0, hitCooldown: 0, stun: 0,
       pos, vel: vec(0, 0), angle: Math.atan2(t.y, t.x),
       progress: idx - n, lastIndex: idx, lap: 0, lapStart: 0, bestLap: null, finishTime: null, surface: "track",
@@ -102,25 +105,85 @@ export function createRace(themeId: ThemeId, player: PlayerCar, seed?: number): 
   const boost = createBoost(theme.id, track, { bumpers: scene.bumpers, lava: scene.lava }, GRID_FIRST + (ROSTER.length - 1) * GRID_ROW);
   // Only modes with a moving obstacle consume the PRNG here, so the other modes replay as before.
   const hazard = scene.hazard ? scene.hazard(track, mulberry32((rng() * 2 ** 32) >>> 0)) : null;
-  const race: Race = { track, theme, scene, cars, phase: "countdown", time: -COUNTDOWN, skids: [], overheadOpacity: 1, rng, ai, straw: [], crashes: [], hazard, cues: [], boost, flight: null };
+  const race: Race = { track, theme, scene, cars, phase: "countdown", time: -COUNTDOWN, skids: [], overheadOpacity: 1, rng, ai, straw: [], crashes: [], hazard, cues: [], boost, flight: null, guard: null };
   if (MODELS[player.model].flying) {
     const cue = (kind: "takeoff" | "land") => {
       if (race.cues.length < 16) race.cues.push({ kind, power: 1 });
     };
-    race.flight = new FlightController({
-      speed: (car) => Math.hypot(car.vel.x, car.vel.y),
-      setSpeedMultiplier: (car, f) => {
-        car.flyMul = f;
+    const b = track.bounds;
+    race.flight = new FlightController(
+      {
+        speed: (car) => Math.hypot(car.vel.x, car.vel.y),
+        setSpeedMultiplier: (car, f) => {
+          car.flyMul = f;
+        },
+        // The start line is the finish line (sample 0); a car is on the same side of it for both.
+        distToFinish: (car) => distToLine(track, car),
+        distToStart: (car) => distToLine(track, car),
+        noFlyAt: (x, y) => race.phase === "countdown" || (race.scene.noFly?.(x, y) ?? false),
+        floorAlt: (x, y) => floorAltAt(race, x, y),
+        inWorld: (x, y) => x > b.minX && x < b.maxX && y > b.minY && y < b.maxY,
+        nearestRoadPoint: (x, y) => {
+          const i = locate(track, vec(x, y)).index, t = track.tangents[i];
+          return { x: track.path[i].x, y: track.path[i].y, heading: Math.atan2(t.y, t.x) };
+        },
+        respawn: (car, x, y, heading, speedFactor) => respawnCar(race, car, x, y, heading, speedFactor),
+        addTimePenalty: (car, sec) => addPenalty(car, sec),
+        onTakeoff: () => cue("takeoff"),
+        onLand: () => cue("land"),
       },
-      // The start line is the finish line (sample 0); a car is on the same side of it for both.
-      distToFinish: (car) => distToLine(track, car),
-      distToStart: (car) => distToLine(track, car),
-      noFlyAt: (x, y) => race.phase === "countdown" || (race.scene.noFly?.(x, y) ?? false),
-      onTakeoff: () => cue("takeoff"),
-      onLand: () => cue("land"),
-    });
+      dustOf(theme.id),
+    );
+    // Only this car can leave the road: the checkpoints keep its shortcuts honest.
+    race.guard = new CheckpointGuard(track, { respawn: (car, x, y, heading, f, index) => respawnCar(race, car, x, y, heading, f, index), addTimePenalty: (car, sec) => addPenalty(car, sec) });
   }
   return race;
+}
+
+/**
+ * Minimum altitude (m) at a point: 0 inside the barriers (the road and its runoff are ground), the mode's wall height beyond them — a car whose
+ * centre is past `limit` is touching the wall — and whatever the mode says for itself (the volcano's crater lake).
+ */
+function floorAltAt(race: Race, x: number, y: number): number {
+  const own = race.scene.floorAlt?.(x, y);
+  if (own !== undefined) return own;
+  // `hitBarrier` clamps a car to exactly `limit` from the centre line: that spot is still ground.
+  return locate(race.track, vec(x, y)).dist <= race.track.barrier - CAR_RADIUS * 0.7 + 1e-3 ? 0 : wallHeightOf(race.theme.id);
+}
+
+/** A time penalty: it counts in the lap being driven and in the finish time. */
+function addPenalty(car: Car, sec: number) {
+  car.penalty += sec;
+  car.lapStart -= sec;
+}
+
+/**
+ * Puts a car back on the road (a forced return, a refused lap): at (x, y) heading `heading`, keeping `speedFactor` of its speed, a second of
+ * grace (no contact counted, no damage), flight and turbo ended. `index` = its centre-line sample when it is known (a checkpoint), so the
+ * lap progress is set exactly; otherwise the progress follows the nearest sample like any other step.
+ */
+function respawnCar(race: Race, car: Car, x: number, y: number, heading: number, speedFactor: number, index?: number) {
+  const n = race.track.path.length, speed = Math.hypot(car.vel.x, car.vel.y);
+  car.pos = vec(x, y);
+  car.angle = heading;
+  car.vel = scale(fromAngle(heading), speed * speedFactor);
+  car.stun = 0;
+  car.shield = WALLS.RESPAWN_SHIELD;
+  car.hitCooldown = Math.max(car.hitCooldown, WALLS.RESPAWN_SHIELD);
+  race.boost.cut(car);
+  if (car.isPlayer) race.flight?.groundCar(car);
+  race.guard?.teleported(car);
+  if (index !== undefined) {
+    car.progress = car.lap * n + index;
+    car.lastIndex = index;
+    return;
+  }
+  const loc = locate(race.track, car.pos);
+  let delta = loc.index - car.lastIndex;
+  if (delta > n / 2) delta -= n;
+  if (delta < -n / 2) delta += n;
+  car.progress += delta;
+  car.lastIndex = loc.index;
 }
 
 /** Bots under a turbo: how far ahead (× their usual look-ahead) they check bends, and the deceleration they plan their braking with (u/s², under the real 950). */
@@ -318,9 +381,9 @@ function collide(race: Race, a: Car, b: Car) {
   }
 }
 
-function surfaceAt(race: Race, p: Vec, dist: number, airborne: boolean): Surface {
+function surfaceAt(race: Race, p: Vec, dist: number): Surface {
   if (dist < race.track.width / 2) return "track";
-  if (!airborne) for (const l of race.scene.lava) if ((l.x - p.x) ** 2 + (l.y - p.y) ** 2 < (l.r * 0.9) ** 2) return "lava";
+  for (const l of race.scene.lava) if ((l.x - p.x) ** 2 + (l.y - p.y) ** 2 < (l.r * 0.9) ** 2) return "lava";
   return "offtrack";
 }
 
@@ -328,6 +391,8 @@ function surfaceAt(race: Race, p: Vec, dist: number, airborne: boolean): Surface
 function hitBarrier(race: Race, car: Car, index: number, dist: number) {
   const limit = race.track.barrier - CAR_RADIUS * 0.7;
   if (dist <= limit) return;
+  // A Jet high enough for the wall under it flies over it (the world's outer limits stay solid: containCar).
+  if (car.isPlayer && race.flight?.canCross(car, car.pos.x, car.pos.y)) return;
   const p = race.track.path[index];
   const n = scale(sub(car.pos, p), 1 / dist);
   car.pos = add(p, scale(n, limit));
@@ -337,7 +402,7 @@ function hitBarrier(race: Race, car: Car, index: number, dist: number) {
   if (vn > 80) {
     race.boost.cut(car);
     if (car.hitCooldown <= 0) {
-      if (!isAirborne(car)) car.hits++; // walls stay solid in flight, but a flying car's touches don't count for the clean-race rule
+      car.hits++; // also for a Jet that was too low for the wall: that is a normal collision
       car.hitCooldown = 0.5;
       noteCrash(race, car, vn);
     }
@@ -464,21 +529,31 @@ function updateProgress(race: Race, car: Car, dt: number) {
   hitBarrier(race, car, loc.index, loc.dist);
   hitBumpers(race, car);
   hitHazard(race, car);
-  car.surface = surfaceAt(race, car.pos, Math.min(loc.dist, race.track.barrier), isAirborne(car));
+  // In the air the ground's drag and lava mean nothing (and it is not time spent off the road).
+  car.surface = isAirborne(car) ? "track" : surfaceAt(race, car.pos, Math.min(loc.dist, race.track.barrier));
   if (race.phase === "racing" && car.finishTime === null && car.surface !== "track") car.offTime += dt;
   let delta = loc.index - car.lastIndex;
   if (delta > n / 2) delta -= n;
   if (delta < -n / 2) delta += n;
   car.progress += delta;
   car.lastIndex = loc.index;
+  // The line is never crossed in the air (a Jet cutting a corner over a wall could pass it): the lap waits for the ground.
+  if (car.isPlayer && race.flight && isAirborne(car)) car.progress = Math.min(car.progress, (car.lap + 1) * n - 1);
+  race.guard?.update(dt, car);
 
   const completed = Math.floor(car.progress / n);
   if (completed > car.lap && car.finishTime === null) {
+    // A lap that skipped a checkpoint is refused: back to the first missing one, with the penalty (the bots follow the road and never miss one).
+    if (race.guard && car.isPlayer && !race.guard.allPassed(car)) {
+      race.guard.onMissedFinish(car);
+      return;
+    }
     const lapTime = race.time - car.lapStart;
     car.bestLap = car.bestLap === null ? lapTime : Math.min(car.bestLap, lapTime);
     car.lap = completed;
     car.lapStart = race.time;
-    if (car.lap >= TOTAL_LAPS) car.finishTime = race.time;
+    if (car.lap >= TOTAL_LAPS) car.finishTime = race.time + car.penalty;
+    race.guard?.reset(car);
   }
 }
 
@@ -525,6 +600,7 @@ export function stepRace(race: Race, playerInput: Input, dt: number, playerIsAi 
     const before = car.pos;
     stepCar(car, input, dt, race.theme.phys);
     car.hitCooldown -= dt;
+    car.shield = Math.max(0, car.shield - dt);
     car.stun = Math.max(0, car.stun - dt);
     containCar(race, car);
     if (slipOf(car) > 140 || (input.brake && speedOf(car) > 300)) {

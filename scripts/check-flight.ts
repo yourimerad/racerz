@@ -20,6 +20,7 @@ import { JET_SCALE } from "../src/game/jetArt";
 import { aiInput, createRace, stepRace, TOTAL_LAPS, type Race } from "../src/game/race";
 import type { VolcanoHazard } from "../src/game/modes/volcano";
 import type { ThemeId } from "../src/game/themes";
+import { locate } from "../src/game/track";
 
 const DT = 1 / 120;
 let failed = false;
@@ -88,6 +89,7 @@ function lab() {
   const events: string[] = [];
   const A: FlightAdapter = {
     speed: () => 0, setSpeedMultiplier: (c, f) => (c.flyMul = f), distToFinish: () => Infinity, distToStart: () => Infinity, noFlyAt: () => false,
+    floorAlt: () => 0, inWorld: () => true, nearestRoadPoint: (x, y) => ({ x, y, heading: 0 }), respawn: () => {}, addTimePenalty: () => {},
     onTakeoff: () => events.push("takeoff"), onLand: () => events.push("land"),
   };
   const fc = new FlightController(A);
@@ -236,6 +238,11 @@ function lift(race: Race, car: Car) {
 }
 const FLYING: typeof NO_INPUT = { ...NO_INPUT, fly: true };
 const AT = (x: number, y: number) => ({ x, y });
+/** Teleports a car and keeps its centre-line index in step, as a real move would (the line zones read it). */
+function tp(race: Race, car: Car, x: number, y: number) {
+  car.pos = { x, y };
+  car.lastIndex = locate(race.track, car.pos).index;
+}
 {
   // The bots and a normal car never fly; a Racerz GT has no flight at all.
   const gt = createRace("desert", { model: "gt", skin: "factory", level: 1 }, 3);
@@ -260,7 +267,7 @@ const AT = (x: number, y: number) => ({ x, y });
   const run = (air: boolean) => {
     const { race, car } = solo("countryside");
     const bale = race.scene.bumpers![10];
-    car.pos = AT(bale.x - 120, bale.y);
+    tp(race, car, bale.x - 120, bale.y);
     car.angle = 0;
     car.vel = { x: 600, y: 0 };
     if (air) lift(race, car);
@@ -289,7 +296,7 @@ const AT = (x: number, y: number) => ({ x, y });
       return { hits: -1, through: false };
     }
     const dx = Math.cos(bear.angle), dy = Math.sin(bear.angle);
-    car.pos = AT(bear.x + dx * 160, bear.y + dy * 160);
+    tp(race, car, bear.x + dx * 160, bear.y + dy * 160);
     car.angle = Math.atan2(-dy, -dx);
     car.vel = { x: -dx * 380, y: -dy * 380 };
     if (air) lift(race, car);
@@ -313,19 +320,21 @@ const AT = (x: number, y: number) => ({ x, y });
     while (race.phase === "countdown") stepRace(race, NO_INPUT, DT);
     race.cars.splice(2);
     const [me, bot] = race.cars;
-    me.pos = AT(1000, 1000);
-    bot.pos = AT(1018, 1000);
-    me.vel = { x: 400, y: 0 };
+    const idx = 150, base = race.track.path[idx], tg = race.track.tangents[idx];
+    tp(race, me, base.x, base.y);
+    tp(race, bot, base.x + tg.x * 18, base.y + tg.y * 18);
+    me.vel = { x: tg.x * 400, y: tg.y * 400 };
     bot.vel = { x: 0, y: 0 };
-    me.angle = 0;
-    bot.angle = 0;
+    me.angle = Math.atan2(tg.y, tg.x);
+    bot.angle = me.angle;
     if (air) lift(race, me);
     race.boost.enabled = false;
     stepRace(race, air ? FLYING : NO_INPUT, DT);
     return { dv: bot.vel.x, gap: Math.hypot(bot.pos.x - me.pos.x, bot.pos.y - me.pos.y) };
   };
   const air = run(true), ground = run(false);
-  check(Math.abs(air.dv) < 1e-6 && air.gap < 40, `another car in the air: it was pushed (dv ${air.dv.toFixed(1)})`);
+  check(Math.abs(air.dv) < 10 && air.gap < 40, // (the bot's own throttle adds a few u/s per step)
+     `another car in the air: it was pushed (dv ${air.dv.toFixed(1)})`);
   check(ground.dv > 50, `another car on the ground: no impact (dv ${ground.dv.toFixed(1)})`);
 }
 {
@@ -359,7 +368,7 @@ const AT = (x: number, y: number) => ({ x, y });
   const run = (air: boolean) => {
     const { race, car } = solo("desert");
     const pad = race.boost.pads[0];
-    car.pos = AT(pad.x, pad.y);
+    tp(race, car, pad.x, pad.y);
     car.angle = pad.heading;
     car.vel = { x: Math.cos(pad.heading) * 300, y: Math.sin(pad.heading) * 300 };
     if (air) lift(race, car);
@@ -370,16 +379,20 @@ const AT = (x: number, y: number) => ({ x, y });
   check(run(false), "a boost pad did not fire for a grounded car (control)");
 }
 {
-  // Walls stay solid in the air; touching them never counts as a contact there (but does on the ground).
+  // Below the wall's height a flying Jet still hits the wall: the usual bounce, and a contact (check:walls covers flying over it).
   const run = (air: boolean) => {
     const { race, car } = solo("desert");
     race.boost.enabled = false;
     const i = 60, p = race.track.path[i], t = race.track.tangents[i];
     const nx = -t.y, ny = t.x;
-    car.pos = AT(p.x + nx * (race.track.barrier - 60), p.y + ny * (race.track.barrier - 60));
+    tp(race, car, p.x + nx * (race.track.barrier - 60), p.y + ny * (race.track.barrier - 60));
     car.angle = Math.atan2(ny, nx);
     car.vel = { x: nx * 700, y: ny * 700 };
-    if (air) lift(race, car);
+    if (air) {
+      lift(race, car);
+      race.flight!.st(car).alt = 30; // above the 20 m of "in the air", under the canyon's 60 m
+      car.alt = 30;
+    }
     let maxDist = 0;
     const hits0 = car.hits;
     for (let k = 0; k < 1.2 / DT; k++) {
@@ -391,8 +404,8 @@ const AT = (x: number, y: number) => ({ x, y });
     return { maxDist, hits: car.hits - hits0, limit: race.track.barrier };
   };
   const air = run(true), ground = run(false);
-  check(air.maxDist <= air.limit, `a flying car went through the barrier (${air.maxDist.toFixed(0)} > ${air.limit})`);
-  check(air.hits === 0, `a flying car's wall touches counted as ${air.hits} contact(s)`);
+  check(air.maxDist <= air.limit, `a Jet at 30 m went through the 60 m wall (${air.maxDist.toFixed(0)} > ${air.limit})`);
+  check(air.hits >= 1, `a Jet that hit the wall too low did not get a contact (${air.hits})`);
   check(ground.hits >= 1 && ground.maxDist <= ground.limit, `the barrier on the ground: hits ${ground.hits}`);
 }
 {
@@ -436,6 +449,7 @@ const AT = (x: number, y: number) => ({ x, y });
       car.vel = { x: tg.x * 600, y: tg.y * 600 };
       car.lastIndex = idx;
       car.progress = idx;
+      race.guard!.st(car).next = race.guard!.gates.length; // every checkpoint of the lap already crossed
       if (turbo) race.boost.activate(car);
       let crossedAlt = -1, tookOff = false, warned = false, vmax = 0;
       const lap0 = car.lap;
@@ -466,6 +480,7 @@ const AT = (x: number, y: number) => ({ x, y });
     car.lastIndex = idx;
     car.lap = TOTAL_LAPS - 1;
     car.progress = (TOTAL_LAPS - 1) * n + idx;
+    race.guard!.st(car).next = race.guard!.gates.length;
     let alt = -1;
     for (let i = 0; i < 8 / DT && car.finishTime === null; i++) stepRace(race, { ...aiInput(race, car, DT, false), throttle: true, fly: true }, DT);
     alt = car.alt;
