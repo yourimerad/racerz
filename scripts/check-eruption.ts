@@ -9,7 +9,7 @@
 
 import { aiInput, createRace, stepRace } from "../src/game/race";
 import { mulberry32 } from "../src/game/scenery";
-import { ERUPTION, VolcanoEruption } from "../src/game/modes/volcano";
+import { ERUPTION, VolcanoEruption, type VolcanoHazard } from "../src/game/modes/volcano";
 
 let failed = false;
 const fail = (msg: string) => {
@@ -109,7 +109,9 @@ console.log("Volcano eruption checks\n");
   const DT = 1 / 120;
   const finish = (withEruption: boolean) => {
     const race = createRace("volcano", { model: "gt", skin: "factory", level: 1 }, 9);
-    if (!withEruption) race.hazard = null;
+    // The aimed bombs (check:hazards) are the one thing that does act on the cars: off here, the eruption alone must change nothing.
+    if (withEruption) (race.hazard as VolcanoHazard).hazards.armed = false;
+    else race.hazard = null;
     while (race.time < 240 && race.cars.some((c) => c.finishTime === null)) stepRace(race, aiInput(race, race.cars[0], DT, false), DT);
     return race.cars.map((c) => `${c.finishTime?.toFixed(3)}:${c.hits}`).join(" ");
   };

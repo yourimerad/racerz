@@ -1,6 +1,6 @@
 import { type Car, type Input, type Surface, NO_INPUT, CAR_RADIUS, PHYS, stepCar, slipOf, speedOf } from "./car";
 import { type ModelId, type SkinId, MODELS, carStats, skinOf } from "./garage";
-import { type Circle, type Cue, type Hazard, type Rng, type Scene, mulberry32 } from "./scenery";
+import { type Circle, type Cue, type Hazard, type HazardBody, type Rng, type Scene, mulberry32 } from "./scenery";
 import { type Theme, type ThemeId, THEMES, sceneFor } from "./themes";
 import { isCovered, locate, trackFor, type Track } from "./track";
 import { type Vec, vec, add, sub, scale, len, dot, angleDiff, clamp, fromAngle } from "./vec";
@@ -80,7 +80,7 @@ export function createRace(themeId: ThemeId, player: PlayerCar, seed?: number): 
     const skin = isPlayer ? skinOf(player.model, player.skin) : { name: r.name, body: r.color, accent: r.color };
     return {
       id: i, name: isPlayer ? `Toi (${MODELS[player.model].name})` : r.name, color: skin.body, isPlayer,
-      model: isPlayer ? player.model : "gt", skin, skill: stats.speed, accelMul: stats.accel, gripMul: stats.grip,
+      model: isPlayer ? player.model : "gt", skin, skill: stats.speed, accelMul: stats.accel, gripMul: stats.grip, speedMul: 1,
       offTime: 0, hits: 0, hitCooldown: 0, stun: 0,
       pos, vel: vec(0, 0), angle: Math.atan2(t.y, t.x),
       progress: idx - n, lastIndex: idx, lap: 0, lapStart: 0, bestLap: null, finishTime: null, surface: "track",
@@ -126,7 +126,7 @@ function rollMistake(race: Race, car: Car, state: AiState, dt: number) {
  */
 function hazardAvoidance(race: Race, car: Car): { slow: number; offset: number | null } {
   const hz = race.hazard;
-  if (!hz?.bodies || !hz.avoid) return { slow: 1, offset: null };
+  if (!hz?.avoid || (!hz.bodies && !hz.dangers)) return { slow: 1, offset: null };
   const avoid = hz.avoid;
   const { track } = race;
   const state = race.ai[car.id];
@@ -138,12 +138,14 @@ function hazardAvoidance(race: Race, car: Car): { slow: number; offset: number |
   const here = dot(sub(car.pos, track.path[car.lastIndex]), vec(-t.y, t.x)); // the car's current road offset
   const room = track.width / 2 - 28;
   let slow = 1, offset: number | null = null, seen = false;
-  for (const b of hz.bodies()) {
+
+  /** One thing to get round: a solid body, or a ground zone (`brake` false = steer round it without slowing). */
+  const consider = (b: HazardBody, brake: boolean) => {
     const dx = b.x - car.pos.x, dy = b.y - car.pos.y;
     const ahead = dx * fwd.x + dy * fwd.y;
     const side = -dx * fwd.y + dy * fwd.x; // + = body on the car's right
     const reach = Math.max(b.rx, b.ry);
-    if (ahead < -reach * 0.5 || ahead > range + reach) continue;
+    if (ahead < -reach * 0.5 || ahead > range + reach) return;
     // Half-extent of the body across the car's path (its ellipse projected on the lateral axis).
     const hc = Math.cos(b.angle) * -fwd.y + Math.sin(b.angle) * fwd.x;
     const half = Math.hypot(b.rx * hc, b.ry * Math.sqrt(Math.max(0, 1 - hc * hc)));
@@ -151,9 +153,9 @@ function hazardAvoidance(race: Race, car: Car): { slow: number; offset: number |
     // Where the body will be (across the car's path) when the car, slowed, reaches it.
     const eta = clamp(ahead / Math.max(speed * avoid.slow, 100), 0, 3);
     const bodySide = side + (-b.vx * fwd.y + b.vy * fwd.x) * eta;
-    if (Math.abs(side) > clearance && Math.abs(bodySide) > clearance) continue;
+    if (Math.abs(side) > clearance && Math.abs(bodySide) > clearance) return;
     seen = true;
-    slow = Math.min(slow, avoid.slow);
+    if (brake) slow = Math.min(slow, avoid.slow);
     // Passing on its left needs the car at most `bodySide - clearance` sideways; on its right, at least `bodySide + clearance`.
     const left = Math.min(0, bodySide - clearance), right = Math.max(0, bodySide + clearance);
     const fits = (shift: number) => Math.abs(here + shift) <= room;
@@ -165,9 +167,11 @@ function hazardAvoidance(race: Race, car: Car): { slow: number; offset: number |
     state.hazardPass = pass;
     const shift = pass < 0 ? left : right;
     // No room to get round it in time: take the speed off further and let it walk on.
-    if (!fits(shift)) slow = Math.min(slow, avoid.slow * 0.6);
+    if (brake && !fits(shift)) slow = Math.min(slow, avoid.slow * 0.6);
     offset = clamp(here + shift, -room, room);
-  }
+  };
+  for (const b of hz.bodies?.() ?? []) consider(b, true);
+  for (const d of hz.dangers?.() ?? []) consider({ id: d.id, x: d.x, y: d.y, vx: 0, vy: 0, angle: 0, rx: d.r, ry: d.r }, d.brake);
   if (!seen && state.hazardPass !== 0) state.hazardPass = 0;
   return { slow, offset };
 }

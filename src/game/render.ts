@@ -149,7 +149,10 @@ export function render(ctx: CanvasRenderingContext2D, race: Race, w: number, h: 
     ctx.stroke();
   }
 
-  for (const car of race.cars) drawCarSprite(ctx, car.model, car.skin, car.pos.x, car.pos.y, car.angle);
+  for (const car of race.cars) {
+    drawCarSprite(ctx, car.model, car.skin, car.pos.x, car.pos.y, car.angle);
+    race.hazard?.drawCarOverlay?.(ctx, car.id, car.pos.x, car.pos.y, car.angle);
+  }
   for (const p of race.straw) {
     ctx.save();
     ctx.translate(p.x, p.y);
@@ -175,4 +178,5 @@ export function render(ctx: CanvasRenderingContext2D, race: Race, w: number, h: 
   theme.fx.screen?.(ctx, view);
   drawMinimap(ctx, race, w);
   drawHud(ctx, race, w, h);
+  race.hazard?.drawHud?.(ctx, w, h);
 }
