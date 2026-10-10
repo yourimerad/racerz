@@ -10,11 +10,11 @@ import type { Track } from "./track";
 // WALLS: the Jet can also fly over the walls (the cliffs of the desert canyon, the volcano's slopes…) when it is high enough: every
 // place outside the barriers has a floor altitude (`floorAlt`, by mode) the car must reach to cross it; lower, it is the usual
 // collision (bounce, a contact for the clean-race rule). The world's outer limits stay solid at any altitude. Flying over a wall costs
-// more energy, a Jet cannot land on one (it glides until it finds the road again, and an empty tank sends it back to the road with a
-// penalty), and invisible checkpoints (checkpoints.ts) stop a shortcut from skipping part of the lap.
+// more energy and a Jet cannot land on one (it glides at the wall's height until it finds the road again, with or without energy left),
+// and invisible checkpoints (checkpoints.ts) stop a shortcut from skipping part of the lap.
 //
 // The controller only touches `car.alt` and, through the adapter, the car's flight speed multiplier (`car.flyMul`, combined with the
-// turbo and the volcano's damage by stepCar) and, for a forced return, its position. race.ts runs it (`update`, `canCross`), render.ts
+// turbo and the volcano's damage by stepCar). race.ts runs it (`update`, `canCross`), render.ts
 // draws it (`drawShadow`, `drawDust`, `drawCar`, `drawWingTrails`, `drawHud`), and every system that must ignore a flying car asks
 // `isAirborne` (car.ts).
 
@@ -43,7 +43,7 @@ export const FLY = {
 export const WALLS = {
   /** Energy per second over a wall (1 elsewhere in the air), also while gliding down over it. */
   DRAIN_OVER_WALL: 1.5,
-  /** Forced return to the road: seconds added to the clock, share of the speed kept, seconds of grace (no contact counted, no damage). */
+  /** Sent back to a checkpoint after a refused lap (checkpoints.ts): seconds added to the clock, share of the speed kept, seconds of grace (no contact counted, no damage). */
   RESPAWN_PENALTY: 2, RESPAWN_SPEED: 0.4, RESPAWN_SHIELD: 1,
   /** Height (m) of the walls beyond the barriers, by mode: the canyon cliffs, the volcano's slopes, the ice banks; any other mode: DEFAULT_HEIGHT. */
   HEIGHT: { desert: 60, volcano: 50, northpole: 40 } as Record<string, number>,
@@ -81,12 +81,6 @@ export type FlightAdapter = {
   floorAlt(x: number, y: number): number;
   /** False beyond the world's outer limits, which stay solid at any altitude. */
   inWorld(x: number, y: number): boolean;
-  /** The centre-line point nearest to (x, y), and the direction of the race there. */
-  nearestRoadPoint(x: number, y: number): { x: number; y: number; heading: number };
-  /** Puts the car back on the road (speed × speedFactor, a second of grace). */
-  respawn(car: Car, x: number, y: number, heading: number, speedFactor: number): void;
-  /** Adds seconds to the car's clock. */
-  addTimePenalty(car: Car, sec: number): void;
   onTakeoff(car: Car): void;
   onLand(car: Car): void;
 };
@@ -96,8 +90,6 @@ type FlightState = {
   mode: Mode; wing: number; alt: number; energy: number; cool: number; warn: number; latched: boolean;
   /** Over a wall right now (flying with a floor under it). */
   over: boolean;
-  /** Seconds left of the "Retour sur la piste" message. */
-  respawned: number;
 };
 type Puff = { x: number; y: number; vx: number; vy: number; r: number; age: number; life: number };
 
@@ -152,7 +144,7 @@ export class FlightController {
   st(car: Car): FlightState {
     let s = this.s.get(car.id);
     if (!s) {
-      s = { mode: "ground", wing: 0, alt: 0, energy: FLY.MAX_ENERGY, cool: 0, warn: 0, latched: false, over: false, respawned: 0 };
+      s = { mode: "ground", wing: 0, alt: 0, energy: FLY.MAX_ENERGY, cool: 0, warn: 0, latched: false, over: false };
       this.s.set(car.id, s);
     }
     return s;
@@ -193,7 +185,6 @@ export class FlightController {
     if (car.finishTime !== null) wantsFly = false; // the race is over: come down
     s.cool = Math.max(0, s.cool - dt);
     s.warn = Math.max(0, s.warn - dt);
-    s.respawned = Math.max(0, s.respawned - dt);
     if (!wantsFly) s.latched = false;
     const floor = A.floorAlt(car.pos.x, car.pos.y);
     s.over = floor > 0 && s.alt > 0;
@@ -237,12 +228,12 @@ export class FlightController {
       else if (s.energy <= 0) outOfEnergy();
       else if (!wantsFly) s.mode = "landing";
     } else {
-      // Landing: the energy keeps falling over a wall, and the car never goes below the floor under it (it glides on at the wall's height).
+      // Landing: the energy keeps falling over a wall, and the car never goes below the floor under it: it glides on at the wall's height
+      // until it is over the road again — an empty tank changes nothing (it just cannot climb back up).
       if (s.over) s.energy -= drain;
       s.alt = Math.max(Math.min(floor, s.alt), s.alt - FLY.DESCENT * dt);
       // Pressed again on the way down, with energy left: back up.
       if (wantsFly && !s.latched && !noFly && s.energy > 0 && s.cool <= 0) s.mode = "takeoff";
-      else if (s.over && s.energy <= 0) this.crashLand(car, s);
       else if (s.alt <= 0) {
         s.wing = Math.max(0, s.wing - wingStep);
         if (s.wing <= 0) {
@@ -254,16 +245,6 @@ export class FlightController {
     s.energy = clamp(s.energy, 0, FLY.MAX_ENERGY);
     car.alt = s.alt;
     A.setSpeedMultiplier(car, 1 + (FLY.SPEED_MULT - 1) * clamp(s.alt / FLY.MAX_ALT, 0, 1));
-  }
-
-  /** Out of energy over a wall: back to the nearest road point, heading with the race, 40 % of the speed, 2 s added to the clock. No damage, no contact. */
-  crashLand(car: Car, s: FlightState = this.st(car)) {
-    const A = this.A, r = A.nearestRoadPoint(car.pos.x, car.pos.y);
-    this.groundCar(car);
-    A.respawn(car, r.x, r.y, r.heading, WALLS.RESPAWN_SPEED);
-    A.addTimePenalty(car, WALLS.RESPAWN_PENALTY);
-    s.respawned = WALLS.MESSAGE;
-    A.onLand(car);
   }
 
   /** Puts the car's flight back to the ground state (wings folded, a second before the next takeoff). */
@@ -455,13 +436,11 @@ export class FlightController {
     let row = 0;
     const top = (txt: string, w: number, bg?: string) => chip(txt, W / 2 - w / 2, 50 + 34 * row++, w, bg);
     const key = touchScreen() ? "VOL" : "SHIFT";
-    if (s.respawned > 0) top("Retour sur la piste (+2 s)", 220);
-    else if (s.mode === "ground" && s.energy >= FLY.MIN_TAKEOFF) top(`Maintiens ${key} pour voler`, 220);
+    if (s.mode === "ground" && s.energy >= FLY.MIN_TAKEOFF) top(`Maintiens ${key} pour voler`, 220);
     if (s.mode === "fly" || s.mode === "takeoff") chip(`${key} : atterrir`, bx, by - 34, 140);
     if (s.warn > 0 && blink(100)) top("Zone d'atterrissage", 160);
     if (s.mode !== "ground") {
       if (this.floorAhead(car) > s.alt + 0.01 && blink(100)) top(`Trop bas ! Monte avec ${key}`, 240, "rgba(214,58,47,0.85)");
-      else if (s.over && s.energy < 2 && blink(120)) top("Retourne sur la piste !", 200, "rgba(255,159,28,0.9)");
     }
     if (pill) top(pill.text, 160, pill.bad ? "rgba(214,58,47,0.85)" : undefined);
     ctx.restore();

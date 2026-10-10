@@ -89,7 +89,7 @@ function lab() {
   const events: string[] = [];
   const A: FlightAdapter = {
     speed: () => 0, setSpeedMultiplier: (c, f) => (c.flyMul = f), distToFinish: () => Infinity, distToStart: () => Infinity, noFlyAt: () => false,
-    floorAlt: () => 0, inWorld: () => true, nearestRoadPoint: (x, y) => ({ x, y, heading: 0 }), respawn: () => {}, addTimePenalty: () => {},
+    floorAlt: () => 0, inWorld: () => true,
     onTakeoff: () => events.push("takeoff"), onLand: () => events.push("land"),
   };
   const fc = new FlightController(A);
