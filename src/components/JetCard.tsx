@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import type { ProfileActions } from "@/game/actions";
 import { drawJetSprite } from "@/game/jetArt";
+import { ShowroomContext, Thumb } from "./GarageStage";
 import { FLY_BAR, MODELS, PALIERS_PER_LEVEL, STAT_RANGE, carStats, formatMoney, skinOf, type Profile, type Skin, type StatKey } from "@/game/garage";
 import styles from "./Game.module.css";
 
@@ -69,8 +70,83 @@ const pctOf = (stat: StatKey, value: number) => {
   return ((value - min) / (max - min)) * 100;
 };
 
-/** The Racerz Jet's showcase card: a dark stage with a spot light and a platform, the car on it, its bars (with its own "Vol"), and the buy button. */
-export default function JetCard({ profile, actions }: { profile: Profile; actions: ProfileActions }) {
+type CardProps = {
+  profile: Profile;
+  actions: ProfileActions;
+  /** Pointer handlers that make the 3D stage look at this card's car (the lobby's), and the wrapper for the card's own buttons. */
+  look?: { onPointerEnter: (e: React.PointerEvent) => void; onPointerLeave: () => void; onClick: () => void };
+  act?: (f: () => void) => (e: React.MouseEvent) => void;
+  seen?: boolean;
+};
+
+/**
+ * The Racerz Jet's card. With the 3D garage it is a card like the others, with a 3D picture of the Jet (wings spread while the pointer is
+ * over it); without WebGL it keeps its 2D showcase.
+ */
+export default function JetCard(props: CardProps) {
+  const room = useContext(ShowroomContext);
+  return room ? <JetCompact {...props} /> : <JetShowcase profile={props.profile} actions={props.actions} />;
+}
+
+function JetCompact({ profile, actions, look, act, seen }: CardProps) {
+  const [open, setOpen] = useState(false);
+  const m = MODELS.jet, owned = profile.cars.jet, st = carStats("jet", owned?.level ?? 1), affordable = profile.money >= m.price;
+  const run = act ?? ((f: () => void) => () => f());
+  return (
+    <div
+      className={`${styles.carCard} ${profile.selected === "jet" ? styles.carOn : ""} ${seen ? styles.carSeen : ""}`}
+      onPointerEnter={(e) => {
+        if (e.pointerType === "mouse") setOpen(true);
+        look?.onPointerEnter(e);
+      }}
+      onPointerLeave={() => {
+        setOpen(false);
+        look?.onPointerLeave();
+      }}
+      onClick={look?.onClick}
+    >
+      <Thumb
+        model="jet"
+        skin={skinOf("jet", owned?.skin ?? "factory")}
+        wing={open ? 1 : 0}
+        w={132}
+        h={82}
+        className={styles.thumb}
+        fallback={<span className={styles.thumbBox} />}
+      />
+      <div className={styles.carInfo}>
+        <strong>
+          {m.name} <span className={styles.jetNew}>NOUVEAU</span>
+        </strong>
+        <span className={styles.tagline}>{m.tagline}</span>
+        {owned ? (
+          <span>
+            Niv. {owned.level} · paliers {"●".repeat(owned.paliers)}{"○".repeat(PALIERS_PER_LEVEL - owned.paliers)}
+          </span>
+        ) : (
+          <span>{formatMoney(m.price)}</span>
+        )}
+        <Bar label="Vitesse" pct={pctOf("speed", st.speed)} color="#7cc0e8" />
+        <Bar label="Accél." pct={pctOf("accel", st.accel)} color="#7cc0e8" />
+        <Bar label="Adhérence" pct={pctOf("grip", st.grip)} color="#7cc0e8" />
+        <Bar label="Vol" pct={FLY_BAR} color="#ffd45a" />
+        <span className={styles.jetKeyInline}>SHIFT = vol</span>
+      </div>
+      {owned ? (
+        <button className={styles.small} disabled={profile.selected === "jet"} onClick={run(() => actions.selectCar("jet"))}>
+          {profile.selected === "jet" ? "Sélectionnée" : "Choisir"}
+        </button>
+      ) : (
+        <button className={`${styles.small} ${styles.jetBuyBtn}`} disabled={!affordable} onClick={run(() => actions.buyCar("jet"))}>
+          {affordable ? "Acheter" : `Il manque ${formatMoney(m.price - profile.money)}`}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** The 2D showcase (no WebGL): a dark stage with a spot light and a platform, the car on it, its bars (with its own "Vol"), and the buy button. */
+function JetShowcase({ profile, actions }: { profile: Profile; actions: ProfileActions }) {
   const ref = useRef<HTMLCanvasElement>(null);
   const demoStart = useRef<number | null>(null);
   const raf = useRef(0);
