@@ -1,3 +1,4 @@
+import { mergeVertices } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { THREE, hash2, mat4, merge, part } from "./core";
 
 // The scenery models, each merged into ONE vertex-coloured geometry (so a kind is one instanced draw call), built at real size in metres with
@@ -8,7 +9,6 @@ const box = (w: number, h: number, dp: number, x: number, y: number, z: number, 
 const cyl = (rt: number, rb: number, h: number, seg: number, x: number, y: number, z: number, c: Col, rx = 0, rz = 0) =>
   part(new THREE.CylinderGeometry(rt, rb, h, seg), c, mat4(x, y + h / 2, z, rx, 0, rz));
 const sph = (r: number, x: number, y: number, z: number, c: Col, sx = 1, sy = 1, sz = 1, detail = 1) => part(new THREE.IcosahedronGeometry(r, detail), c, mat4(x, y, z, 0, 0, 0, sx, sy, sz));
-const cone = (r: number, h: number, seg: number, x: number, y: number, z: number, c: Col) => part(new THREE.ConeGeometry(r, h, seg), c, mat4(x, y + h / 2, z));
 
 /** A lumpy rock: an icosphere whose vertices are pushed in and out. Rest on the ground, `r` metres across. */
 export function rockModel(seed: number, base: Col, light: Col, flat = 0.7): THREE.BufferGeometry {
@@ -31,24 +31,134 @@ export function rockModel(seed: number, base: Col, light: Col, flat = 0.7): THRE
   return g;
 }
 
-/** A broadleaf tree: trunk and three leaf clusters. Crown radius 2.2 m, 7 m tall. */
-export function treeModel(leaf: [Col, Col, Col] = ["#3e7a35", "#559a3f", "#73b552"]): THREE.BufferGeometry {
-  return merge([
-    cyl(0.28, 0.42, 3.2, 6, 0, 0, 0, "#5a3e24"),
-    sph(2.2, 0, 4.6, 0, leaf[0], 1, 0.95, 1),
-    sph(1.55, -0.45, 5.4, -0.2, leaf[1], 1, 0.9, 1),
-    sph(0.9, -0.9, 5.9, -0.5, leaf[2]),
-  ]);
+// ---------- trees ----------
+
+const c3 = (hex: string) => new THREE.Color(hex);
+
+/**
+ * A lump of foliage: an icosphere with its vertices pushed in and out (a leafy, irregular mass), smooth-shaded, coloured dark underneath and
+ * light on top with a little noise so that it reads as leaves in light and shade. `s` = radii along x, y, z.
+ */
+function foliage(seed: number, x: number, y: number, z: number, sx: number, sy: number, sz: number, dark: THREE.Color, light: THREE.Color, detail = 1): THREE.BufferGeometry {
+  const base = mergeVertices(new THREE.IcosahedronGeometry(1, detail));
+  const p = base.attributes.position, cols = new Float32Array(p.count * 3), tmp = new THREE.Color();
+  for (let i = 0; i < p.count; i++) {
+    const ux = p.getX(i), uy = p.getY(i), uz = p.getZ(i);
+    const k = 0.84 + hash2(Math.round(ux * 40) + seed, Math.round(uy * 40 + uz * 29), seed * 3) * 0.32;
+    const t = Math.max(0, Math.min(1, uy * 0.5 + 0.5 + (hash2(Math.round(ux * 17), Math.round(uz * 17 + uy * 9), seed) - 0.5) * 0.3));
+    tmp.copy(dark).lerp(light, t * t * (3 - 2 * t));
+    cols[i * 3] = tmp.r;
+    cols[i * 3 + 1] = tmp.g;
+    cols[i * 3 + 2] = tmp.b;
+    p.setXYZ(i, x + ux * k * sx, y + uy * k * sy, z + uz * k * sz);
+  }
+  base.setAttribute("color", new THREE.BufferAttribute(cols, 3));
+  base.computeVertexNormals();
+  const out = base.toNonIndexed();
+  base.dispose();
+  out.setAttribute("uv", new THREE.BufferAttribute(new Float32Array(out.attributes.position.count * 2), 2));
+  return out;
 }
 
-/** A fir: trunk and four stacked cones. 2.2 m radius at the base, 9 m tall. */
+/** A limb between two points (a branch or a trunk): tapered, bark-coloured from dark at the foot to lighter up, with streaks, smooth. */
+function limb(ax: number, ay: number, az: number, bx: number, by: number, bz: number, r0: number, r1: number, seed: number, foot = c3("#3b2a1c"), top = c3("#6a4c30"), seg = 8): THREE.BufferGeometry {
+  const len = Math.hypot(bx - ax, by - ay, bz - az);
+  const g = new THREE.CylinderGeometry(r1, r0, len, seg, 3, false);
+  const p = g.attributes.position, cols = new Float32Array(p.count * 3), tmp = new THREE.Color();
+  for (let i = 0; i < p.count; i++) {
+    const u = p.getY(i) / len + 0.5, ang = Math.atan2(p.getZ(i), p.getX(i));
+    const streak = hash2(Math.round(ang * 4), seed, 5) * 0.4 + hash2(Math.round(ang * 9), Math.round(u * 6), seed) * 0.25;
+    tmp.copy(foot).lerp(top, Math.max(0, Math.min(1, u * 0.7 + streak - 0.15)));
+    cols[i * 3] = tmp.r;
+    cols[i * 3 + 1] = tmp.g;
+    cols[i * 3 + 2] = tmp.b;
+  }
+  g.setAttribute("color", new THREE.BufferAttribute(cols, 3));
+  // Orient the cylinder (axis +Y) from a to b.
+  const dir = new THREE.Vector3(bx - ax, by - ay, bz - az).normalize(), q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+  g.applyMatrix4(new THREE.Matrix4().compose(new THREE.Vector3((ax + bx) / 2, (ay + by) / 2, (az + bz) / 2), q, new THREE.Vector3(1, 1, 1)));
+  const out = g.toNonIndexed();
+  g.dispose();
+  out.setAttribute("uv", new THREE.BufferAttribute(new Float32Array(out.attributes.position.count * 2), 2));
+  return out;
+}
+
+/** The root flare: a wide, short cone where the trunk meets the ground. */
+function flare(r: number, h: number, seed: number): THREE.BufferGeometry {
+  return limb(0, 0, 0, 0, h, 0, r * 1.9, r * 1.05, seed, c3("#2f2217"), c3("#4a3624"), 10);
+}
+
+/**
+ * Broadleaf trees, three silhouettes (the variant): 0 an oak (a thick trunk, a few branches, a broad crown of leafy masses), 1 a poplar (a
+ * tall narrow crown on a visible trunk), 2 a forest tree (a tall bare straight trunk and a crown high up: the trunks you see along a forest
+ * road). Crown radius about 2.2 m for the oak, 7–11 m tall; origin on the ground. Smooth-shaded, vertex-coloured.
+ */
+export function treeModel(variant: 0 | 1 | 2 = 0, detail = 1): THREE.BufferGeometry {
+  const dk = [c3("#244f22"), c3("#2a5a2a"), c3("#22521f")], lt = [c3("#7fbd4f"), c3("#8ec65a"), c3("#74b24a")];
+  const mid = c3("#3f7a35");
+  const parts: THREE.BufferGeometry[] = [];
+  if (variant === 0) {
+    parts.push(flare(0.42, 0.9, 1), limb(0, 0.5, 0, 0.1, 3.7, 0, 0.5, 0.34, 2));
+    parts.push(limb(0.05, 3.2, 0, 1.3, 4.7, 0.5, 0.2, 0.1, 3), limb(0.05, 3.4, 0, -1.2, 4.6, -0.4, 0.2, 0.1, 4), limb(0.05, 3.6, 0, 0.3, 5.0, -1.2, 0.18, 0.09, 5));
+    const clusters: [number, number, number, number, number][] = [[0.1, 5.7, 0, 2.3, 1.9], [1.5, 5.1, 0.6, 1.6, 1.4], [-1.4, 5.2, -0.5, 1.7, 1.4], [0.3, 6.9, -0.5, 1.5, 1.3], [-0.5, 4.7, 1.4, 1.4, 1.1], [1.0, 6.2, 1.1, 1.3, 1.1], [0.2, 4.9, -1.6, 1.4, 1.1]];
+    clusters.forEach(([x, y, z, r, rh], i) => parts.push(foliage(i + 1, x, y, z, r, rh, r, dk[0], i % 2 ? mid.clone().lerp(lt[0], 0.5) : lt[0], detail)));
+  } else if (variant === 1) {
+    parts.push(flare(0.3, 0.7, 6), limb(0, 0.4, 0, 0.05, 4.6, 0, 0.3, 0.2, 7));
+    const heights = [4.4, 5.8, 7.2, 8.6, 9.8];
+    heights.forEach((y, i) => {
+      const r = [1.35, 1.5, 1.4, 1.1, 0.7][i];
+      parts.push(foliage(20 + i, (i % 2 ? 0.1 : -0.1), y, (i % 2 ? -0.1 : 0.1), r, 1.5, r, dk[1], lt[1], detail));
+    });
+  } else {
+    parts.push(flare(0.34, 1.0, 11), limb(0, 0.6, 0, 0.1, 8.2, 0, 0.36, 0.2, 12));
+    for (const [bx, by, bz] of [[1.1, 9.0, 0.4], [-1.0, 9.2, -0.5], [0.2, 9.4, 1.1]] as const) parts.push(limb(0.1, 7.6, 0, bx, by, bz, 0.14, 0.08, 13 + Math.round(bx * 7)));
+    const clusters: [number, number, number, number, number][] = [[0.1, 9.6, 0, 2.0, 1.5], [1.3, 9.1, 0.4, 1.4, 1.1], [-1.2, 9.3, -0.5, 1.5, 1.2], [0.2, 10.8, -0.2, 1.2, 1.0], [0.1, 8.7, 1.2, 1.2, 0.9]];
+    clusters.forEach(([x, y, z, r, rh], i) => parts.push(foliage(40 + i, x, y, z, r, rh, r, dk[2], lt[2], detail)));
+  }
+  return merge(parts, true);
+}
+
+/** A mass of leaves for the roofs of the forest road: three overlapping lumps, flattened, unit radius, lighter than a tree's so the underside is not black. */
+export function leafMass(): THREE.BufferGeometry {
+  const dark = c3("#3f7a35"), light = c3("#86c456");
+  return merge([foliage(60, 0, 0, 0, 1, 0.62, 1, dark, light, 1), foliage(61, -0.45, 0.22, 0.25, 0.7, 0.5, 0.7, dark, light, 1), foliage(62, 0.5, 0.18, -0.3, 0.66, 0.46, 0.66, dark, light, 1)], true);
+}
+
+/**
+ * A fir: a visible trunk, six tiers of drooping skirts with ragged edges, dark green below and snow settled on every upward-facing branch.
+ * 2.3 m radius at the base, 11 m tall, origin on the ground. Smooth-shaded, vertex-coloured.
+ */
 export function firModel(): THREE.BufferGeometry {
-  const parts = [cyl(0.25, 0.32, 1.4, 6, 0, 0, 0, "#4a3421")];
-  const greens = ["#1f4d33", "#256040", "#2d7048", "#368258"];
-  for (let i = 0; i < 4; i++) parts.push(cone(2.2 - i * 0.42, 3.2, 8, 0, 1.2 + i * 1.75, 0, greens[i]));
-  // Snow on the upper branches.
-  for (let i = 0; i < 4; i++) parts.push(cone(1.6 - i * 0.34, 1.5, 8, 0, 2.6 + i * 1.75, 0, "#f3fbff"));
-  return merge(parts);
+  const parts: THREE.BufferGeometry[] = [flare(0.3, 0.8, 21), limb(0, 0.4, 0, 0, 2.2, 0, 0.32, 0.24, 22)];
+  const dark = c3("#17402b"), mid = c3("#2a6a45"), snow = c3("#f6fbff"), tmp = new THREE.Color();
+  for (let i = 0; i < 6; i++) {
+    const r = 2.35 - i * 0.34, h = 2.3, y = 1.3 + i * 1.55;
+    const cone = mergeVertices(new THREE.ConeGeometry(r, h, 14, 2, true));
+    const p = cone.attributes.position;
+    for (let k = 0; k < p.count; k++) {
+      const x = p.getX(k), yy = p.getY(k), z = p.getZ(k), rim = yy < -h * 0.3 ? 1 : 0;
+      // Ragged, drooping rim: the lowest ring is pushed out and down by a hash of its angle.
+      const j = rim ? 0.82 + hash2(Math.round(Math.atan2(z, x) * 5), i, 31) * 0.4 : 1;
+      p.setXYZ(k, x * j, yy - rim * hash2(Math.round(x * 9), Math.round(z * 9), i) * 0.25, z * j);
+    }
+    cone.computeVertexNormals();
+    const n = cone.attributes.normal, cols = new Float32Array(p.count * 3);
+    for (let k = 0; k < p.count; k++) {
+      const t = (p.getY(k) + h / 2) / h; // 0 at the skirt, 1 at the tip
+      tmp.copy(dark).lerp(mid, Math.min(1, t * 0.9 + hash2(k, i, 9) * 0.15));
+      tmp.lerp(snow, Math.max(0, Math.min(1, (n.getY(k) - 0.15) * 1.6)) * (0.35 + 0.55 * t));
+      cols[k * 3] = tmp.r;
+      cols[k * 3 + 1] = tmp.g;
+      cols[k * 3 + 2] = tmp.b;
+    }
+    cone.setAttribute("color", new THREE.BufferAttribute(cols, 3));
+    cone.translate(0, y + h / 2, 0);
+    const out = cone.toNonIndexed();
+    cone.dispose();
+    out.setAttribute("uv", new THREE.BufferAttribute(new Float32Array(out.attributes.position.count * 2), 2));
+    parts.push(out);
+  }
+  return merge(parts, true);
 }
 
 /** A cactus (saguaro): 4.5 m tall, two arms. */
