@@ -25,7 +25,8 @@ export const BOOST = {
   HIT_LEFT: 0.3,
   /** Impacts weaker than this closing speed (u/s) are brushes, not collisions (same threshold as race.ts's crash counter). */
   HIT_SPEED: 80,
-  PAD_W: 114, PAD_L: 92, PAD_RATIO: 0.74,
+  /** Pad size in design units (the arrows are ~60 wide) and its width as a share of the road. Slim: it was 114 wide / 74 % of the road; the length is unchanged. */
+  PAD_W: 80, PAD_L: 92, PAD_RATIO: 0.52,
   /** Design units → world units for what is drawn around the car (the design car is 16 × 28, ours 22 × 40). */
   SCALE: 40 / 28,
   GHOSTS: 6, GHOST_EVERY: 0.04, STREAK_EVERY: 0.03, PART_EVERY: 0.02, MAX_PARTS: 200, MAX_STREAKS: 80,
@@ -357,6 +358,7 @@ export class BoostSystem {
   /** GROUND layer: over the track and the finish line, under the skid marks and the cars (world frame). */
   drawGround(ctx: Ctx, view: { minX: number; maxX: number; minY: number; maxY: number }) {
     const th = this.style, reach = (Math.hypot(BOOST.PAD_L, BOOST.PAD_W) * this.k) / 2 + 20;
+    const HW = BOOST.PAD_W / 2; // half width of the plate (the arrows keep their size)
     for (const pad of this.pads) {
       if (pad.x < view.minX - reach || pad.x > view.maxX + reach || pad.y < view.minY - reach || pad.y > view.maxY + reach) continue;
       ctx.save();
@@ -366,21 +368,21 @@ export class BoostSystem {
       ctx.globalAlpha = Math.min(1, th.glowA * (1 + pad.flash * (this.reduced ? 1 : 2))); // glow, stronger right after a pass
       ctx.fillStyle = th.glow;
       ctx.beginPath();
-      ctx.roundRect(-63, -54, 126, 108, 10);
+      ctx.roundRect(-(HW + 6), -54, 2 * (HW + 6), 108, 10);
       ctx.fill();
       ctx.globalAlpha = 1;
       ctx.fillStyle = th.base;
       ctx.strokeStyle = th.stroke;
       ctx.lineWidth = 3;
       ctx.beginPath();
-      ctx.roundRect(-57, -46, 114, 92, 8);
+      ctx.roundRect(-HW, -46, 2 * HW, 92, 8);
       ctx.fill();
       ctx.stroke();
       if (th.inner) {
         ctx.strokeStyle = th.inner;
         ctx.lineWidth = 2;
         ctx.beginPath();
-        ctx.roundRect(-52, -41, 104, 82, 5);
+        ctx.roundRect(-(HW - 5), -41, 2 * (HW - 5), 82, 5);
         ctx.stroke();
       }
       if (th.rim) {
@@ -389,14 +391,14 @@ export class BoostSystem {
         ctx.strokeStyle = th.rim;
         ctx.lineWidth = 2;
         ctx.beginPath();
-        ctx.roundRect(-57, -46, 114, 92, 8);
+        ctx.roundRect(-HW, -46, 2 * HW, 92, 8);
         ctx.stroke();
         ctx.restore();
       }
       if (th.gloss) {
         ctx.fillStyle = "rgba(255,255,255,0.3)";
         ctx.beginPath();
-        ([[-57, -46], [-15, -46], [-37, 46], [-57, 46]] as Pt[]).forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+        ([[-HW, -46], [-HW + 42, -46], [-HW + 20, 46], [-HW, 46]] as Pt[]).forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
         ctx.closePath();
         ctx.fill();
       }
@@ -419,7 +421,7 @@ export class BoostSystem {
         ctx.globalAlpha = d.a;
         ctx.fillStyle = d.fill;
         ctx.beginPath();
-        ctx.arc(d.x, d.y, d.r, 0, TAU);
+        ctx.arc(d.x + Math.sign(d.x) * (HW - 57), d.y, d.r, 0, TAU); // the side marks follow the plate's edge
         ctx.fill();
         if (d.stroke) {
           ctx.strokeStyle = d.stroke;
