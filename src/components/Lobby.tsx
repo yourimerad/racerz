@@ -1,15 +1,17 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ProfileActions } from "@/game/actions";
 import { drawCarSprite } from "@/game/carArt";
 import {
   type ModelId, type Profile, type SkinId, type StatKey, CLEAN_MAX_HITS, CLEAN_MAX_OFF, MODEL_ORDER, MODELS, PALIERS_PER_LEVEL, PAYOUTS, SKINS,
   STAT_RANGE, carStats, formatMoney, skinOf, skinsFor,
 } from "@/game/garage";
+import { stageChoice } from "@/game/garageView";
 import { formatTime } from "@/game/render";
 import { type ThemeId, THEMES, THEME_ORDER } from "@/game/themes";
 import AccountPanel from "./AccountPanel";
+import { ShowroomContext, Thumb, useShowroom } from "./GarageStage";
 import JetCard from "./JetCard";
 import SoundButton from "./SoundButton";
 import styles from "./Game.module.css";
@@ -56,8 +58,32 @@ type Props = {
 
 export default function Lobby({ profile, actions, mode, setMode, record, onStart, debug }: Props) {
   const selected = profile.cars[profile.selected];
+  const stageRef = useRef<HTMLDivElement>(null);
+  const { room, failed } = useShowroom(stageRef);
+  // What the stage shows: the equipped car, or the car being looked at (hovered / tapped in the list), or the skin being tried on.
+  const [hoverCar, setHoverCar] = useState<ModelId | null>(null);
+  const [focusCar, setFocusCar] = useState<ModelId | null>(null);
+  const [hoverSkin, setHoverSkin] = useState<SkinId | null>(null);
+  const choice = stageChoice(profile, { hoverCar, focusCar, hoverSkin });
+  const shownSkin = skinOf(choice.model, choice.skin);
+  useEffect(() => {
+    room?.show(choice.model, skinOf(choice.model, choice.skin));
+  }, [room, choice.model, choice.skin]);
+  const shownModel = MODELS[choice.model], shownOwned = profile.cars[choice.model];
+  const look = (id: ModelId) => ({
+    onPointerEnter: (e: React.PointerEvent) => e.pointerType === "mouse" && setHoverCar(id),
+    onPointerLeave: () => setHoverCar(null),
+    onClick: () => setFocusCar(id),
+  });
+  /** A button inside a card acts on its own: it must not also "look at" the card. */
+  const act = (f: () => void) => (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setFocusCar(null);
+    f();
+  };
 
   return (
+    <ShowroomContext.Provider value={room}>
     <div className={`${styles.overlay} ${styles.lobby}`}>
       <header className={styles.lobbyHead}>
         <div>
@@ -79,14 +105,21 @@ export default function Lobby({ profile, actions, mode, setMode, record, onStart
           <h2>Garage</h2>
           <div className={styles.cars}>
             {MODEL_ORDER.map((id) => {
-              if (id === "jet") return <JetCard key={id} profile={profile} actions={actions} />;
+              if (id === "jet") return <JetCard key={id} profile={profile} actions={actions} look={look(id)} act={act} seen={choice.model === id} />;
               const owned = profile.cars[id];
               const m = MODELS[id];
               const st = carStats(id, owned?.level ?? 1);
               const affordable = profile.money >= m.price;
               return (
-                <div key={id} className={`${styles.carCard} ${profile.selected === id ? styles.carOn : ""}`}>
-                  <CarPreview model={id} skin={owned?.skin ?? "factory"} size={2} />
+                <div key={id} className={`${styles.carCard} ${profile.selected === id ? styles.carOn : ""} ${choice.model === id ? styles.carSeen : ""}`} {...look(id)}>
+                  <Thumb
+                    model={id}
+                    skin={skinOf(id, owned?.skin ?? "factory")}
+                    w={132}
+                    h={82}
+                    className={styles.thumb}
+                    fallback={<span className={styles.thumbBox}><CarPreview model={id} skin={owned?.skin ?? "factory"} size={1.6} /></span>}
+                  />
                   <div className={styles.carInfo}>
                     <strong>{m.name}</strong>
                     <span className={styles.tagline}>{m.tagline}</span>
@@ -102,11 +135,11 @@ export default function Lobby({ profile, actions, mode, setMode, record, onStart
                     <StatBar label="Adhérence" stat="grip" value={st.grip} />
                   </div>
                   {owned ? (
-                    <button className={styles.small} disabled={profile.selected === id} onClick={() => actions.selectCar(id)}>
+                    <button className={styles.small} disabled={profile.selected === id} onClick={act(() => actions.selectCar(id))}>
                       {profile.selected === id ? "Sélectionnée" : "Choisir"}
                     </button>
                   ) : (
-                    <button className={styles.small} disabled={!affordable} onClick={() => actions.buyCar(id)}>
+                    <button className={styles.small} disabled={!affordable} onClick={act(() => actions.buyCar(id))}>
                       {affordable ? "Acheter" : `Il manque ${formatMoney(m.price - profile.money)}`}
                     </button>
                   )}
@@ -114,6 +147,24 @@ export default function Lobby({ profile, actions, mode, setMode, record, onStart
               );
             })}
           </div>
+        </section>
+
+        <section className={styles.stagePanel} aria-label="Aperçu de la voiture">
+          <div ref={stageRef} className={styles.stageHost} />
+          {!room && (
+            <div className={styles.stageFallback}>
+              <CarPreview model={choice.model} skin={choice.skin} size={4} />
+              <span>{failed ? "3D indisponible sur cet appareil" : "Chargement du garage 3D…"}</span>
+            </div>
+          )}
+          <div className={styles.stageCaption}>
+            <span className={`${styles.stageTag} ${choice.preview ? styles.stageTagTry : ""}`}>{choice.preview ? "Aperçu" : "Ta voiture"}</span>
+            <strong>{shownModel.name}</strong>
+            <span>
+              {shownSkin.name} · {shownOwned ? `Niv. ${shownOwned.level}` : formatMoney(shownModel.price)}
+            </span>
+          </div>
+          {room && <span className={styles.stageHint}>Glisse pour tourner la voiture</span>}
         </section>
 
         <section className={styles.panel}>
@@ -135,9 +186,24 @@ export default function Lobby({ profile, actions, mode, setMode, record, onStart
                   key={id}
                   className={`${styles.skin} ${equipped ? styles.skinOn : ""}`}
                   disabled={!owned && profile.money < price}
-                  onClick={() => (owned ? actions.equipSkin(id) : actions.buySkin(id))}
+                  onClick={() => {
+                    setHoverSkin(null);
+                    if (owned) actions.equipSkin(id);
+                    else actions.buySkin(id);
+                  }}
+                  onPointerEnter={(e) => e.pointerType === "mouse" && setHoverSkin(id)}
+                  onPointerLeave={() => setHoverSkin(null)}
+                  onFocus={() => setHoverSkin(id)}
+                  onBlur={() => setHoverSkin(null)}
                 >
-                  <CarPreview model={profile.selected} skin={id} size={1.4} />
+                  <Thumb
+                    model={profile.selected}
+                    skin={skin}
+                    w={120}
+                    h={75}
+                    className={styles.skinThumb}
+                    fallback={<CarPreview model={profile.selected} skin={id} size={1.2} />}
+                  />
                   <span>{skin.name}</span>
                   <small>{equipped ? "Équipé" : owned ? "Équiper" : formatMoney(price)}</small>
                 </button>
@@ -178,5 +244,6 @@ export default function Lobby({ profile, actions, mode, setMode, record, onStart
         </section>
       </div>
     </div>
+    </ShowroomContext.Provider>
   );
 }
