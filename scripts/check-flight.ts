@@ -498,7 +498,6 @@ function tp(race: Race, car: Car, x: number, y: number) {
       car.vel = { x: tg.x * 600, y: tg.y * 600 };
       car.lastIndex = idx;
       car.progress = idx;
-      race.guard!.st(car).next = race.guard!.gates.length; // every checkpoint of the lap already crossed
       if (turbo) race.boost.activate(car);
       let crossedAlt = -1, tookOff = false, warned = false, vmax = 0;
       const lap0 = car.lap;
@@ -529,7 +528,6 @@ function tp(race: Race, car: Car, x: number, y: number) {
     car.lastIndex = idx;
     car.lap = TOTAL_LAPS - 1;
     car.progress = (TOTAL_LAPS - 1) * n + idx;
-    race.guard!.st(car).next = race.guard!.gates.length;
     let alt = -1;
     for (let i = 0; i < 8 / DT && car.finishTime === null; i++) stepRace(race, { ...aiInput(race, car, DT, false), throttle: true, fly: true }, DT);
     alt = car.alt;

@@ -10,8 +10,8 @@ import type { Track } from "./track";
 // WALLS: the Jet can also fly over the walls (the cliffs of the desert canyon, the volcano's slopes…) when it is high enough: every
 // place outside the barriers has a floor altitude (`floorAlt`, by mode) the car must reach to cross it; lower, it is the usual
 // collision (bounce, a contact for the clean-race rule). The world's outer limits stay solid at any altitude. Flying over a wall costs
-// more energy and a Jet cannot land on one (it glides at the wall's height until it finds the road again, with or without energy left),
-// and invisible checkpoints (checkpoints.ts) stop a shortcut from skipping part of the lap.
+// more energy and a Jet cannot land on one (it glides at the wall's height until it finds the road again, with or without energy left).
+// Nothing ever puts the Jet back on the road: a lap flown over a wall counts like any other.
 //
 // The controller only touches `car.alt` and, through the adapter, the car's flight speed multiplier (`car.flyMul`, combined with the
 // turbo and the volcano's damage by stepCar). race.ts runs it (`update`, `canCross`), render.ts
@@ -43,8 +43,6 @@ export const FLY = {
 export const WALLS = {
   /** Energy per second over a wall (1 elsewhere in the air), also while gliding down over it. */
   DRAIN_OVER_WALL: 1.5,
-  /** Sent back to a checkpoint after a refused lap (checkpoints.ts): seconds added to the clock, share of the speed kept, seconds of grace (no contact counted, no damage). */
-  RESPAWN_PENALTY: 2, RESPAWN_SPEED: 0.4, RESPAWN_SHIELD: 1,
   /** Height (m) of the walls beyond the barriers, by mode: the canyon cliffs, the volcano's slopes, the ice banks; any other mode: DEFAULT_HEIGHT. */
   HEIGHT: { desert: 60, volcano: 50, northpole: 40 } as Record<string, number>,
   DEFAULT_HEIGHT: 35,
@@ -52,10 +50,6 @@ export const WALLS = {
   LAVA_FLOOR: 25,
   /** "Trop bas !" looks this far ahead of the car: fixed distances (design px) and seconds of travel. */
   LOOKAHEAD: [40, 80], LOOK_TIME: [0.25, 0.5],
-  /** Invisible checkpoints: how many, and their half width as a share of the road width. */
-  GATES: 8, GATE_HALF: 0.7,
-  /** Seconds the "return to the road" message stays. */
-  MESSAGE: 1.5,
 };
 
 /** Height (m) of a mode's walls. */
@@ -372,9 +366,9 @@ export class FlightController {
   /**
    * HUD in SCREEN pixels, for the player only. The top left is the race panel, the top right the minimap (`mapBottom` = its lower edge),
    * the top centre the volcano's alert and the bottom right the turbo and speed: the energy bar sits bottom left, the altitude gauge
-   * under the minimap, and the messages stack under the top centre (`pill`: a checkpoint message, from checkpoints.ts).
+   * under the minimap, and the messages stack under the top centre.
    */
-  drawHud(ctx: Ctx, car: Car, W: number, H: number, mapBottom: number, pill: { text: string; bad: boolean } | null = null) {
+  drawHud(ctx: Ctx, car: Car, W: number, H: number, mapBottom: number) {
     const s = this.st(car), ratio = s.energy / FLY.MAX_ENERGY, still = calm(), now = performance.now();
     const blink = (hz: number) => still || Math.sin(now / hz) > -0.3;
     const lift = touchScreen() ? 104 : 0; // the touch pads occupy the bottom corners
@@ -442,7 +436,6 @@ export class FlightController {
     if (s.mode !== "ground") {
       if (this.floorAhead(car) > s.alt + 0.01 && blink(100)) top(`Trop bas ! Monte avec ${key}`, 240, "rgba(214,58,47,0.85)");
     }
-    if (pill) top(pill.text, 160, pill.bad ? "rgba(214,58,47,0.85)" : undefined);
     ctx.restore();
   }
 }
