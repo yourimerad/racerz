@@ -9,6 +9,7 @@ import {
 } from "@/game/garage";
 import { stageChoice } from "@/game/garageView";
 import { INVITE_AT_LOAD, getNetState, getServerNetState, subscribeNet } from "@/game/net/client";
+import { ONLINE_LABEL } from "@/game/net/label";
 import { formatTime } from "@/game/render";
 import { type ThemeId, THEMES, THEME_ORDER } from "@/game/themes";
 import AccountPanel from "./AccountPanel";
@@ -256,7 +257,7 @@ export default function Lobby({ profile, actions, mode, setMode, record, onStart
           </p>
           {record !== null && <p className={styles.sub}>Record du tour ({THEMES[mode].name}) : {formatTime(record)}</p>}
           <button className={styles.cta} onClick={onStart}>Démarrer (Entrée / Espace)</button>
-          <button className={`${styles.cta} ${styles.ghost}`} onClick={() => setMpOpen(true)}>🌐 Multijoueur : entre potes ou contre de vrais joueurs</button>
+          <button className={`${styles.cta} ${styles.ghost}`} onClick={() => setMpOpen(true)}>{ONLINE_LABEL.emoji} {ONLINE_LABEL.name} : entre potes ou contre de vrais joueurs</button>
           <ul className={styles.help}>
             <li><kbd>↑</kbd>/<kbd>W</kbd>/<kbd>Z</kbd> accélérer · <kbd>↓</kbd>/<kbd>S</kbd> freiner · <kbd>←</kbd><kbd>→</kbd>/<kbd>A</kbd><kbd>Q</kbd><kbd>D</kbd> tourner · <kbd>Espace</kbd> frein à main</li>
             <li><kbd>Shift</kbd> (maintenu) voler, avec la Racerz Jet</li>

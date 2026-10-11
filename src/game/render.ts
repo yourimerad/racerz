@@ -92,6 +92,50 @@ export function formatTime(t: number | null): string {
   return `${m}:${s.toFixed(3).padStart(6, "0")}`;
 }
 
+/** The minimap's road, drawn once per track and size on a canvas of its own (strokes of the whole circuit every frame were wasted work). */
+let mapCache: { key: string; canvas: HTMLCanvasElement } | null = null;
+function minimapBase(race: Race, size: number, scale: number, ratio: number): HTMLCanvasElement | null {
+  if (typeof document === "undefined") return null;
+  const { track } = race, b = track.bounds;
+  const key = `${race.theme.id}|${track.path.length}|${Math.round(size)}|${ratio}`;
+  if (mapCache?.key === key) return mapCache.canvas;
+  const boxW = size + 16, boxH = (b.maxY - b.minY) * scale + 16;
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.ceil(boxW * ratio);
+  canvas.height = Math.ceil(boxH * ratio);
+  const g = canvas.getContext("2d");
+  if (!g) return null;
+  g.scale(ratio, ratio);
+  g.fillStyle = "rgba(0,0,0,0.45)";
+  g.beginPath();
+  g.roundRect(0, 0, boxW, boxH, 10);
+  g.fill();
+  g.translate(8 - b.minX * scale, 8 - b.minY * scale);
+  g.scale(scale, scale);
+  tracePath(g, track);
+  g.lineWidth = track.width * 0.6;
+  g.strokeStyle = race.theme.colors.minimap;
+  g.stroke();
+  // Covered sections (tunnels, crater…): darker and dashed over the base line.
+  g.lineCap = "round";
+  g.lineWidth = track.width * 0.6;
+  g.strokeStyle = "rgba(0,0,0,0.6)";
+  g.setLineDash([track.width * 0.25, track.width * 0.25]);
+  for (const cover of track.covers) {
+    g.beginPath();
+    const n = track.path.length;
+    const len = cover.start <= cover.end ? cover.end - cover.start : n - cover.start + cover.end;
+    for (let k = 0; k <= len; k++) {
+      const p = track.path[(cover.start + k) % n];
+      if (k) g.lineTo(p.x, p.y);
+      else g.moveTo(p.x, p.y);
+    }
+    g.stroke();
+  }
+  mapCache = { key, canvas };
+  return canvas;
+}
+
 /** Draws the minimap; returns the y of its lower edge (the flight HUD hangs its altitude gauge under it). */
 function drawMinimap(ctx: CanvasRenderingContext2D, race: Race, w: number): number {
   const { track } = race;
@@ -99,36 +143,12 @@ function drawMinimap(ctx: CanvasRenderingContext2D, race: Race, w: number): numb
   const size = Math.min(200, w * 0.28);
   const s = size / Math.max(b.maxX - b.minX, b.maxY - b.minY);
   const ox = w - size - 16, oy = 16;
+  const ratio = Math.round(ctx.getTransform().a * 100) / 100 || 1;
+  const base = minimapBase(race, size, s, ratio);
   ctx.save();
-  ctx.fillStyle = "rgba(0,0,0,0.45)";
-  ctx.beginPath();
-  ctx.roundRect(ox - 8, oy - 8, size + 16, (b.maxY - b.minY) * s + 16, 10);
-  ctx.fill();
+  if (base) ctx.drawImage(base, ox - 8, oy - 8, size + 16, (b.maxY - b.minY) * s + 16);
   ctx.translate(ox - b.minX * s, oy - b.minY * s);
   ctx.scale(s, s);
-  tracePath(ctx, track);
-  ctx.lineWidth = track.width * 0.6;
-  ctx.strokeStyle = race.theme.colors.minimap;
-  ctx.stroke();
-
-  // Covered sections (tunnels, crater…): darker and dashed over the base line.
-  ctx.lineCap = "round";
-  ctx.lineWidth = track.width * 0.6;
-  ctx.strokeStyle = "rgba(0,0,0,0.6)";
-  ctx.setLineDash([track.width * 0.25, track.width * 0.25]);
-  for (const cover of track.covers) {
-    ctx.beginPath();
-    const n = track.path.length;
-    const len = cover.start <= cover.end ? cover.end - cover.start : n - cover.start + cover.end;
-    for (let k = 0; k <= len; k++) {
-      const p = track.path[(cover.start + k) % n];
-      if (k) ctx.lineTo(p.x, p.y);
-      else ctx.moveTo(p.x, p.y);
-    }
-    ctx.stroke();
-  }
-  ctx.setLineDash([]);
-
   for (const car of race.cars) {
     ctx.fillStyle = car.color;
     ctx.beginPath();

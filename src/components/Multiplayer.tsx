@@ -5,6 +5,7 @@ import { type Profile, MODELS, skinOf } from "@/game/garage";
 import {
   clearRoomFromUrl, getNetState, getPlayerName, getServerNetState, inviteLink, myId, netKind, netSession, roomFromUrl, setPlayerName, subscribeNet,
 } from "@/game/net/client";
+import { ONLINE_LABEL } from "@/game/net/label";
 import { NET } from "@/game/net/protocol";
 import { type ThemeId, THEMES, THEME_ORDER } from "@/game/themes";
 import styles from "./Game.module.css";
@@ -190,9 +191,9 @@ export default function Multiplayer({ profile, mode, setMode, debug, onClose }: 
 
   return (
     <div className={styles.mpBack} data-mp onClick={(e) => e.target === e.currentTarget && net.phase === "idle" && close()}>
-      <div className={styles.mpPanel} role="dialog" aria-label="Multijoueur">
+      <div className={styles.mpPanel} role="dialog" aria-label={ONLINE_LABEL.name}>
         <header className={styles.mpHead}>
-          <h2>🌐 Multijoueur {net.phase !== "idle" && <small>· {THEMES[shownMode].name}</small>}</h2>
+          <h2>{ONLINE_LABEL.emoji} {ONLINE_LABEL.name} {net.phase !== "idle" && <small>· {THEMES[shownMode].name}</small>}</h2>
           <button type="button" className={styles.mpClose} onClick={close} aria-label="Fermer">✕</button>
         </header>
         {net.error && net.phase === "idle" && <p className={styles.mpError} role="alert">{net.error}</p>}

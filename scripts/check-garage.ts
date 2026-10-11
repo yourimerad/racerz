@@ -294,7 +294,9 @@ console.log("3D garage checks\n");
   // Six exhaust tips in two rows of three, centred; a dorsal fin along the middle (a thin mesh on the centre line); no wing blade across the tail.
   const tips = new Set<string>();
   const tipPositions: THREE.Vector3[] = [];
-  car.group.traverse((o) => {
+  // The tips are found as separate meshes, so this reads a build whose parts were not merged (baking leaves the picture the same: check:3d).
+  const loose = new Car3D(d, blankView("voiturenoire"), null, false);
+  loose.group.traverse((o) => {
     const m = o as THREE.Mesh;
     if (!m.isMesh || !(m.geometry instanceof THREE.CylinderGeometry)) return;
     const p = m.position;

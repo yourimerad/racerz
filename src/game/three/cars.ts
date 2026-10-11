@@ -4,6 +4,7 @@ import type { ModelId } from "../garage";
 import { WHEEL as AVENTADOR_WHEEL, buildAventador } from "./aventador";
 import { WHEEL as VOITURE_NOIRE_WHEEL, buildVoitureNoire } from "./voiturenoire";
 import { type Kit, type Parts, type PaintUniforms, type Spec, addExhausts, addWheels, box, ball, cylX, finish, flameGroup, furniture, headlight, interior, makeKit, mesh, shell, taillight, yAt, zAt } from "./carkit";
+import { bakeStatic } from "./bake";
 import { type Disposer, THREE, clamp, lerp } from "./core";
 import { loft, spline } from "./carbody";
 
@@ -224,12 +225,20 @@ export class Car3D {
   private lastSpeed = 0;
   private brake = 0;
 
-  constructor(d: Disposer, view: CarView, env: THREE.Texture | null) {
+  /** `bake` = false keeps every little part as its own mesh (the checks compare the two builds). */
+  constructor(d: Disposer, view: CarView, env: THREE.Texture | null, bake = true) {
     this.model = view.model;
     this.id = view.id;
     const wheel = view.model === "jet" ? undefined : view.model === "aventador" ? AVENTADOR_WHEEL : view.model === "voiturenoire" ? VOITURE_NOIRE_WHEEL : SPECS[view.model].wheel;
     const { kit, uniforms } = makeKit(d, view.skin, env, wheel);
     this.parts = BUILDERS[view.model](kit);
+    if (bake) {
+      // A car is 80 to 190 little meshes: the parts that never move against the body become one mesh per material, each wheel too (it turns
+      // as one piece); the wheels' pivots, the flames and the Jet's wings stay as they are, they are what `update` moves.
+      const moving = new Set<THREE.Object3D>([...this.parts.wheels.map((w) => w.pivot), this.parts.flame, ...(this.parts.wings ?? []), ...(this.parts.jetFlames ?? [])]);
+      bakeStatic(d, this.parts.group, moving);
+      for (const w of this.parts.wheels) bakeStatic(d, w.spin);
+    }
     this.uniforms = uniforms;
     this.group = this.parts.group;
     this.lastHeading = view.heading;

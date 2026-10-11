@@ -10,13 +10,19 @@
 //   (e) every mode's world, all six cars and the effects build into finite geometry within a triangle budget, and `dispose` frees all of it;
 //   (h) an online race: the other players' cars carry name tags (hidden when they leave, freed with the scene) and a remote Jet's wings follow
 //       its altitude; a solo race has no tags;
+//   (i) fewer draw calls, same picture: a car's static parts are baked into a few meshes (same triangles in the same places), big meshes are cut into
+//       culled cells, instanced props into cells too, and what is in view along the lap stays well under the whole world;
+//   (j) the quality governor: it lightens the picture within a couple of seconds on a slow device, never for a screen that is merely capped at 30 Hz,
+//       ignores a single hitch, comes back carefully and does not oscillate;
 //   (g) the yeti's jump (four moments) and a car's explosion with its wreck are read by the adapter and drawn without a leak.
 
-import { Adapter3D, CAM, ChaseCamera, K, toScene, type CamTarget } from "../src/game/adapter3d";
+import { Adapter3D, CAM, ChaseCamera, K, toScene, type CamTarget, type CarView } from "../src/game/adapter3d";
 import { type ModelId, MODEL_ORDER, skinFits, skinOf } from "../src/game/garage";
 import { aiInput, createRace, stepRace, type Race } from "../src/game/race";
 import { Car3D } from "../src/game/three/cars";
-import { Disposer, THREE, liveResources, qualityOf } from "../src/game/three/core";
+import { GOV, LADDER, QualityGovernor, type Step } from "../src/game/three/adapt";
+import { applyFar, splitMesh } from "../src/game/three/bake";
+import { Disposer, THREE, instanced, liveResources, qualityOf, type Placement } from "../src/game/three/core";
 import { Effects3D, Fireworks3D } from "../src/game/three/effects";
 import { Gameplay3D } from "../src/game/three/gameplay";
 import { DistField } from "../src/game/three/terrain";
@@ -37,6 +43,9 @@ const near = (what: string, got: number, want: number, tol: number) => {
 const finite = (what: string, ...v: number[]) => {
   if (v.some((x) => !Number.isFinite(x))) fail(`${what}: not finite (${v.join(", ")})`);
 };
+const blankCar = (model: ModelId): CarView => ({
+  id: 0, isPlayer: false, model, skin: skinOf(model, "factory"), x: 0, y: 0, heading: 0, alt: 0, speed: 0, boosting: false, health: 1, destroyed: -1, wreck: 1, wing: 0, flame: 0, finished: false, stunned: false,
+});
 const PLAYER = (model: ModelId) => ({ model, skin: "factory" as const, level: 1 });
 const fresh = (mode: ThemeId, model: ModelId = "gt", seed = 1): Race => createRace(mode, PLAYER(model), seed);
 
@@ -370,6 +379,241 @@ console.log("3D view checks\n");
   sp.dispose();
   sd.dispose();
   console.log("  online race: name tags over the two other players (hidden when a car leaves, freed with the scene), a remote Jet's wings follow its altitude, solo races have none");
+}
+
+// ---------- (i) fewer draw calls, same picture ----------
+{
+  const base = liveResources();
+  const hash = (a: number, b: number) => { const s = Math.sin(a * 127.1 + b * 311.7) * 43758.5453; return s - Math.floor(s); };
+
+  type Tri = { cx: number; cy: number; cz: number; area: number };
+  const trisOf3 = (root: THREE.Object3D) => {
+    // Every triangle of every mesh under the car, in the car's frame at rest (centre and area): re-batching must not change a single one.
+    root.updateWorldMatrix(true, true);
+    const inv = new THREE.Matrix4().copy(root.matrixWorld).invert();
+    const out: Tri[] = [];
+    let meshes = 0;
+    const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), e1 = new THREE.Vector3(), e2 = new THREE.Vector3();
+    root.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh) return;
+      meshes++;
+      const g = m.geometry as THREE.BufferGeometry, pos = g.attributes.position, idx = g.index;
+      const rel = new THREE.Matrix4().multiplyMatrices(inv, m.matrixWorld);
+      const n = (idx ? idx.count : pos.count) / 3;
+      for (let k = 0; k < n; k++) {
+        const ia = idx ? idx.getX(k * 3) : k * 3, ib = idx ? idx.getX(k * 3 + 1) : k * 3 + 1, ic = idx ? idx.getX(k * 3 + 2) : k * 3 + 2;
+        a.fromBufferAttribute(pos, ia).applyMatrix4(rel);
+        b.fromBufferAttribute(pos, ib).applyMatrix4(rel);
+        c.fromBufferAttribute(pos, ic).applyMatrix4(rel);
+        e1.subVectors(b, a);
+        e2.subVectors(c, a);
+        out.push({ cx: (a.x + b.x + c.x) / 3, cy: (a.y + b.y + c.y) / 3, cz: (a.z + b.z + c.z) / 3, area: e1.cross(e2).length() / 2 });
+      }
+    });
+    return { tris: out, meshes };
+  };
+  /** How many of `from`'s triangles have no partner (same centre within 0.2 mm, same area) in `to`: each partner used once. */
+  const unmatched = (from: Tri[], to: Tri[]) => {
+    const Q = 0.01, key = (x: number, y: number, z: number) => `${Math.round(x / Q)},${Math.round(y / Q)},${Math.round(z / Q)}`;
+    const grid = new Map<string, Tri[]>();
+    for (const t of to) {
+      const kk = key(t.cx, t.cy, t.cz);
+      let l = grid.get(kk);
+      if (!l) grid.set(kk, (l = []));
+      l.push(t);
+    }
+    let miss = 0;
+    for (const t of from) {
+      const kx = Math.round(t.cx / Q), ky = Math.round(t.cy / Q), kz = Math.round(t.cz / Q);
+      let hit = false;
+      for (let dx = -1; dx <= 1 && !hit; dx++) for (let dy = -1; dy <= 1 && !hit; dy++) for (let dz = -1; dz <= 1 && !hit; dz++) {
+        const l = grid.get(`${kx + dx},${ky + dy},${kz + dz}`);
+        if (!l) continue;
+        const j = l.findIndex((u) => Math.abs(u.cx - t.cx) < 2e-4 && Math.abs(u.cy - t.cy) < 2e-4 && Math.abs(u.cz - t.cz) < 2e-4 && Math.abs(u.area - t.area) <= 1e-3 * Math.max(1e-4, t.area) + 1e-7);
+        if (j >= 0) {
+          l.splice(j, 1);
+          hit = true;
+        }
+      }
+      if (!hit) miss++;
+    }
+    return miss;
+  };
+  for (const model of MODEL_ORDER) {
+    const view: CarView = { ...blankCar(model) };
+    const d1 = new Disposer(), d2 = new Disposer();
+    const plain = new Car3D(d1, view, null, false), baked = new Car3D(d2, view, null, true);
+    const A = trisOf3(plain.group), B = trisOf3(baked.group);
+    if (A.tris.length !== B.tris.length) fail(`${model}: baking changed the triangle count (${A.tris.length} → ${B.tris.length})`);
+    else {
+      const miss = unmatched(A.tris, B.tris);
+      if (miss) fail(`${model}: baking moved or changed ${miss} of ${A.tris.length} triangles`);
+    }
+    if (B.meshes > 60) fail(`${model}: ${B.meshes} meshes after baking (budget 60)`);
+    if (B.meshes * 1.5 > A.meshes) fail(`${model}: baking barely helped (${A.meshes} → ${B.meshes} meshes)`);
+    // What moves still moves: the wheels turn and steer, the flame shows, the Jet's wings swing.
+    const spun = baked.group.children.some((c) => c.children.length > 0);
+    if (!spun) fail(`${model}: the baked car has no groups left for its wheels`);
+    baked.update({ ...view, speed: 400, boosting: true, wing: 1, flame: 1 }, 1 / 60, 0.5);
+    baked.update({ ...view, speed: 400, boosting: true, wing: 1, flame: 1 }, 1 / 60, 0.55);
+    d1.dispose();
+    d2.dispose();
+    if (model === "gt") console.log(`  baking: ${A.meshes} meshes → ${B.meshes} for the GT, ${A.tris.length} triangles, none moved`);
+  }
+  if (liveResources() !== base) fail(`car baking: ${liveResources() - base} resources alive after dispose`);
+
+  // Big meshes in cells: the same triangles, sharing the same vertex buffers, each cell with a sphere that holds its vertices.
+  {
+    const d = new Disposer();
+    const geo = new THREE.PlaneGeometry(300, 200, 60, 40).rotateX(-Math.PI / 2);
+    d.add(geo);
+    const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial());
+    const grp = splitMesh(d, mesh, 60);
+    if (!grp) fail("a 300 × 200 m mesh was not split into cells");
+    else {
+      let tris = 0, shared = true, inside = true;
+      for (const c of grp.children as THREE.Mesh[]) {
+        const g = c.geometry, sph = g.boundingSphere as THREE.Sphere;
+        tris += (g.index as THREE.BufferAttribute).count / 3;
+        for (const k of Object.keys(geo.attributes)) if (g.attributes[k] !== geo.attributes[k]) shared = false;
+        for (let i = 0; i < (g.index as THREE.BufferAttribute).count; i++) {
+          const p = new THREE.Vector3().fromBufferAttribute(g.attributes.position, (g.index as THREE.BufferAttribute).getX(i));
+          if (p.distanceTo(sph.center) > sph.radius + 1e-3) inside = false;
+        }
+      }
+      if (tris !== (geo.index as THREE.BufferAttribute).count / 3) fail(`splitting changed the triangle count (${(geo.index as THREE.BufferAttribute).count / 3} → ${tris})`);
+      if (!shared) fail("the cells do not share the original vertex buffers");
+      if (!inside) fail("a cell's bounding sphere does not hold its vertices");
+      if (grp.children.length < 8) fail(`only ${grp.children.length} cells for a 300 × 200 m mesh`);
+    }
+    // Instanced props in cells: every instance kept once, each cell's sphere holds its instances, out-of-view cells are culled.
+    const list: Placement[] = Array.from({ length: 500 }, (_, i) => ({ x: (hash(i, 1) - 0.5) * 400, z: (hash(i, 2) - 0.5) * 400, s: 1 }));
+    const inst = instanced(d, new THREE.IcosahedronGeometry(1, 1), new THREE.MeshBasicMaterial(), list, true, 80);
+    let count = 0, cells = 0, ok = true;
+    inst?.traverse((o) => {
+      const m = o as THREE.InstancedMesh;
+      if (!m.isInstancedMesh) return;
+      cells++;
+      count += m.count;
+      const sph = m.boundingSphere as THREE.Sphere, mat = new THREE.Matrix4(), v = new THREE.Vector3();
+      for (let i = 0; i < m.count; i++) {
+        m.getMatrixAt(i, mat);
+        v.setFromMatrixPosition(mat);
+        if (v.distanceTo(sph.center) > sph.radius + 1e-3) ok = false;
+      }
+      if (!m.frustumCulled) ok = false;
+    });
+    if (count !== 500) fail(`instancing in cells kept ${count} of 500 instances`);
+    if (cells < 6) fail(`only ${cells} instanced cells for 500 props over 400 × 400 m`);
+    if (!ok) fail("an instanced cell's sphere does not hold its instances, or it is not culled");
+    d.dispose();
+  }
+
+  // What is in view along the lap, with the frustum and the distance rules the renderer applies: a lot less than the whole world.
+  const stats: string[] = [];
+  for (const mode of THEME_ORDER) {
+    const race = fresh(mode, "gt", 5), adapter = new Adapter3D(race), d = new Disposer(), scene = new THREE.Scene(), group = new THREE.Group();
+    scene.add(group);
+    const world = buildWorld({ adapter, d, group, quality: qualityOf(0, 1), field: new DistField(race.track, 40) });
+    adapter.cars.forEach((v) => scene.add(new Car3D(d, v, null).group));
+    const camera = new THREE.PerspectiveCamera(60, 1.6, 0.3, 2400), chase = new ChaseCamera();
+    const trisOf = (m: THREE.Mesh) => {
+      const g = m.geometry as THREE.BufferGeometry, per = (g.index ? g.index.count : g.attributes.position.count) / 3;
+      return (m as THREE.InstancedMesh).isInstancedMesh ? (m as THREE.InstancedMesh).count * per : per;
+    };
+    let total = 0;
+    group.traverse((o) => { if ((o as THREE.Mesh).isMesh) total += trisOf(o as THREE.Mesh); });
+    let worst = 0, worstCalls = 0, sawFar = false;
+    for (let k = 0; k < 6; k++) {
+      for (let i = 0; i < 120 * 12; i++) stepRace(race, aiInput(race, race.cars[0], DT, false), DT);
+      adapter.refresh(0);
+      const p = adapter.player;
+      chase.snap({ x: p.x, y: p.y, alt: p.alt, heading: p.heading, speedRatio: p.speedRatio, boosting: false, impact: 0 }, { x: 0, y: 0 });
+      const c = chase.pose;
+      camera.position.set(c.px, c.py, c.pz);
+      camera.lookAt(c.lx, c.ly, c.lz);
+      camera.fov = c.fov;
+      camera.updateProjectionMatrix();
+      camera.updateMatrixWorld(true);
+      applyFar(world.far, camera.position);
+      scene.updateMatrixWorld(true);
+      if (world.far.some((f) => !f.obj.visible)) sawFar = true;
+      const fr = new THREE.Frustum().setFromProjectionMatrix(new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+      let vis = 0, calls = 0;
+      scene.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (!m.isMesh) return;
+        for (let a: THREE.Object3D | null = m; a; a = a.parent) if (!a.visible) return;
+        if (m.frustumCulled && !fr.intersectsObject(m)) return;
+        calls++;
+        let inWorld = false;
+        for (let a: THREE.Object3D | null = m; a; a = a.parent) if (a === group) inWorld = true;
+        if (inWorld) vis += trisOf(m);
+      });
+      worst = Math.max(worst, vis / total);
+      worstCalls = Math.max(worstCalls, calls);
+    }
+    if (worst > 0.75) fail(`${mode}: ${(worst * 100).toFixed(0)} % of the world's triangles are in view at some point of the lap (culling should keep it under 75 %)`);
+    if (worstCalls > 260) fail(`${mode}: ${worstCalls} meshes in view at once (budget 260; a car is ~40, the world ~100)`);
+    if (mode === "countryside" && !(world.far.length > 0 && sawFar)) fail("countryside: no small props are hidden when far");
+    stats.push(`${mode} world ≤ ${(worst * 100).toFixed(0)} % / ${worstCalls} meshes with the cars`);
+    d.dispose();
+  }
+  console.log(`  culling: triangles in view ${stats.join(", ")} (cells for the terrain, the road and the props; far hedges and fences hidden)`);
+}
+
+// ---------- (j) the quality governor ----------
+{
+  /** Replays a device: `fps(step, t)` is the frame rate it gets at that step; returns the governor and the steps taken. */
+  const replay = (fpsAt: (step: Step, t: number) => number, seconds: number, dpr = 2, start = 0) => {
+    const g = new QualityGovernor(start, LADDER.map((s) => qualityOf(s.level, dpr, s.scale).pixelRatio)), changes: { t: number; index: number }[] = [];
+    for (let t = 0; t < seconds; t += GOV.WINDOW) {
+      const s = g.update(fpsAt(g.step, t));
+      if (s) changes.push({ t: t + GOV.WINDOW, index: g.index });
+    }
+    return { g, changes };
+  };
+  // A slow GPU: the frame rate rises as the picture gets lighter (cost ∝ pixels, shadows count extra), capped at 60.
+  const costAt = (dpr: number) => (s: Step) => {
+    const q = qualityOf(s.level, dpr, s.scale);
+    return q.pixelRatio * q.pixelRatio * (q.shadows ? (q.shadowSize >= 2048 ? 1.35 : 1.2) : 1);
+  };
+  for (const dpr of [1, 2]) {
+    const cost = costAt(dpr);
+    for (const [name, k] of [["slow", 27], ["very slow", 17], ["modest", 40]] as const) {
+      const { g, changes } = replay((s) => Math.min(60, k / cost(s)), 90, dpr);
+      const fpsEnd = Math.min(60, k / cost(g.step));
+      const firstOk = LADDER.findIndex((s) => Math.min(60, k / cost(s)) >= GOV.TARGET);
+      if (firstOk >= 0 && (fpsEnd < GOV.TARGET || g.index > firstOk + 1)) fail(`${name} device (dpr ${dpr}): settled at step ${g.index} (${fpsEnd.toFixed(0)} fps), the first fast enough was ${firstOk}`);
+      if (changes.length && changes[0].t > 5) fail(`${name} device (dpr ${dpr}): the first step down came after ${changes[0].t} s`);
+      if (changes.length > 9) fail(`${name} device (dpr ${dpr}): ${changes.length} changes in 90 s (oscillating)`);
+      const downs = changes.filter((c, i) => i > 0 && c.index > changes[i - 1].index).length;
+      const reversals = changes.filter((c, i) => i > 0 && c.index < changes[i - 1].index).length;
+      if (reversals > 2 && downs > 0 && changes.length - reversals - 1 > reversals + 4) fail(`${name} device (dpr ${dpr}): bounced up and down ${reversals} times`);
+    }
+  }
+  // A device that makes 60 at the best picture never changes it.
+  if (replay(() => 60, 120, 2).changes.length) fail("a device at 60 fps was changed");
+  // A single hitch is not a reason to lighten the picture.
+  if (replay((s, t) => (t >= 20 && t < 20.5 ? 15 : 60), 60, 2).changes.length) fail("one slow window made the picture lighter");
+  // A screen capped at 30 Hz (battery saver): lightening the picture changes nothing, so it must not go all the way down.
+  {
+    const { g, changes } = replay(() => 30, 120, 2);
+    if (g.index > 1) fail(`a 30 Hz screen was taken down to step ${g.index}`);
+    if (changes.length > 3) fail(`a 30 Hz screen made ${changes.length} changes`);
+    for (const c of changes) if (c.index > 1) fail("a 30 Hz screen was lightened below step 1 along the way");
+  }
+  // A device that is slow for a while then fast again: the picture comes back, one step at a time, without bouncing.
+  {
+    const cost = costAt(2);
+    const { g, changes } = replay((s, t) => (t < 30 ? Math.min(60, 22 / cost(s)) : Math.min(60, 400 / cost(s))), 240);
+    if (g.index !== 0) fail(`the picture did not come back (step ${g.index}) once the device was fast again`);
+    if (changes.length > 12) fail(`${changes.length} changes while the device slowed and recovered`);
+  }
+  // A phone starts a notch down; a governor started past the end of the ladder stays on it.
+  if (new QualityGovernor(99).index !== LADDER.length - 1 || new QualityGovernor(-3).index !== 0) fail("the start step is not clamped to the ladder");
+  console.log(`  governor: ${LADDER.length} steps, lighter within ~2 s on a slow device, not for a 30 Hz screen or one hitch, back carefully, no oscillation`);
 }
 
 // ---------- (f) the winner's fireworks ----------

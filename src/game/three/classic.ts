@@ -85,7 +85,7 @@ export function buildClassic(ctx: WorldCtx): Scenery {
     }
   });
   byVariant.forEach((list, v) => put(instanced(d, models.treeModel(v as 0 | 1 | 2), smooth, list)));
-  put(instanced(d, models.hedge(), matProp, propsOf(props, "hedge").slice(0, 900).map((p, i) => placeOf(p, 1, i)), false));
+  put(instanced(d, models.hedge(), matProp, propsOf(props, "hedge").slice(0, 900).map((p, i) => placeOf(p, 1, i)), false, 60, 170));
 
   // ---- hay: the square bales that line the village bend (the physical bumpers), irregular, and the round ones in the fields ----
   const straw = propsOf(props, "strawbale").map((p, i): Placement => {
@@ -95,7 +95,7 @@ export function buildClassic(ctx: WorldCtx): Scenery {
       tint: (v << 16) | ((v - 8) << 8) | (v - 40),
     };
   });
-  put(instanced(d, models.strawBale(), matProp, straw));
+  put(instanced(d, models.strawBale(), matProp, straw, true, 60, 220));
   put(instanced(d, models.roundBale(), matProp, propsOf(props, "bale").map((p, i) => placeOf(p, 1, i))));
 
   // ---- the start straight: grandstands, pits, tyre stacks, flags; the village marquee and stands; a farm and its cows ----
@@ -119,8 +119,8 @@ export function buildClassic(ctx: WorldCtx): Scenery {
       rails.push({ x: mx, y: 0.5, z: mz, ry, sx: l }, { x: mx, y: 0.95, z: mz, ry, sx: l });
     });
   }
-  put(instanced(d, part(new THREE.BoxGeometry(0.16, 1.25, 0.16), "#6b4f30", mat4(0, 0.62, 0)), matProp, posts.slice(0, 2500), false));
-  put(instanced(d, part(new THREE.BoxGeometry(1, 0.1, 0.07), "#8a6a45"), matProp, rails.slice(0, 5000), false));
+  put(instanced(d, part(new THREE.BoxGeometry(0.16, 1.25, 0.16), "#6b4f30", mat4(0, 0.62, 0)), matProp, posts.slice(0, 2500), false, 60, 150));
+  put(instanced(d, part(new THREE.BoxGeometry(1, 0.1, 0.07), "#8a6a45"), matProp, rails.slice(0, 5000), false, 60, 150));
 
   // ---- the two leafy canopies over the road in the forest: masses of leaves held up by the trunks, with gaps for the light ----
   const blobs: Placement[] = [];
