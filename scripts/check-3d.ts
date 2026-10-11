@@ -8,6 +8,8 @@
 //   (d) the chase camera: 9.5 m behind and 4.2 m up on the ground whatever the speed, higher and further back in flight, a wider field of view
 //       with speed and the turbo, no jump when switched on mid-race;
 //   (e) every mode's world, all six cars and the effects build into finite geometry within a triangle budget, and `dispose` frees all of it;
+//   (h) an online race: the other players' cars carry name tags (hidden when they leave, freed with the scene) and a remote Jet's wings follow
+//       its altitude; a solo race has no tags;
 //   (g) the yeti's jump (four moments) and a car's explosion with its wreck are read by the adapter and drawn without a leak.
 
 import { Adapter3D, CAM, ChaseCamera, K, toScene, type CamTarget } from "../src/game/adapter3d";
@@ -312,6 +314,62 @@ console.log("3D view checks\n");
   d.dispose();
   if (liveResources() !== base) fail(`yeti scene: ${liveResources() - base} resources alive after dispose`);
   console.log(`  yeti and explosion: the four moments of a jump (${[...phases].join(", ")}), a blast and its wreck drawn · finite · all freed`);
+}
+
+// ---------- (h) an online race: the other players' cars, their name tags and their wings ----------
+{
+  const base = liveResources();
+  const players = [
+    { id: "net00001", name: "Alice", model: "gt" as ModelId, skin: "factory" as const, level: 1 },
+    { id: "net00002", name: "Bob le Jet", model: "jet" as ModelId, skin: "factory" as const, level: 2 },
+    { id: "net00003", name: "Cleo", model: "f8" as ModelId, skin: "factory" as const, level: 1 },
+  ];
+  const race = createRace("desert", PLAYER("gt"), 5, { players, localId: "net00001" });
+  const adapter = new Adapter3D(race), d = new Disposer(), scene = new THREE.Scene(), q = qualityOf(0, 1);
+  const camera = new THREE.PerspectiveCamera(60, 1.6, 0.3, 2400);
+  scene.add(camera);
+  const cars = adapter.cars.map((v) => {
+    const c = new Car3D(d, v, null);
+    scene.add(c.group);
+    return c;
+  });
+  const play = new Gameplay3D({ adapter, d, scene, camera, quality: q, reduced: false, cars, mode: "desert", heightAt: () => 0, craterY: 25 });
+  const sprites = () => scene.children.filter((o): o is THREE.Sprite => o instanceof THREE.Sprite);
+  const me = race.cars[0], jetIdx = race.cars.findIndex((c) => c.model === "jet");
+  if (race.cars.length !== 3 || jetIdx < 1 || !race.cars[jetIdx].remote) fail("online scene: expected the local car and two remote copies, one of them the Jet");
+  race.cars[jetIdx].alt = 60;
+  adapter.refresh(0);
+  near("a remote Jet's wing at 60 m", adapter.cars[jetIdx].wing, 1, 1e-9);
+  race.cars[jetIdx].alt = 0;
+  adapter.refresh(0);
+  near("a remote Jet's wing on the ground", adapter.cars[jetIdx].wing, 0, 1e-9);
+  const vm = adapter.cars[0];
+  camera.position.set(vm.x * K, 4, vm.y * K + 8);
+  cars.forEach((c, k) => c.update(adapter.cars[k], 1 / 40, 0));
+  play.update(1 / 40, 0, camera, 720);
+  if (sprites().length !== 2) fail(`online scene: ${sprites().length} name tags for two other players`);
+  if (sprites().some((t) => !t.visible)) fail("online scene: a name tag is hidden though its car is next to the camera");
+  for (const t of sprites()) finite("name tag", t.position.x, t.position.y, t.position.z, t.scale.x, t.scale.y);
+  // A car that is out of the race loses its tag.
+  race.cars[1].destroyedAt = race.time;
+  race.cars[1].hp = 0;
+  adapter.refresh(0);
+  cars.forEach((c, k) => c.update(adapter.cars[k], 1 / 40, 0.1));
+  play.update(1 / 40, 0.1, camera, 720);
+  if (sprites().filter((t) => t.visible).length !== 1) fail(`online scene: ${sprites().filter((t) => t.visible).length} visible name tags after one car left (expected 1)`);
+  // The local car has no tag, and a solo race has none at all.
+  void me;
+  play.dispose();
+  if (sprites().length !== 0) fail(`online scene: ${sprites().length} name tags left in the scene after dispose`);
+  d.dispose();
+  if (liveResources() !== base) fail(`online scene: ${liveResources() - base} resources alive after dispose`);
+  const solo = fresh("desert", "gt", 3), sd = new Disposer(), ss = new THREE.Scene(), sa = new Adapter3D(solo);
+  const sc = sa.cars.map((v) => new Car3D(sd, v, null));
+  const sp = new Gameplay3D({ adapter: sa, d: sd, scene: ss, camera, quality: q, reduced: false, cars: sc, mode: "desert", heightAt: () => 0, craterY: 25 });
+  if (ss.children.some((o) => o instanceof THREE.Sprite)) fail("a solo race has name tags");
+  sp.dispose();
+  sd.dispose();
+  console.log("  online race: name tags over the two other players (hidden when a car leaves, freed with the scene), a remote Jet's wings follow its altitude, solo races have none");
 }
 
 // ---------- (f) the winner's fireworks ----------

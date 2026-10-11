@@ -35,6 +35,10 @@ export type Car = {
   hurtAt: number;
   /** Race time the car blew up, or null. A destroyed car is out of the race. */
   destroyedAt: number | null;
+  /** An online opponent (multiplayer): another player's own game moves it and tells us where it is; this race never drives, hurts or ranks it by itself. */
+  remote?: boolean;
+  /** Who drives it (the multiplayer player's id), for a remote car. */
+  netId?: string;
   // Race bookkeeping (see race.ts).
   progress: number;
   lastIndex: number;
