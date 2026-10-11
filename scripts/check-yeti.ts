@@ -290,16 +290,18 @@ function toFlight(seed: number, under: "player" | "none" = "player"): { race: Ra
     bot.vel = { x: t.x * 400, y: t.y * 400 };
     bot.hp = HEALTH.MAX;
     let slowest = Infinity;
-    for (let i = 0; i < 1.5 * 120 && jumpOf(race)?.phase === "flight"; i++) {
+    for (let i = 0; i < 4 * 120 && jumpOf(race) && jumpOf(race)!.phase !== "leave"; i++) {
       race.cars.slice(2).forEach((c) => (c.vel = { x: 0, y: 0 }));
       stepRace(race, NO_INPUT, DT, false);
       if (Math.hypot(bot.pos.x - j.toX, bot.pos.y - j.toY) > 60) slowest = Math.min(slowest, Math.hypot(bot.vel.x, bot.vel.y));
     }
-    return slowest;
+    return { slowest, hp: bot.hp };
   };
   const withRing = runBot(true), without = runBot(false);
-  check(withRing < without * 0.9, `a bot did not slow for the ring (${withRing.toFixed(0)} against ${without.toFixed(0)} without)`);
-  console.log(`  bots: slowest speed on the way to the ring ${withRing.toFixed(0)} (${without.toFixed(0)} when it is not announced)`);
+  // Announced, the bot brakes for the ring and is not worse off than when it knows nothing (that one drives into the landing and the solid yeti).
+  check(withRing.slowest < 400 * 0.85, `a bot did not slow for the ring (${withRing.slowest.toFixed(0)} u/s)`);
+  check(withRing.hp >= without.hp, `an announced ring hurt the bot more (${withRing.hp} PV against ${without.hp})`);
+  console.log(`  bots: slowest speed on the way to the ring ${withRing.slowest.toFixed(0)} · ${withRing.hp} PV (${without.slowest.toFixed(0)} u/s · ${without.hp} PV when it is not announced)`);
 }
 
 // ---------- (g) the 3D adapter and the other modes ----------

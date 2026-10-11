@@ -14,12 +14,12 @@ import { type Vec, vec } from "../vec";
 
 export const YETI = {
   /** Never sooner than this after the green light (s); then between two jumps, a pause of this many seconds (min, max). */
-  FIRST: 10, GAP: [6, 14] as const,
+  FIRST: 8, GAP: [3, 8] as const,
   /** The ring closing in on the landing spot while it roars on its perch (s), then the jump itself, standing, and leaping away. */
   WARN: 1.3, FLIGHT: 1.6, STAND: 2.4, LEAVE: 0.9,
   /** Cars under it: how near (px, plus the car's own radius) the landing spot they are hurt, how many points, the speed they keep, and the seconds
    * a car just hurt cannot be hurt by it again. */
-  LAND_R: 50, DAMAGE: 30, SPEED_KEEP: 0.5, INVULN: 1.2,
+  LAND_R: 62, DAMAGE: 30, SPEED_KEEP: 0.5, INVULN: 1.2,
   /** Standing, it is a solid ellipse (half-axes along / across its heading, px) the cars bounce off like the polar bear. */
   BODY: { rx: 30, ry: 36 },
   impact: { speedKeep: 0.3, restitution: 0.3, minImpact: 40 },
@@ -27,13 +27,13 @@ export const YETI = {
   MIN_CAR_DIST: 110, SAFE_FINISH: 220,
   /** Where it jumps from and to, in samples along the road (~10 px each): the perch is CROWN samples inside the tunnel from the portal. The spot
    * must fall in a window of road before the entrance or after the exit: [from, to] samples out from the portal. */
-  CROWN: 30, WINDOW: [20, 60] as const,
+  CROWN: 30, WINDOW: [10, 90] as const,
   /** Perch height (m: the massif's crown over the tunnel), arc height above the straight line (m). */
   PERCH_H: 20, APEX: 10,
   /** The player's predicted spot: at least this far ahead (px), and what share of the jumps aims at the player (the others at a random lane). */
-  AHEAD_MIN: 500, AHEAD_MAX: 2200, PLAYER_SHARE: 0.7, SPREAD: [0.85, 1.1] as const,
+  AHEAD_MIN: 500, AHEAD_MAX: 2200, PLAYER_SHARE: 0.95, SPREAD: [0.95, 1.05] as const,
   /** The spot's offset across the road, as a share of the half width, at most. */
-  LANE: 0.62,
+  LANE: 0.85,
   /** Bots: slow to AI_SLOW × their limit within AI_RANGE px of the ring (+ AI_LOOKAHEAD s of their speed) and steer round it with AI_MARGIN px. */
   AI_RANGE: 140, AI_LOOKAHEAD: 0.9, AI_SLOW: 0.5, AI_MARGIN: 20,
   /** The camera shake of the landing: size (world units) and how far away it is felt (px). */

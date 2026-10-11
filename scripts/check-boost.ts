@@ -14,6 +14,7 @@
 
 import { BOOST, BOOST_STYLES, boostStyleOf, centerlineOf, nearPad } from "../src/game/boost";
 import { NO_INPUT, PHYS, speedOf, stepCar, type Car } from "../src/game/car";
+import { isDestroyed } from "../src/game/health";
 import { aiInput, createRace, stepRace, TOTAL_LAPS, type Race } from "../src/game/race";
 import { THEME_ORDER, type ThemeId } from "../src/game/themes";
 import { isCovered } from "../src/game/track";
@@ -297,7 +298,8 @@ console.log("Boost pad checks\n");
         const still = race.cars.map(() => 0);
         const seenTargets = new Set<number>();
         const vz = race.hazard as VolcanoHazard | null;
-        while (race.time < 400 && race.cars.some((c) => c.finishTime === null)) {
+        // (A car that ran out of points blows up and is out of the race: it neither finishes nor counts as stuck.)
+        while (race.time < 400 && race.cars.some((c) => c.finishTime === null && !isDestroyed(c))) {
           stepRace(race, aiInput(race, race.cars[0], DT, false), DT, false);
           if (on) {
             for (const c of race.cars) if (race.boost.isBoosting(c)) maxSpeed = Math.max(maxSpeed, speedOf(c));
@@ -311,14 +313,14 @@ console.log("Boost pad checks\n");
             }
           }
           race.cars.forEach((c, i) => {
-            still[i] = c.finishTime === null && Math.abs(speedOf(c)) < 5 ? still[i] + DT : 0;
+            still[i] = c.finishTime === null && !isDestroyed(c) && Math.abs(speedOf(c)) < 5 ? still[i] + DT : 0;
             if (still[i] > 5) {
               fail(`${mode} seed ${seed}${on ? " (pads)" : ""}: ${c.name} stayed almost still for over 5 s (t=${race.time.toFixed(1)}s)`);
               still[i] = -1e9;
             }
           });
         }
-        for (const c of race.cars) if (c.finishTime === null) fail(`${mode} seed ${seed}${on ? " (pads)" : ""}: ${c.name} did not finish ${TOTAL_LAPS} laps`);
+        for (const c of race.cars) if (c.finishTime === null && !isDestroyed(c)) fail(`${mode} seed ${seed}${on ? " (pads)" : ""}: ${c.name} did not finish ${TOTAL_LAPS} laps`);
         results.push({
           off: race.cars.reduce((a, c) => a + c.offTime, 0), hits: race.cars.reduce((a, c) => a + c.hits, 0),
           time: race.cars.reduce((a, c) => a + (c.finishTime ?? race.time), 0) / race.cars.length,

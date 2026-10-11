@@ -13,6 +13,7 @@
 //
 // Prints a one-line summary per mode and exits non-zero if anything fails.
 
+import { isDestroyed } from "../src/game/health";
 import { layerSize } from "../src/game/layer";
 import { aiInput, createRace, stepRace, TOTAL_LAPS } from "../src/game/race";
 import { THEMES, type ThemeId } from "../src/game/themes";
@@ -76,20 +77,22 @@ function simulateAllAi(themeId: ThemeId): { ok: true; avgLap: number } | { ok: f
   const race = createRace(themeId, { model: "gt", skin: "factory", level: 1 });
   const lastProgress = race.cars.map((c) => c.progress);
   const lastProgressTime = race.cars.map(() => 0);
-  while (race.time < MAX_SIM_TIME && race.cars.some((c) => c.finishTime === null)) {
+  // (A car that ran out of points blows up and is out of the race: it neither finishes nor counts as stuck.)
+  while (race.time < MAX_SIM_TIME && race.cars.some((c) => c.finishTime === null && !isDestroyed(c))) {
     stepRace(race, aiInput(race, race.cars[0], DT, false), DT);
     for (const car of race.cars) {
       if (car.progress > lastProgress[car.id] + 0.01) {
         lastProgress[car.id] = car.progress;
         lastProgressTime[car.id] = race.time;
-      } else if (car.finishTime === null && race.time - lastProgressTime[car.id] > STALL_TIME) {
+      } else if (car.finishTime === null && !isDestroyed(car) && race.time - lastProgressTime[car.id] > STALL_TIME) {
         return { ok: false, message: `${car.name} stalled (no progress for >${STALL_TIME}s) near sample ${car.lastIndex}, t=${race.time.toFixed(1)}s` };
       }
     }
   }
-  const unfinished = race.cars.filter((c) => c.finishTime === null);
+  const unfinished = race.cars.filter((c) => c.finishTime === null && !isDestroyed(c));
   if (unfinished.length) return { ok: false, message: `${unfinished.map((c) => c.name).join(", ")} did not finish ${TOTAL_LAPS} laps within ${MAX_SIM_TIME}s` };
-  const avgLap = race.cars.reduce((sum, c) => sum + c.finishTime! / TOTAL_LAPS, 0) / race.cars.length;
+  const finishers = race.cars.filter((c) => c.finishTime !== null);
+  const avgLap = finishers.reduce((sum, c) => sum + c.finishTime! / TOTAL_LAPS, 0) / Math.max(1, finishers.length);
   return { ok: true, avgLap };
 }
 
