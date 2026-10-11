@@ -9,9 +9,14 @@
 //   (d) the Jet's wing demo (open 3 s, folded 3 s) and the no-motion setting;
 //   (e) the stage's own geometry is finite, small, and `dispose` frees all of it; every car in every paint the lobby can show builds and is freed;
 //   (f) the Bugatti La Voiture Noire (it replaced the Chiron): its place and price in the shop (and the SQL's, for every car), its bars, its black
-//       paint, buying it, its 3D build (size, six exhausts, no wing).
+//       paint, buying it, its 3D build (size, six exhausts, no wing);
+//   (g) the debug profile is saved: buy a car with the million, reload, the car and the balance are still there; it starts again on request,
+//       never mixes with the player's profile, and a corrupted save falls back to the million.
 
-import { MODEL_ORDER, MODELS, NEW_PROFILE, SKINS, SKIN_ORDER, STAT_RANGE, buyCar, carStats, skinFits, skinOf, skinsFor, type ModelId, type Profile } from "../src/game/garage";
+import {
+  DEBUG_PROFILE, MODEL_ORDER, MODELS, NEW_PROFILE, SKINS, SKIN_ORDER, STAT_RANGE, buyCar, carStats, getDebugProfile, getPlayerProfile, invalidateDebugProfile, resetDebugProfile,
+  saveDebugProfile, savePlayerProfile, skinFits, skinOf, skinsFor, type ModelId, type Profile,
+} from "../src/game/garage";
 import { readFileSync } from "node:fs";
 import { Lru, Orbit, carKey, carRadius, stageChoice, stageWing } from "../src/game/garageView";
 import { Car3D } from "../src/game/three/cars";
@@ -311,6 +316,51 @@ console.log("3D garage checks\n");
   d.dispose();
   check(liveResources() === base, `${liveResources() - base} resources alive after La Voiture Noire was freed`);
   console.log(`  La Voiture Noire: 300 000 €, black, bars 80 / 72 / 46, SQL prices match for all ${MODEL_ORDER.length} cars, six exhausts, no wing, ${Math.round(tris)} triangles, ${size.x.toFixed(2)} × ${size.z.toFixed(2)} × ${size.y.toFixed(2)} m`);
+}
+
+// ---------- (g) the debug profile is saved ----------
+{
+  // A browser's storage, in memory (the checks run in Node).
+  const store = new Map<string, string>();
+  (globalThis as unknown as { window: unknown }).window = {
+    localStorage: { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v), removeItem: (k: string) => void store.delete(k) },
+    addEventListener: () => undefined,
+  };
+  invalidateDebugProfile(); // "a fresh page": nothing read yet
+  check(getDebugProfile().money === 1_000_000 && Object.keys(getDebugProfile().cars).join() === "gt", "a fresh debug profile is not the million and the factory car");
+  // The million, the Bugatti at 300 000 €: 700 000 € left, the car owned.
+  const bought = buyCar(getDebugProfile(), "voiturenoire");
+  check(bought.money === 700_000 && !!bought.cars.voiturenoire, `buying the Bugatti in debug left ${bought.money} € (expected 700 000)`);
+  saveDebugProfile(bought);
+  // Reload: the cache is gone, the profile comes back from the storage.
+  invalidateDebugProfile();
+  const back = getDebugProfile();
+  check(back.money === 700_000 && !!back.cars.voiturenoire, `after a reload the debug profile has ${back.money} € and ${Object.keys(back.cars).join()}`);
+  check(store.has("racerz.debug-profile.v1") && !store.has("racerz.profile.v1"), "the debug profile was saved under the player's key, or not saved");
+  // It never mixes with the player's profile.
+  check(JSON.stringify(getPlayerProfile()) === JSON.stringify(NEW_PROFILE), "the player's profile changed with the debug one");
+  const player = buyCar({ ...NEW_PROFILE, money: 10_000 }, "mx5");
+  savePlayerProfile(player);
+  invalidateDebugProfile();
+  check(getDebugProfile().money === 700_000 && !getDebugProfile().cars.mx5, "a player's purchase leaked into the debug profile");
+  check(store.has("racerz.profile.v1") && getPlayerProfile().money === player.money, "the player's profile was not saved on its own");
+  // Starting over.
+  resetDebugProfile();
+  check(!store.has("racerz.debug-profile.v1") && getDebugProfile().money === DEBUG_PROFILE.money && Object.keys(getDebugProfile().cars).join() === "gt", "the reset did not bring back the million and the factory car");
+  invalidateDebugProfile();
+  check(getDebugProfile().money === 1_000_000, "the reset did not stick after a reload");
+  // A corrupted or hostile save: the million, never a crash, never a prototype hole.
+  for (const junk of ["{not json", "null", "42", '"hello"', '{"money":-5,"cars":{"__proto__":{"level":99},"constructor":{}},"selected":"nope","skins":["__proto__"]}']) {
+    store.set("racerz.debug-profile.v1", junk);
+    invalidateDebugProfile();
+    const p = getDebugProfile();
+    check(Number.isInteger(p.money) && p.money >= 0 && !!p.cars.gt && Object.keys(p.cars).every((id) => id in MODELS), `a corrupted debug save (${junk.slice(0, 20)}) gave ${JSON.stringify(p).slice(0, 80)}`);
+  }
+  store.set("racerz.debug-profile.v1", "{not json");
+  invalidateDebugProfile();
+  check(getDebugProfile().money === 1_000_000, "a corrupted debug save did not fall back to the million");
+  delete (globalThis as unknown as { window?: unknown }).window;
+  console.log("  debug profile: saved under its own key (1 000 000 € − 300 000 € = 700 000 € and the Bugatti survive a reload), separate from the player's, reset on request, corrupted saves fall back to the million");
 }
 
 if (failed) {

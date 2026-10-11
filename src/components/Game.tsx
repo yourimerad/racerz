@@ -19,7 +19,8 @@ import type { Renderer3D } from "@/game/render3d";
 import { type OnlineHud, formatTime, render, renderHud } from "@/game/render";
 import { type ThemeId, THEMES, THEME_ORDER } from "@/game/themes";
 import {
-  type Profile, type RaceReport, DEBUG_PROFILE, formatMoney, getPlayerProfile, getServerPlayerProfile, savePlayerProfile, settleRace,
+  type RaceReport, formatMoney, getDebugProfile, getPlayerProfile, getServerDebugProfile, getServerPlayerProfile, resetDebugProfile, saveDebugProfile,
+  savePlayerProfile, settleRace,
   subscribePlayerProfile,
 } from "@/game/garage";
 import { getServerSettings, getSettings, subscribeSettings } from "@/game/settings";
@@ -97,13 +98,13 @@ export default function Game() {
   // its own in-memory profile so purchases/earnings there never leak into the
   // player's, and vice versa.
   const playerProfile = useSyncExternalStore(subscribePlayerProfile, getPlayerProfile, getServerPlayerProfile);
-  const [debugProfile, setDebugProfile] = useState<Profile>(DEBUG_PROFILE);
-  const debugProfileRef = useRef(debugProfile);
+  // The debug profile is saved too (its own key): what is bought there is still there after a reload.
+  const debugProfile = useSyncExternalStore(subscribePlayerProfile, getDebugProfile, getServerDebugProfile);
   const profile = debugMode ? debugProfile : playerProfile;
   // Accounts (Supabase, optional): a signed-in player's purchases and winnings go through the server.
   const account = useSyncExternalStore(subscribeAccount, getAccountState, getServerAccountState);
   const actions: ProfileActions = debugMode
-    ? localActions(() => debugProfile, setDebugProfile)
+    ? localActions(getDebugProfile, saveDebugProfile)
     : account.status === "signedIn"
       ? remoteActions
       : localActions(getPlayerProfile, savePlayerProfile);
@@ -130,14 +131,11 @@ export default function Game() {
   // Balance right after settlement, so the results screen keeps showing it
   // even if the player toggles debug mode (and so switches `profile`) afterwards.
   const [settledBalance, setSettledBalance] = useState<number | null>(null);
-  useEffect(() => {
-    debugProfileRef.current = debugProfile;
-  }, [debugProfile]);
 
   const start = useCallback(() => {
     const isDebugRace = getDebugMode();
     raceIsDebugRef.current = isDebugRace;
-    const p = isDebugRace ? debugProfileRef.current : getPlayerProfile();
+    const p = isDebugRace ? getDebugProfile() : getPlayerProfile();
     const car = p.cars[p.selected] ?? { level: 1, skin: "factory" as const };
     if (!isDebugRace && isSignedIn()) accountStartRace();
     syncRef.current?.leave();
@@ -326,12 +324,11 @@ export default function Game() {
         const place = destroyed ? race.cars.length : standings(race).indexOf(player) + 1;
         // Settle the profile that was active at race start, not whatever is active now.
         const isDebugRace = raceIsDebugRef.current;
-        const current = isDebugRace ? debugProfileRef.current : getPlayerProfile();
+        const current = isDebugRace ? getDebugProfile() : getPlayerProfile();
         const settled = settleRace(current, place, player.offTime / Math.max(1, player.finishTime ?? race.time), player.hits);
         const onAccount = !isDebugRace && isSignedIn();
         if (isDebugRace) {
-          debugProfileRef.current = settled.profile;
-          setDebugProfile(settled.profile);
+          saveDebugProfile(settled.profile); // saved: the debug winnings are still there after a reload
         } else {
           savePlayerProfile(settled.profile); // signed in: shown right away, the server then has the last word
         }
@@ -480,7 +477,7 @@ export default function Game() {
       )}
 
       {screen === "menu" && (
-        <Lobby profile={profile} actions={actions} mode={mode} setMode={setMode} record={record} onStart={start} debug={debugMode} />
+        <Lobby profile={profile} actions={actions} mode={mode} setMode={setMode} record={record} onStart={start} debug={debugMode} onResetDebug={resetDebugProfile} />
       )}
 
       {/* Victory: a lighter veil over the 3D scene, the fireworks at full brightness above it, the podium above them. */}
