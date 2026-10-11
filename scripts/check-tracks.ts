@@ -8,6 +8,8 @@
 //       close enough to look like they touch;
 //   (b) the cached static layer (see layer.ts) keeps a legible resolution (scale >= 0.6);
 //   (c) covered sections (CoverLayout, see track.ts) convert to well-formed sample ranges;
+//   (e) the volcano's circuit goes both round the cone and through it: a lap of at least 9 000 u (it was 5 941), a covered lava tube
+//       whose road passes within 350 u of the crater and half-turns round it (>= 150 degrees), and an open ring that reaches 1 000 u out;
 //   (d) an all-AI race (car 0 included — see race.ts's exported `aiInput`) finishes every lap
 //       within 240s simulated, with no car stalled (no progress) for more than 5s.
 //
@@ -17,7 +19,8 @@ import { isDestroyed } from "../src/game/health";
 import { layerSize } from "../src/game/layer";
 import { aiInput, createRace, stepRace, TOTAL_LAPS } from "../src/game/race";
 import { THEMES, type ThemeId } from "../src/game/themes";
-import type { Track } from "../src/game/track";
+import { CONE } from "../src/game/modes/volcano";
+import { isCovered, type Track } from "../src/game/track";
 
 const MODE_IDS: ThemeId[] = ["desert", "countryside", "northpole", "volcano"];
 const DT = 1 / 60; // simulation step; physics has no randomness so this is deterministic
@@ -72,6 +75,28 @@ function checkCovers(track: Track): string | null {
   return null;
 }
 
+/** (e) The volcano's lap: a big ring round the cone and a covered tube through it, half-turning round the crater. */
+function checkVolcano(track: Track): string | null {
+  const n = track.path.length, len = lapLength(track);
+  if (len < 9000) return `the lap is only ${len.toFixed(0)}u (the volcano's circuit is meant to be longer than 9 000u)`;
+  let closest = Infinity, far = 0, turn = 0, prev: number | null = null, covered = 0;
+  for (let i = 0; i < n; i++) {
+    const p = track.path[i], d = Math.hypot(p.x - CONE.x, p.y - CONE.y);
+    far = Math.max(far, d);
+    if (!isCovered(track, i)) continue;
+    covered++;
+    closest = Math.min(closest, d);
+    const a = Math.atan2(track.tangents[i].y, track.tangents[i].x);
+    if (prev !== null) turn += Math.atan2(Math.sin(a - prev), Math.cos(a - prev));
+    prev = a;
+  }
+  if (!covered) return "the volcano has no covered stretch (the lava tube)";
+  if (closest > 350) return `the tube stays ${closest.toFixed(0)}u from the crater (> 350u): it does not go through the mountain`;
+  if (Math.abs(turn) < (150 * Math.PI) / 180) return `the tube turns only ${((Math.abs(turn) * 180) / Math.PI).toFixed(0)} degrees round the crater (< 150)`;
+  if (far < 1000) return `the circuit never gets farther than ${far.toFixed(0)}u from the cone (< 1 000u): no ring round it`;
+  return null;
+}
+
 /** (d) Drive every car with aiInput (car 0 included) and watch for timeouts/stalls. */
 function simulateAllAi(themeId: ThemeId): { ok: true; avgLap: number } | { ok: false; message: string } {
   const race = createRace(themeId, { model: "gt", skin: "factory", level: 1 });
@@ -114,6 +139,12 @@ for (const id of MODE_IDS) {
   const cov = checkCovers(track);
   if (cov) fail("covers", cov);
   else console.log(`  covers       ok (${track.covers.length})`);
+
+  if (id === "volcano") {
+    const v = checkVolcano(track);
+    if (v) fail("volcano circuit", v);
+    else console.log("  circuit      ring round the cone + a lava tube through it (half-turn round the crater)");
+  }
 
   const sim = simulateAllAi(id);
   if (!sim.ok) fail("all-AI race", sim.message);

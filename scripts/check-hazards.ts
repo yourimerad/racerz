@@ -1,7 +1,7 @@
 // Volcano aimed-bomb checks: fairness, damage, pools and bots. Run with `pnpm check:hazards`
 // (same Node + hook as check:tracks). Fails (non-zero exit) on any breach.
 //
-//   (a) fairness over seeded all-AI races: no target in the first 8 s, only between 2.2 s and 7 s of the
+//   (a) fairness over seeded all-AI races: no target in the first 8 s, none inside the lava tube (the covered road through the cone) nor at its mouths, only between 2.2 s and 7 s of the
 //       eruption cycle, never within 90 (design) units of a car or 150 of the start / finish, at most 3
 //       at once, 1.2 s or more between two targets, every target warned for the full 1.5 s, and no
 //       damage that is not a bomb on a warned target or a burning pool; HP only ever goes down, never
@@ -18,6 +18,7 @@ import { aiInput, createRace, standings, stepRace, TOTAL_LAPS, type Race } from 
 import { NO_INPUT, speedOf } from "../src/game/car";
 import { HEALTH, isDestroyed } from "../src/game/health";
 import { ERUPTION, HZ, HZ_SCALE as S, type VolcanoHazard } from "../src/game/modes/volcano";
+import { isCovered, locate } from "../src/game/track";
 
 const DT = 1 / 120;
 const SEEDS = [1, 2, 3, 4, 5, 6];
@@ -90,6 +91,9 @@ console.log("Volcano aimed-bomb checks\n");
           // 8 world units of slack: a car moves up to ~6 in the step we measure after.
           if (d < HZ.MIN_SPAWN_DIST * S - 8) fail(`seed ${seed}: a target ${(d / S).toFixed(0)} units from ${c.name} (< ${HZ.MIN_SPAWN_DIST})`);
         }
+        // Inside the mountain nothing falls: not on the covered road, nor within ~100 u of a mouth (the target is 25 wide).
+        const spot = locate(race.track, { x: tg.x * S, y: tg.y * S });
+        for (let m = -16; m <= 16; m += 4) if (isCovered(race.track, spot.index + m)) { fail(`seed ${seed}: a target at sample ${spot.index}, ${Math.abs(m)} samples from the lava tube`); break; }
         const fin = Math.hypot(race.track.path[0].x - tg.x * S, race.track.path[0].y - tg.y * S) / S;
         if (fin < HZ.SAFE_FINISH_DIST - 1) fail(`seed ${seed}: a target ${fin.toFixed(0)} units from the start / finish (< ${HZ.SAFE_FINISH_DIST})`);
         if (lastBirth > -Infinity) minGap = Math.min(minGap, t - lastBirth);
