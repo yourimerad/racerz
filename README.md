@@ -27,6 +27,22 @@ Si vous changez des prix ou des gains dans `src/game/garage.ts`, reportez-les da
 À la première connexion, une progression locale existante peut être reprise sur le compte (une seule fois, vérifiée
 et plafonnée à 500 000 € côté serveur).
 
+## Multijoueur (en ligne)
+
+Bouton « 🌐 Multijoueur » du lobby : **partie rapide** contre de vrais joueurs (même environnement, 2 à 4 pilotes) ou
+**salle entre potes** (code à 4 caractères ou lien `?room=CODE`, l'hôte choisit l'environnement et lance). C'est le même
+jeu, les mêmes 4 environnements, les mêmes gains.
+
+- Il utilise **Supabase Realtime** (diffusion + présence : aucune table, **aucun SQL à rejouer**) avec les mêmes deux
+  variables `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` que les comptes. Sans elles, le bouton explique
+  que le mode en ligne n'est pas activé. Le plan gratuit limite le débit (≈ 100 messages par seconde pour tout le projet, soit une seule course à quatre à la fois) : chaque joueur envoie 10 instantanés par seconde à deux, 8 à trois, 6 à quatre ; le plan Pro porte la limite à 500.
+- Pour l'essayer sans serveur : ouvrir deux onglets d'un même navigateur sur `/?net=local` (les onglets se parlent par
+  `BroadcastChannel`).
+- Limites : pas d'anti-triche (chaque jeu simule sa propre voiture et croit les autres), les dangers (ours, yéti, bombes
+  du volcan) visent chaque joueur pour son propre compte. Voir `AGENTS.md` pour le détail.
+- `pnpm check:net` vérifie le protocole, les salles, la partie rapide et une course complète sur un réseau simulé (délai,
+  gigue, pertes), sans serveur ni navigateur.
+
 ## Développement
 
 ```bash
@@ -34,6 +50,7 @@ pnpm install
 pnpm dev          # http://localhost:3000
 pnpm lint
 pnpm check:tracks # contrôle des tracés (Node 22.18+ / 25)
+pnpm check:net    # mode en ligne : protocole, salles, partie rapide, course sur réseau simulé
 pnpm sim          # courses simulées pour régler les bots
 ```
 

@@ -65,6 +65,10 @@ export type Straw = { x: number; y: number; vx: number; vy: number; rot: number;
 
 export type PlayerCar = { model: ModelId; skin: SkinId; level: number };
 
+/** An online race (multiplayer): who is on the grid. Every game gets the same list, in the same order (it fixes the grid slots). */
+export type MultiPlayer = { id: string; name: string; model: ModelId; skin: SkinId; level: number };
+export type Multi = { players: MultiPlayer[]; localId: string };
+
 const ROSTER = [
   { name: "Toi", color: "#e63946" },
   { name: "Blaze", color: "#f4a261" },
@@ -78,19 +82,41 @@ const ROSTER = [
  * `theme.bots` (desert easiest … volcano hardest), spread symmetrically so they keep
  * distinct rhythms.
  */
-export function createRace(themeId: ThemeId, player: PlayerCar, seed?: number): Race {
+export function createRace(themeId: ThemeId, player: PlayerCar, seed?: number, multi?: Multi): Race {
   const theme = THEMES[themeId];
   const track = trackFor(themeId, theme.layout);
   const n = track.path.length;
   const { pace, spread } = theme.bots;
-  const cars: Car[] = ROSTER.map((r, i) => {
+  // Who is on the grid, car 0 first (always the human at this screen). Solo: the player and the three bots. Online: the players, no bots; the
+  // grid slots follow the shared player list, so every game puts every car on the same spot.
+  type Entry = { slot: number; i: number; info: MultiPlayer | null };
+  const entries: Entry[] = multi && multi.players.length > 1
+    ? (() => {
+        const N = multi.players.length, li = Math.max(0, multi.players.findIndex((p) => p.id === multi.localId));
+        return [li, ...multi.players.map((_, j) => j).filter((j) => j !== li)].map((j, k): Entry => ({ slot: N - 1 - j, i: k, info: multi.players[j] }));
+      })()
+    : ROSTER.map((_, i): Entry => ({ slot: ROSTER.length - 1 - i, i, info: null }));
+  const cars: Car[] = entries.map(({ slot, i, info }) => {
     // 2-wide staggered grid behind the line; player starts at the back.
-    const slot = ROSTER.length - 1 - i;
     const idx = (n - GRID_FIRST - slot * GRID_ROW) % n;
     const p = track.path[idx], t = track.tangents[idx];
     const side = slot % 2 === 0 ? -1 : 1;
     const pos = add(p, scale(vec(-t.y, t.x), side * track.width * 0.22));
     const isPlayer = i === 0;
+    if (info) {
+      // An online player: the local one is driven here; the others are moved by the network (`remote`).
+      const stats = isPlayer ? carStats(player.model, player.level) : carStats(info.model, info.level);
+      const skin = isPlayer ? skinOf(player.model, player.skin) : skinOf(info.model, info.skin);
+      return {
+        id: i, name: isPlayer ? `Toi (${MODELS[player.model].name})` : info.name, color: skin.body, isPlayer,
+        model: isPlayer ? player.model : info.model, skin, skill: stats.speed, accelMul: stats.accel, gripMul: stats.grip, speedMul: 1, boostMul: 1, flyMul: 1, alt: 0, hp: HEALTH.MAX, hpShown: HEALTH.MAX, hurtAt: -99, destroyedAt: null,
+        offTime: 0, hits: 0, hitCooldown: 0, stun: 0,
+        pos, vel: vec(0, 0), angle: Math.atan2(t.y, t.x),
+        progress: idx - n, lastIndex: idx, lap: 0, lapStart: 0, bestLap: null, finishTime: null, surface: "track",
+        ...(isPlayer ? {} : { remote: true, netId: info.id }),
+      };
+    }
+    const r = ROSTER[i];
     // Bots: 3 distinct rhythms symmetric around the mode's pace (+1, 0, -1 * spread).
     const botSkill = pace + (2 - i) * spread;
     const stats = isPlayer ? carStats(player.model, player.level) : { speed: botSkill, accel: 1, grip: 1 };
@@ -107,7 +133,7 @@ export function createRace(themeId: ThemeId, player: PlayerCar, seed?: number): 
   const ai: AiState[] = cars.map(() => ({ mistake: null, until: 0, cooldown: 0, sign: 1, count: 0, hazardId: 0, hazardPass: 0 }));
   const scene = sceneFor(theme, track);
   // Built before the hazard: the volcano's bombs keep clear of the pads (see boost.ts `nearPad`).
-  const boost = createBoost(theme.id, track, { bumpers: scene.bumpers, lava: scene.lava }, GRID_FIRST + (ROSTER.length - 1) * GRID_ROW);
+  const boost = createBoost(theme.id, track, { bumpers: scene.bumpers, lava: scene.lava }, GRID_FIRST + (cars.length - 1) * GRID_ROW);
   // Only modes with a moving obstacle consume the PRNG here, so the other modes replay as before.
   const hazard = scene.hazard ? scene.hazard(track, mulberry32((rng() * 2 ** 32) >>> 0)) : null;
   const race: Race = { track, theme, scene, cars, phase: "countdown", time: -COUNTDOWN, skids: [], overheadOpacity: 1, rng, ai, straw: [], crashes: [], hazard, cues: [], boost, flight: null, blasts: [], blastCount: 0 };
@@ -329,17 +355,21 @@ function collide(race: Race, a: Car, b: Car) {
   const min = CAR_RADIUS * 2;
   if (dist === 0 || dist >= min) return;
   const nrm = scale(d, 1 / dist);
-  const push = (min - dist) / 2;
-  a.pos = sub(a.pos, scale(nrm, push));
-  b.pos = add(b.pos, scale(nrm, push));
+  // An online opponent is not moved by this race (its own game moves it, and does the same with us): the local car alone gives way and
+  // bounces, with the whole separation and twice the impulse (it bounces off something that does not budge).
+  const aRemote = !!a.remote, bRemote = !!b.remote;
+  if (aRemote && bRemote) return;
+  const push = aRemote || bRemote ? min - dist : (min - dist) / 2;
+  if (!aRemote) a.pos = sub(a.pos, scale(nrm, push));
+  if (!bRemote) b.pos = add(b.pos, scale(nrm, push));
   const rel = dot(sub(a.vel, b.vel), nrm);
   if (rel > 0) {
-    const imp = scale(nrm, rel * 0.85);
-    a.vel = sub(a.vel, imp);
-    b.vel = add(b.vel, imp);
+    const imp = scale(nrm, rel * 0.85 * (aRemote || bRemote ? 2 : 1));
+    if (!aRemote) a.vel = sub(a.vel, imp);
+    if (!bRemote) b.vel = add(b.vel, imp);
     if (rel > 80) {
-      noteImpact(race, a, rel);
-      noteImpact(race, b, rel);
+      if (!aRemote) noteImpact(race, a, rel);
+      if (!bRemote) noteImpact(race, b, rel);
     }
   }
 }
@@ -547,6 +577,7 @@ export function stepRace(race: Race, playerInput: Input, dt: number, playerIsAi 
 
   const live = race.phase !== "countdown";
   for (const car of race.cars) {
+    if (car.remote) continue; // moved by the network (net/session.ts), never by this race
     // What the hazards just did: a car out of points blows up (the hazards ran first, so it happens in the same step).
     if (car.hp <= 0 && car.destroyedAt === null) explodeCar(race, car);
     let input = NO_INPUT;
@@ -573,7 +604,7 @@ export function stepRace(race: Race, playerInput: Input, dt: number, playerIsAi 
   }
   for (let i = 0; i < race.cars.length; i++)
     for (let j = i + 1; j < race.cars.length; j++) collide(race, race.cars[i], race.cars[j]);
-  for (const car of race.cars) updateProgress(race, car, dt);
+  for (const car of race.cars) if (!car.remote) updateProgress(race, car, dt);
 
   for (const s of race.skids) s.life -= dt * 0.25;
   race.skids = race.skids.filter((s) => s.life > 0).slice(-600);
@@ -608,6 +639,21 @@ function explodeCar(race: Race, car: Car) {
   if (race.blasts.length < 8) race.blasts.push({ id: ++race.blastCount, carId: car.id, x: car.pos.x, y: car.pos.y, time: race.time, power });
   if (power > 0.05 && race.cues.length < 16) race.cues.push({ kind: "explode", power });
   if (car.isPlayer && race.crashes.length < 16) race.crashes.push(1);
+}
+
+/**
+ * An online opponent's car blew up (its own game said so): the same wreck and blast the views draw for any car, with the sound as heard from
+ * here. `hp` and `destroyedAt` are set on this race's copy of the car; a car that already is destroyed is left alone.
+ */
+export function blastRemote(race: Race, car: Car) {
+  if (car.destroyedAt !== null) return;
+  car.destroyedAt = race.time;
+  car.hp = 0;
+  car.stun = 0;
+  car.alt = 0;
+  const d = len(sub(car.pos, race.cars[0].pos)), power = clamp(1 - d / 1400, 0, 1);
+  if (race.blasts.length < 8) race.blasts.push({ id: ++race.blastCount, carId: car.id, x: car.pos.x, y: car.pos.y, time: race.time, power });
+  if (power > 0.05 && race.cues.length < 16) race.cues.push({ kind: "explode", power });
 }
 
 export function standings(race: Race): Car[] {

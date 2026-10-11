@@ -7,6 +7,7 @@ import { type Disposer, type Quality, THREE, softDisc } from "./core";
 import { Ambient3D, Effects3D, Fireworks3D, Skids3D, SpeedLines3D, rgb } from "./effects";
 import { Blasts3D } from "./blasts";
 import { BearFx, VolcanoFx } from "./hazards3d";
+import { NameTags3D } from "./nametags";
 import { Pads3D } from "./pads";
 import { YetiFx } from "./yeti3d";
 
@@ -38,6 +39,7 @@ export class Gameplay3D {
   private bear: BearFx | null = null;
   private yeti: YetiFx | null = null;
   private blasts: Blasts3D;
+  private tags: NameTags3D | null = null;
   private ambient: Ambient3D;
   private lines: SpeedLines3D;
   private fireworks: Fireworks3D;
@@ -63,6 +65,7 @@ export class Gameplay3D {
       this.yeti = new YetiFx(d, scene, this.fx);
     }
     this.blasts = new Blasts3D(d, scene, this.fx);
+    if (adapter.race.cars.some((c) => c.remote)) this.tags = new NameTags3D(d, scene, adapter, a.cars); // online race: names over the other players
     this.ambient = new Ambient3D(d, scene, mode, quality);
     this.lines = new SpeedLines3D(d, a.camera);
     this.fireworks = new Fireworks3D(a.reduced);
@@ -96,6 +99,7 @@ export class Gameplay3D {
     this.yeti?.update(dt, a);
     this.blasts.update(dt, a);
     this.skids.update(race);
+    this.tags?.update(cam);
 
     race.cars.forEach((c, i) => {
       const v = a.cars[i], p = this.prev[i];
@@ -160,6 +164,7 @@ export class Gameplay3D {
   }
 
   dispose() {
+    this.tags?.dispose();
     this.pads.dispose();
     this.volcano?.dispose();
     this.bear?.dispose();

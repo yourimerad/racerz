@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { ProfileActions } from "@/game/actions";
 import { drawCarSprite } from "@/game/carArt";
 import {
@@ -8,11 +8,13 @@ import {
   STAT_RANGE, carStats, formatMoney, skinOf, skinsFor,
 } from "@/game/garage";
 import { stageChoice } from "@/game/garageView";
+import { INVITE_AT_LOAD, getNetState, getServerNetState, subscribeNet } from "@/game/net/client";
 import { formatTime } from "@/game/render";
 import { type ThemeId, THEMES, THEME_ORDER } from "@/game/themes";
 import AccountPanel from "./AccountPanel";
 import { ShowroomContext, Thumb, useShowroom } from "./GarageStage";
 import JetCard from "./JetCard";
+import Multiplayer from "./Multiplayer";
 import SoundButton from "./SoundButton";
 import styles from "./Game.module.css";
 
@@ -46,6 +48,8 @@ function StatBar({ label, stat, value }: { label: string; stat: StatKey; value: 
   );
 }
 
+const noSubscribe = () => () => undefined;
+
 type Props = {
   profile: Profile;
   actions: ProfileActions;
@@ -65,6 +69,12 @@ export default function Lobby({ profile, actions, mode, setMode, record, onStart
   const [focusCar, setFocusCar] = useState<ModelId | null>(null);
   const [hoverSkin, setHoverSkin] = useState<SkinId | null>(null);
   const choice = stageChoice(profile, { hoverCar, focusCar, hoverSkin });
+  // Online mode: the panel is open from the button, from a friend's invitation link, and for as long as a search or a room goes on.
+  const [mpOpen, setMpOpen] = useState(false);
+  const [inviteSeen, setInviteSeen] = useState(false);
+  const net = useSyncExternalStore(subscribeNet, getNetState, getServerNetState);
+  const invited = useSyncExternalStore(noSubscribe, () => INVITE_AT_LOAD !== null, () => false);
+  const showMp = mpOpen || (invited && !inviteSeen) || net.phase !== "idle";
   const shownSkin = skinOf(choice.model, choice.skin);
   useEffect(() => {
     room?.show(choice.model, skinOf(choice.model, choice.skin));
@@ -234,6 +244,7 @@ export default function Lobby({ profile, actions, mode, setMode, record, onStart
           </p>
           {record !== null && <p className={styles.sub}>Record du tour ({THEMES[mode].name}) : {formatTime(record)}</p>}
           <button className={styles.cta} onClick={onStart}>Démarrer (Entrée / Espace)</button>
+          <button className={`${styles.cta} ${styles.ghost}`} onClick={() => setMpOpen(true)}>🌐 Multijoueur : entre potes ou contre de vrais joueurs</button>
           <ul className={styles.help}>
             <li><kbd>↑</kbd>/<kbd>W</kbd>/<kbd>Z</kbd> accélérer · <kbd>↓</kbd>/<kbd>S</kbd> freiner · <kbd>←</kbd><kbd>→</kbd>/<kbd>A</kbd><kbd>Q</kbd><kbd>D</kbd> tourner · <kbd>Espace</kbd> frein à main</li>
             <li><kbd>Shift</kbd> (maintenu) voler, avec la Racerz Jet</li>
@@ -243,6 +254,7 @@ export default function Lobby({ profile, actions, mode, setMode, record, onStart
           </ul>
         </section>
       </div>
+      {showMp && <Multiplayer profile={profile} mode={mode} setMode={setMode} debug={debug} onClose={() => { setMpOpen(false); setInviteSeen(true); }} />}
     </div>
     </ShowroomContext.Provider>
   );

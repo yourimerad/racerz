@@ -191,7 +191,7 @@ function drawHud(ctx: CanvasRenderingContext2D, race: Race, w: number, h: number
   ctx.restore();
 }
 
-export function render(ctx: CanvasRenderingContext2D, race: Race, w: number, h: number) {
+export function render(ctx: CanvasRenderingContext2D, race: Race, w: number, h: number, online?: OnlineHud) {
   const { theme, scene, track } = race;
   const player = race.cars[0];
   const zoom = Math.min(w, h) / VIEW_SIZE;
@@ -288,14 +288,76 @@ export function render(ctx: CanvasRenderingContext2D, race: Race, w: number, h: 
   ctx.restore();
 
   theme.fx.screen?.(ctx, view);
-  drawOverlay(ctx, race, w, h);
+  drawOverlay(ctx, race, w, h, online);
+}
+
+/** What the online mode adds to the HUD (the game passes it each frame; solo passes nothing). */
+export type OnlineHud = {
+  /** Seconds to the shared green light while the race has not begun running yet (> 3), else null. */
+  startsIn: number | null;
+  /** Names of the opponents still racing after the local player has finished. */
+  waiting: string[];
+};
+
+/** Who is ahead, for a race with real players: position, colour, name; a car that is out is struck out. */
+function drawLeaderboard(ctx: CanvasRenderingContext2D, race: Race, y: number) {
+  const order = standings(race);
+  ctx.save();
+  ctx.font = "600 13px ui-monospace, monospace";
+  ctx.textBaseline = "middle";
+  ctx.textAlign = "left";
+  ctx.fillStyle = "rgba(0,0,0,0.45)";
+  ctx.beginPath();
+  ctx.roundRect(12, y, 210, order.length * 22 + 12, 10);
+  ctx.fill();
+  order.forEach((car, i) => {
+    const cy = y + 17 + i * 22, out = isDestroyed(car);
+    ctx.globalAlpha = out ? 0.5 : 1;
+    ctx.fillStyle = car.color;
+    ctx.beginPath();
+    ctx.arc(28, cy, 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = car.isPlayer ? "#ffd166" : "#fff";
+    const name = car.isPlayer ? "Toi" : car.name;
+    ctx.fillText(`${i + 1}. ${name.length > 20 ? `${name.slice(0, 19)}…` : name}`, 40, cy);
+    if (car.finishTime !== null && !out) {
+      ctx.textAlign = "right";
+      ctx.fillText("🏁", 212, cy);
+      ctx.textAlign = "left";
+    }
+  });
+  ctx.restore();
+}
+
+/** The online mode's messages: waiting for the shared start, and for the others once the local race is done. */
+function drawOnline(ctx: CanvasRenderingContext2D, online: OnlineHud, w: number, h: number) {
+  ctx.save();
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.lineWidth = 5;
+  ctx.strokeStyle = "rgba(0,0,0,0.6)";
+  ctx.fillStyle = "#fff";
+  if (online.startsIn !== null) {
+    ctx.font = "800 26px system-ui, sans-serif";
+    const text = `Départ avec les autres pilotes… ${Math.max(0, Math.ceil(online.startsIn - 3))}`;
+    ctx.strokeText(text, w / 2, h / 2 - 80);
+    ctx.fillText(text, w / 2, h / 2 - 80);
+  } else if (online.waiting.length) {
+    ctx.font = "700 18px system-ui, sans-serif";
+    const text = `Arrivée ! En attente de : ${online.waiting.join(", ")}`;
+    ctx.strokeText(text, w / 2, h - 90);
+    ctx.fillText(text, w / 2, h - 90);
+  }
+  ctx.restore();
 }
 
 /** The HUD over the world: minimap, race readouts, turbo gauge, the mode's own readouts (HP, alerts), the Jet's energy. Screen space. */
-function drawOverlay(ctx: CanvasRenderingContext2D, race: Race, w: number, h: number) {
+function drawOverlay(ctx: CanvasRenderingContext2D, race: Race, w: number, h: number, online?: OnlineHud) {
   const player = race.cars[0];
   const mapBottom = drawMinimap(ctx, race, w);
   drawHud(ctx, race, w, h);
+  if (race.cars.some((c) => c.remote)) drawLeaderboard(ctx, race, 190);
+  if (online) drawOnline(ctx, online, w, h);
   race.boost.drawHud(ctx, player, w, h);
   if (hasHealth(race.theme.id)) drawHealthHud(ctx, player, race.time, w, h);
   race.hazard?.drawHud?.(ctx, w, h);
@@ -306,9 +368,9 @@ function drawOverlay(ctx: CanvasRenderingContext2D, race: Race, w: number, h: nu
  * The same HUD alone, on a cleared (transparent) canvas: the 3D view draws the world in WebGL underneath and this canvas goes on top of it.
  * The 2D world is not drawn at all in this mode.
  */
-export function renderHud(ctx: CanvasRenderingContext2D, race: Race, w: number, h: number) {
+export function renderHud(ctx: CanvasRenderingContext2D, race: Race, w: number, h: number, online?: OnlineHud) {
   ctx.save();
   ctx.clearRect(0, 0, w, h);
-  drawOverlay(ctx, race, w, h);
+  drawOverlay(ctx, race, w, h, online);
   ctx.restore();
 }

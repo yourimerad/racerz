@@ -169,7 +169,7 @@ export function createYeti(track: Track, rng: Rng): YetiHazard {
     body.y = j.toY;
     body.angle = j.heading;
     for (const car of world.cars) {
-      if (isAirborne(car) || isDestroyed(car) || (invuln.get(car.id) ?? -1) > now) continue;
+      if (isAirborne(car) || isDestroyed(car) || car.remote || (invuln.get(car.id) ?? -1) > now) continue; // (an online opponent's own game decides what happens to it)
       if (Math.hypot(car.pos.x - j.toX, car.pos.y - j.toY) >= YETI.LAND_R + CAR_RADIUS) continue;
       if (hurt(car, YETI.DAMAGE, now) > 0) {
         j.hurt.add(car.id);

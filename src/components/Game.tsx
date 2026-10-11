@@ -11,9 +11,12 @@ import {
   SECRET_WORD, advanceSecretBuffer, debugModeFromUrl, getDebugMode, getDebugPanelOpen, getServerDebugMode, getServerDebugPanelOpen,
   setDebugMode, subscribeDebugMode, subscribeDebugPanel, toggleDebugMode, toggleDebugPanel,
 } from "@/game/debug";
+import { myId, netSession } from "@/game/net/client";
+import { NET } from "@/game/net/protocol";
+import type { RaceSync, StartInfo } from "@/game/net/session";
 import { type Race, createRace, stepRace, standings } from "@/game/race";
 import type { Renderer3D } from "@/game/render3d";
-import { formatTime, render, renderHud } from "@/game/render";
+import { type OnlineHud, formatTime, render, renderHud } from "@/game/render";
 import { type ThemeId, THEMES, THEME_ORDER } from "@/game/themes";
 import {
   type Profile, type RaceReport, DEBUG_PROFILE, formatMoney, getPlayerProfile, getServerPlayerProfile, savePlayerProfile, settleRace,
@@ -54,6 +57,9 @@ function drawLoading(ctx: CanvasRenderingContext2D, w: number, h: number, ground
 
 type Result = { name: string; color: string; time: number | null; isPlayer: boolean; /** The car blew up (no points left): it never finishes. */ destroyed: boolean };
 
+const resultsOf = (race: Race): Result[] =>
+  standings(race).map((c) => ({ name: c.name, color: c.color, time: c.finishTime, isPlayer: c.isPlayer, destroyed: isDestroyed(c) }));
+
 export default function Game() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   // The world is shown in 3D (render3d.ts): a WebGL canvas under the 2D canvas, which only draws the HUD. The 2D drawing (render.ts) stays as
@@ -63,6 +69,9 @@ export default function Game() {
   const r3dStatus = useRef<"loading" | "ready" | "failed">("loading");
   const [notice3d, setNotice3d] = useState<string | null>(null);
   const raceRef = useRef<Race | null>(null);
+  // An online race: the link with the other players (null in a solo race), and whether this race is one.
+  const syncRef = useRef<RaceSync | null>(null);
+  const [online, setOnline] = useState(false);
   const inputRef = useRef<Input>({ ...NO_INPUT });
   const [screen, setScreen] = useState<"menu" | "race" | "results">("menu");
   // The current race's car can fly (Racerz Jet): shows the touch "Vol" button.
@@ -131,27 +140,79 @@ export default function Game() {
     const p = isDebugRace ? debugProfileRef.current : getPlayerProfile();
     const car = p.cars[p.selected] ?? { level: 1, skin: "factory" as const };
     if (!isDebugRace && isSignedIn()) accountStartRace();
+    syncRef.current?.leave();
+    syncRef.current = null;
+    setOnline(false);
     raceRef.current = createRace(mode, { model: p.selected, skin: car.skin, level: car.level });
     setCanFly(raceRef.current.flight !== null);
     inputRef.current = { ...NO_INPUT };
     setScreen("race");
   }, [mode]);
 
+  // Online: the session says a game is about to start; every player builds the same race (same seed, same grid) and runs it on the shared clock.
+  const startOnline = useCallback((info: StartInfo) => {
+    const p = getPlayerProfile(); // the real profile: the online mode is closed to the debug one
+    const car = p.cars[p.selected] ?? { level: 1, skin: "factory" as const };
+    raceIsDebugRef.current = false;
+    if (isSignedIn()) accountStartRace();
+    syncRef.current?.leave();
+    syncRef.current = netSession().beginRace(info);
+    raceRef.current = createRace(info.mode, { model: p.selected, skin: car.skin, level: car.level }, info.seed, { players: info.players, localId: myId() });
+    setMode(info.mode);
+    setOnline(true);
+    setCanFly(raceRef.current.flight !== null);
+    inputRef.current = { ...NO_INPUT };
+    setScreen("race");
+  }, []);
+  useEffect(() => {
+    const session = netSession();
+    session.onStart(startOnline);
+    return () => session.onStart(() => undefined);
+  }, [startOnline]);
+
+  // Back from an online race: to the friends' room, or out of the queue. Says goodbye to the others first.
+  const leaveOnline = useCallback((alsoRoom = false) => {
+    syncRef.current?.leave();
+    syncRef.current = null;
+    const session = netSession();
+    if (alsoRoom) session.leave();
+    else session.raceOver();
+    setOnline(false);
+    setScreen("menu");
+  }, []);
+  useEffect(() => {
+    const bye = () => syncRef.current?.leave();
+    window.addEventListener("pagehide", bye);
+    return () => {
+      window.removeEventListener("pagehide", bye);
+      bye();
+    };
+  }, []);
+
   useEffect(() => {
     const set = (e: KeyboardEvent, down: boolean) => {
       // Typing in a form field (sign-in) must not drive the car or start a race.
       if ((e.target as HTMLElement | null)?.closest?.("input, textarea, select")) return;
+      // The online panel is open over the lobby: Enter, Space and the number keys act on its buttons, they do not start a solo race behind it.
+      if (screen === "menu" && document.querySelector("[data-mp]")) return;
       if (down && !e.repeat) {
         // Enter/Space start from the menu or results (Space is the handbrake while racing).
         if ((e.code === "Enter" || e.code === "Space") && screen !== "race") {
+          if (screen === "results" && online) {
+            e.preventDefault();
+            leaveOnline();
+            return;
+          }
+          if (netSession().getState().phase !== "idle") return; // the online panel is open: its own buttons answer
           e.preventDefault();
           start();
           return;
         }
-        if (e.code === "KeyR" && screen !== "menu") return start();
+        if (e.code === "KeyR" && screen !== "menu") return online ? undefined : start(); // an online race cannot be restarted
         if (debugMode && e.code === "KeyH") return toggleDebugPanel();
         const digit = /^(Digit|Numpad)([1-4])$/.exec(e.code);
-        if (digit && screen === "menu") return setMode(THEME_ORDER[Number(digit[2]) - 1]);
+        // While a search or a room is open, the lobby's number keys belong to the online panel.
+        if (digit && screen === "menu") return netSession().getState().phase === "idle" ? setMode(THEME_ORDER[Number(digit[2]) - 1]) : undefined;
         // Hidden unlock: typing "debug" toggles debug mode for the session, on any screen.
         secretBufferRef.current = advanceSecretBuffer(secretBufferRef.current, e.key);
         if (secretBufferRef.current === SECRET_WORD) {
@@ -180,14 +241,14 @@ export default function Game() {
       window.removeEventListener("blur", release);
       document.removeEventListener("visibilitychange", release);
     };
-  }, [screen, start, debugMode]);
+  }, [screen, start, debugMode, online, leaveOnline]);
 
   useEffect(() => {
     if (screen !== "race") return;
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext("2d");
     if (!canvas || !ctx) return;
-    let raf = 0, last = performance.now(), acc = 0, resultsShown = false;
+    let raf = 0, last = performance.now(), acc = 0, resultsShown = false, finishSeen = -1;
 
     const resize = () => {
       const dpr = window.devicePixelRatio || 1;
@@ -211,24 +272,34 @@ export default function Game() {
       }
       acc += Math.min(0.1, (now - last) / 1000);
       last = now;
-      while (acc >= STEP) {
-        stepRace(race, inputRef.current, STEP);
-        acc -= STEP;
+      const sync = syncRef.current;
+      if (sync && !sync.live()) acc = 0; // an online race waits for the shared start, then runs on the clock every player shares
+      else {
+        sync?.startClock(race);
+        while (acc >= STEP) {
+          sync?.apply(race);
+          stepRace(race, inputRef.current, STEP);
+          acc -= STEP;
+        }
+        sync?.sendSnapshot(race);
       }
+      const onlineHud: OnlineHud | undefined = sync
+        ? { startsIn: sync.live() ? null : sync.secondsToGo(), waiting: race.phase === "finished" ? sync.waitingFor(race) : [] }
+        : undefined;
       const r3 = r3dRef.current;
       if (r3) {
         // 3D: the world in WebGL (a picture of the race, nothing written back), the same HUD on the 2D canvas over it.
         try {
           r3.render(race, acc);
-          renderHud(ctx, race, canvas.clientWidth, canvas.clientHeight);
+          renderHud(ctx, race, canvas.clientWidth, canvas.clientHeight, onlineHud);
         } catch {
           r3dRef.current = null;
           r3dStatus.current = "failed";
           r3.dispose();
           setNotice3d("La vue 3D a rencontré un problème : le jeu passe en 2D.");
-          render(ctx, race, canvas.clientWidth, canvas.clientHeight);
+          render(ctx, race, canvas.clientWidth, canvas.clientHeight, onlineHud);
         }
-      } else render(ctx, race, canvas.clientWidth, canvas.clientHeight);
+      } else render(ctx, race, canvas.clientWidth, canvas.clientHeight, onlineHud);
 
       const me = race.cars[0];
       for (const power of race.crashes.splice(0)) sound.crash(power);
@@ -241,7 +312,10 @@ export default function Game() {
         });
       }
 
-      if (race.phase === "finished" && !resultsShown) {
+      // Online, the place waits until no rival who is still driving can have beaten our time (their games have reached the moment we finished),
+      // at most NET.SETTLE_MAX seconds: a slow machine's race can lag far behind the wall clock.
+      if (race.phase === "finished" && !resultsShown && sync && finishSeen < 0) finishSeen = now;
+      if (race.phase === "finished" && !resultsShown && (!sync || sync.settled(race) || now - finishSeen >= NET.SETTLE_MAX * 1000)) {
         resultsShown = true;
         const best = race.cars[0].bestLap;
         const id = race.theme.id;
@@ -275,9 +349,9 @@ export default function Game() {
         // Let the other cars run a bit before showing the podium.
         setTimeout(() => {
           if (raceRef.current !== race) return; // restarted with R meanwhile
-          setResults(standings(race).map((c) => ({ name: c.name, color: c.color, time: c.finishTime, isPlayer: c.isPlayer, destroyed: isDestroyed(c) })));
+          setResults(resultsOf(race));
           setScreen("results");
-        }, 2500);
+        }, sync ? 500 : 2500);
       }
       raf = requestAnimationFrame(frame);
     };
@@ -322,9 +396,18 @@ export default function Game() {
   useEffect(() => {
     // Behind the results the 3D scene keeps moving (the winner's fireworks, snow, flames): it is only drawn, the race is not stepped.
     if (screen !== "results") return;
-    let raf = 0;
-    const tick = () => {
-      const r3 = r3dRef.current, race = raceRef.current;
+    let raf = 0, listed = 0;
+    const tick = (now: number) => {
+      const r3 = r3dRef.current, race = raceRef.current, sync = syncRef.current;
+      if (sync && race) {
+        // Online: the others are still driving. Their cars keep moving behind the podium and their finishes complete the list.
+        sync.apply(race);
+        sync.sendSnapshot(race);
+        if (now - listed > 500) {
+          listed = now;
+          setResults(resultsOf(race));
+        }
+      }
       if (r3 && race) {
         try {
           r3.render(race, 0);
@@ -374,6 +457,9 @@ export default function Game() {
         </div>
       )}
       {debugMode && debugPanelOpen && <DebugPanel raceRef={raceRef} mode={mode} />}
+      {screen === "race" && online && (
+        <button type="button" className={styles.mpQuit} onClick={() => leaveOnline()}>Quitter la course</button>
+      )}
 
       {screen === "race" && (
         <div className={styles.touch} data-nosound>
@@ -406,8 +492,8 @@ export default function Game() {
           <h2 className={styles.title}>{results.some((r) => r.isPlayer && r.destroyed) ? "Voiture détruite" : report?.place === 1 ? "Victoire !" : "Arrivée"}</h2>
           <p>{THEMES[mode].emoji} {THEMES[mode].name}</p>
           <ol className={styles.podium}>
-            {results.map((r) => (
-              <li key={r.name} className={r.isPlayer ? styles.me : undefined}>
+            {results.map((r, i) => (
+              <li key={`${i}-${r.name}`} className={r.isPlayer ? styles.me : undefined}>
                 <span className={styles.dot} style={{ background: r.color }} />
                 <span>{r.name}</span>
                 <span>{r.destroyed ? "détruite" : r.time === null ? "en course" : formatTime(r.time)}</span>
@@ -433,9 +519,23 @@ export default function Game() {
             </div>
           )}
           {record !== null && <p>Record du tour ({THEMES[mode].name}) : {formatTime(record)}</p>}
+          {online && results.some((r) => !r.destroyed && r.time === null) && <p className={styles.sub}>Les autres pilotes terminent encore leur course…</p>}
           <div className={styles.actions}>
-            <button className={styles.cta} onClick={start}>Rejouer (Entrée)</button>
-            <button className={`${styles.cta} ${styles.ghost}`} onClick={() => setScreen("menu")}>Lobby / changer de mode</button>
+            {online ? (
+              <>
+                <button className={styles.cta} onClick={() => leaveOnline()}>
+                  {netSession().getState().kind === "friends" ? "Retour à la salle (Entrée)" : "Retour au lobby (Entrée)"}
+                </button>
+                {netSession().getState().kind === "friends" && (
+                  <button className={`${styles.cta} ${styles.ghost}`} onClick={() => leaveOnline(true)}>Quitter la salle</button>
+                )}
+              </>
+            ) : (
+              <>
+                <button className={styles.cta} onClick={start}>Rejouer (Entrée)</button>
+                <button className={`${styles.cta} ${styles.ghost}`} onClick={() => setScreen("menu")}>Lobby / changer de mode</button>
+              </>
+            )}
           </div>
         </div>
       )}

@@ -814,7 +814,7 @@ export class VolcanoHazards {
 
   private trySpawn(cars: readonly HzCar[]): boolean {
     // A flying car is never aimed at (its bomb would fall short anyway).
-    const grounded = cars.filter((c) => !isAirborne(c));
+    const grounded = cars.filter((c) => !isAirborne(c) && !c.remote); // an online opponent's own game aims its own bombs
     if (!grounded.length) return false;
     const players = grounded.filter((c) => this.A.isPlayer(c));
     const car = players.length && this.rng() < HZ.PLAYER_SHARE ? players[0] : grounded[Math.floor(this.rng() * grounded.length)];
@@ -848,7 +848,7 @@ export class VolcanoHazards {
     this.pools.push({ id: this.nextId++, x: tg.x, y: tg.y, age: 0, shape: Array.from({ length: 9 }, () => this.R(0.85, 1.15)) });
     for (const car of cars) {
       const p = this.A.pos(car), s = this.st(car);
-      if (s.invuln <= 0 && !isAirborne(car) && !isDestroyed(car) && Math.hypot(p.x - tg.x, p.y - tg.y) < HZ.TARGET_R + this.A.radius(car)) {
+      if (s.invuln <= 0 && !isAirborne(car) && !isDestroyed(car) && !car.remote && Math.hypot(p.x - tg.x, p.y - tg.y) < HZ.TARGET_R + this.A.radius(car)) {
         const before = car.hp;
         this.damage(car, HZ.BOMB_DAMAGE, false);
         if (before > 0) {
@@ -861,7 +861,7 @@ export class VolcanoHazards {
   }
 
   damage(car: HzCar, amount: number, small: boolean) {
-    if (car.hp <= 0) return;
+    if (car.hp <= 0 || car.remote) return; // an online opponent's points are its own game's business
     hurt(car, amount, this.raceTime);
     const p = this.A.pos(car);
     this.popups.push({ x: p.x + 10, y: p.y - 20, text: "-" + amount, size: small ? 15 : 26, age: 0 });

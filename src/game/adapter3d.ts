@@ -195,7 +195,8 @@ export class Adapter3D {
         v.wing = look.wing;
         v.flame = look.flame;
       } else {
-        v.wing = 0;
+        // An online opponent's Jet: its wings follow its altitude (the flight state itself lives in its own player's game).
+        v.wing = c.remote && c.model === "jet" ? clamp(c.alt / 20, 0, 1) : 0;
         v.flame = 0;
       }
     }
