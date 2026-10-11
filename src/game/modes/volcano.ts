@@ -587,16 +587,18 @@ export const HZ_SCALE = 40 / 28;
 
 export const HZ = {
   BOMB_DAMAGE: 20, POOL_DPS: 5, POOL_LIFE: 9, POOL_RADIUS: 24,
-  TARGET_R: 20, // target radius = real radius of the hit (the car's own radius is added: any part of the car inside the ring is hit)
+  TARGET_R: 25, // target radius = real radius of the hit (the car's own radius is added: any part of the car inside the ring is hit)
   WARN_TIME: 1.5, FALL_TIME: 0.6, MAX_TARGETS: 3,
-  SPAWN_MIN: 1.2, SPAWN_MAX: 2.0,
-  ACTIVE_FROM: 2.2, ACTIVE_TO: 7.0, // window within the eruption cycle (s)
+  SPAWN_MIN: 1.1, SPAWN_MAX: 2.0,
+  ACTIVE_FROM: 2.0, ACTIVE_TO: 7.6, // window within the eruption cycle (s)
   NO_HAZARD_FIRST: 8, SAFE_FINISH_DIST: 150,
   MIN_SPAWN_DIST: 90, AHEAD_MIN: 120, AHEAD_MAX: 320,
   INVULN: 1.0, HIT_SLOW: 0.6,
   // Added for this game's speeds (design units; cars here are several times faster than in the 680 × 460 prototype):
   /** Share of targets aimed at the player (the others at any car). */
-  PLAYER_SHARE: 0.7,
+  PLAYER_SHARE: 0.9,
+  /** A target aimed at the player lands on the lane it drives in (this share of its offset from the centre line, give or take LANE_JITTER of the road's half width) — a random lane let it simply stay clear. */
+  LANE_FOLLOW: 0.8, LANE_JITTER: 0.12,
   /** A target is aimed where the car will be when the bomb lands: at least AHEAD_MIN..AHEAD_MAX ahead, further when it goes fast, never beyond this. */
   AIM_MAX: 640, AIM_SPREAD: [0.85, 1.1] as readonly [number, number],
   /** Bots: slow to this share of their limit when a target is within `AI_RANGE` ahead (+ `AI_LOOKAHEAD` s of their speed) and steer round it with this margin. */
@@ -607,7 +609,7 @@ export const HZ = {
 
 /** The world's way into the hazard code. */
 type HzCar = HazardWorld["cars"][number];
-type HzRoadPoint = { x: number; y: number; nx: number; ny: number; halfWidth: number };
+type HzRoadPoint = { x: number; y: number; nx: number; ny: number; halfWidth: number; /** The car's own offset from the centre line (along nx, ny), design units. */ lateral: number };
 type HzAdapter = {
   pos(car: HzCar): { x: number; y: number };
   radius(car: HzCar): number;
@@ -822,7 +824,10 @@ export class VolcanoHazards {
     const ahead = Math.min(HZ.AIM_MAX, Math.max(this.R(HZ.AHEAD_MIN, HZ.AHEAD_MAX), reach));
     const rp = this.A.roadAhead(car, ahead);
     if (!rp) return false;
-    const off = this.R(-0.5, 0.5) * rp.halfWidth;
+    const aimed = this.A.isPlayer(car);
+    const off = aimed
+      ? Math.max(-0.8, Math.min(0.8, (rp.lateral / rp.halfWidth) * HZ.LANE_FOLLOW + this.R(-HZ.LANE_JITTER, HZ.LANE_JITTER))) * rp.halfWidth
+      : this.R(-0.5, 0.5) * rp.halfWidth;
     const x = rp.x + rp.nx * off, y = rp.y + rp.ny * off;
     if (this.A.nearFinish(x, y) || this.A.nearPad(x, y)) return false;
     for (const c of cars) {
@@ -1128,7 +1133,9 @@ export function createVolcano(track: Track, rng: Rng): VolcanoHazard {
       }
       const p = track.path[i], t = track.tangents[i];
       if (this.nearFinish(p.x / S, p.y / S)) return null;
-      return { x: p.x / S, y: p.y / S, nx: -t.y, ny: t.x, halfWidth: track.width / 2 / S };
+      const q = track.path[car.lastIndex], tq = track.tangents[car.lastIndex];
+      const lateral = ((car.pos.x - q.x) * -tq.y + (car.pos.y - q.y) * tq.x) / S;
+      return { x: p.x / S, y: p.y / S, nx: -t.y, ny: t.x, halfWidth: track.width / 2 / S, lateral };
     },
     scaleSpeedOnce: (car, f) => {
       car.vel = { x: car.vel.x * f, y: car.vel.y * f };

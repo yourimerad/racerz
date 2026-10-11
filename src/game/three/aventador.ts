@@ -23,16 +23,23 @@ const lin = (keys: [number, number][]) => (x: number) => {
 export const X0 = -2.34, X1 = 2.32;
 /** Underside height, half width at the sill, half width and height at the shoulder (the beltline; the widest point). */
 const yb = lin([[-2.34, 0.3], [-2.22, 0.18], [-2.0, 0.12], [2.0, 0.11], [2.32, 0.15]]);
-const hs = lin([[-2.34, 0.6], [-2.0, 0.8], [-1.5, 0.9], [-0.8, 0.86], [0.6, 0.86], [1.28, 0.87], [1.9, 0.74], [2.32, 0.56]]);
+const hs = lin([[-2.34, 0.7], [-2.0, 0.94], [-1.5, 0.99], [-0.8, 0.88], [0.6, 0.86], [1.28, 0.87], [1.9, 0.74], [2.32, 0.56]]);
 const hsh = lin([[-2.34, 0.74], [-2.2, 0.9], [-1.9, 1.0], [-1.28, 1.02], [-0.6, 0.99], [0.2, 0.96], [1.28, 0.95], [1.7, 0.9], [2.0, 0.8], [2.32, 0.64]]);
-const ysh = lin([[-2.34, 0.72], [-2.22, 0.84], [-1.9, 0.9], [-1.5, 0.91], [-1.0, 0.88], [-0.3, 0.83], [0.4, 0.78], [0.95, 0.76], [1.3, 0.74], [1.9, 0.58], [2.32, 0.45]]);
+const ysh = lin([[-2.34, 0.8], [-2.22, 0.88], [-1.9, 0.92], [-1.5, 0.91], [-1.0, 0.88], [-0.3, 0.83], [0.4, 0.78], [0.95, 0.76], [1.3, 0.74], [1.9, 0.58], [2.32, 0.45]]);
 const CROWN = 0.02, DECK = 0.045, TUMBLE = 0.07;
+/**
+ * How far (m) the deck's edge sits inside the shoulder at x. Beside the cockpit it is the flat shelf it always was; behind the headrests it
+ * tapers hard, so the engine cover is narrow between the wide rear haunches, as on the real car (seen from behind the body is a pyramid: the
+ * wide base — haunches and tyres — under a narrow back). A deck as wide as the haunches made it a slab wider at the top than at the bottom,
+ * which from the chase camera read as a car upside down.
+ */
+const tum = lin([[-2.34, 0.3], [-1.9, 0.3], [-1.3, 0.26], [-0.85, 0.12], [-0.6, TUMBLE]]);
 /** How far the flank is carved in (m) at x, under the shoulder: the scoop behind the door and the waist at the door. */
 const waist = lin([[-2.0, 0], [-1.6, 0.05], [-0.8, 0.09], [-0.3, 0.06], [0.4, 0.05], [1.0, 0.03], [1.5, 0]]);
 
 /** One section of the body (right half, bottom centre → top centre): belly, sill, the flank in 6 steps, shoulder, deck edge, the deck in 5. */
 function ring(x: number): Ring {
-  const y0 = yb(x), s = hs(x), h = hsh(x), ys = ysh(x), hd = h - TUMBLE, yd = ys + DECK, ysill = y0 + 0.13;
+  const y0 = yb(x), s = hs(x), h = hsh(x), ys = ysh(x), tm = tum(x), hd = h - tm, yd = ys + DECK + (tm - TUMBLE) * 0.45, ysill = y0 + 0.13;
   const r: Ring = [[0, y0], [s - 0.07, y0], [s, ysill]];
   const carve = waist(x);
   for (let i = 1; i <= 5; i++) r.push([s + ((h - s) * i) / 6 - carve * Math.sin((Math.PI * i) / 6), ysill + ((ys - ysill) * i) / 6]);
@@ -99,7 +106,7 @@ export function buildAventador(kit: Kit): Parts {
   wheelWells(kit, g, WHEEL, GAP, (x) => hsh(x) - 0.01);
   const wheels = addWheels(kit, g, WHEEL);
 
-  const grille = hexGrille(d, 9);
+  const grille = hexGrille(d, 9, "#646a74");
   const dark = decalMaterial(kit, { color: "#07080a", roughness: 0.9 });
   const mesh2 = decalMaterial(kit, { color: "#ffffff", roughness: 0.55, metalness: 0.5, ...(grille ? { map: grille } : { color: "#15171b" }) });
   const carbon = decalMaterial(kit, { color: "#15171b", roughness: 0.4, metalness: 0.4 });
@@ -109,6 +116,8 @@ export function buildAventador(kit: Kit): Parts {
   const seam = decalMaterial(kit, { color: "#040405", roughness: 1 });
   const tub = d.add(new THREE.MeshStandardMaterial({ color: "#0b0c0e", roughness: 0.95, side: THREE.BackSide }));
   const trim = kit.trim, ysd = (x: number) => ysh(x) + DECK;
+  /** The height of the engine cover's edge at x (the deck rises as it tapers). */
+  const ysdr = (x: number) => ysd(x) + (tum(x) - TUMBLE) * 0.45;
 
   // ---- the cockpit: a tub under the opening, a dashboard and its hood, a tunnel, two bucket seats, a steering wheel and the driver ----
   const tubBox = mesh(kit, new THREE.BoxGeometry(CABIN[1] - CABIN[0], 0.5, 1.08), tub, false);
@@ -158,7 +167,7 @@ export function buildAventador(kit: Kit): Parts {
   const finGeo = d.add(new THREE.ExtrudeGeometry(finShape, { depth: 0.04, bevelEnabled: false }));
   for (const s of [-1, 1]) {
     const fin = new THREE.Mesh(finGeo, kit.paint);
-    fin.position.set(0, ysd(-1.5) - 0.02, s * 0.55 - 0.02);
+    fin.position.set(0, ysdr(-1.5) - 0.03, s * 0.55 - 0.02);
     fin.castShadow = true;
     g.add(fin);
   }
@@ -204,7 +213,7 @@ export function buildAventador(kit: Kit): Parts {
   for (let i = -3; i <= 3; i++) g.add(box(kit, 0.5, 0.12, 0.014, -2.18, 0.2, i * 0.15, trim));
 
   // The wing: an airfoil of carbon between small end plates, on two pylons.
-  const chord = 0.44, span = 1.84, wy = 1.1, wx = -2.2;
+  const chord = 0.44, span = 1.84, wy = 1.14, wx = -2.2;
   const foil = new THREE.Shape();
   [[0.5, 0], [0.42, 0.045], [0.2, 0.075], [-0.1, 0.07], [-0.5, 0.03], [-0.5, 0.0], [-0.1, -0.01], [0.2, -0.014], [0.42, -0.01]].forEach(([a, b], i) => (i ? foil.lineTo(a * chord, b * chord) : foil.moveTo(a * chord, b * chord)));
   foil.closePath();
@@ -223,7 +232,7 @@ export function buildAventador(kit: Kit): Parts {
     pm.position.set(wx, wy, s * (span / 2));
     pm.castShadow = true;
     g.add(pm);
-    g.add(bar(kit, [wx + 0.2, ysd(-1.95) + 0.02, s * 0.46], [wx + 0.02, wy - 0.02, s * 0.46], 0.05, 0.07, trim, true));
+    g.add(bar(kit, [wx + 0.2, ysdr(-1.95) + 0.02, s * 0.46], [wx + 0.02, wy - 0.02, s * 0.46], 0.05, 0.07, trim, true));
   }
 
   // number plates, and the turbo flame out of the back
