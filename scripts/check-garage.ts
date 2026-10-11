@@ -8,7 +8,8 @@
 //   (c) the cache: the least recently used car goes first, never the one on the stage, everything it drops is freed;
 //   (d) the Jet's wing demo (open 3 s, folded 3 s) and the no-motion setting;
 //   (e) the stage's own geometry is finite, small, and `dispose` frees all of it; every car in every paint the lobby can show builds and is freed;
-//   (f) the Bugatti Chiron: its place and price in the shop (and the SQL's, for every car), its bars, its paints, buying it, its 3D build.
+//   (f) the Bugatti La Voiture Noire (it replaced the Chiron): its place and price in the shop (and the SQL's, for every car), its bars, its black
+//       paint, buying it, its 3D build (size, six exhausts, no wing).
 
 import { MODEL_ORDER, MODELS, NEW_PROFILE, SKINS, SKIN_ORDER, STAT_RANGE, buyCar, carStats, skinFits, skinOf, skinsFor, type ModelId, type Profile } from "../src/game/garage";
 import { readFileSync } from "node:fs";
@@ -221,42 +222,44 @@ console.log("3D garage checks\n");
   console.log(`  stage: ${Math.round(tris)} triangles, finite, freed; ${n} (car, paint) pairs build and are freed`);
 }
 
-// ---------- (f) the Bugatti Chiron ----------
+// ---------- (f) the Bugatti La Voiture Noire ----------
 {
-  const c = MODELS.chiron;
-  check(c.id === "chiron" && c.name === "Bugatti Chiron" && c.price === 300_000, "the Chiron's id / name / price");
-  const at = MODEL_ORDER.indexOf("chiron");
-  check(at === MODEL_ORDER.indexOf("f8") + 1 && at === MODEL_ORDER.indexOf("jet") - 1, "the Chiron comes right after the F8 and right before the Jet in the shop");
-  check(c.price > MODELS.f8.price && c.price < MODELS.jet.price, "the Chiron's price sits between the F8's and the Jet's");
+  const c = MODELS.voiturenoire;
+  check(c.id === "voiturenoire" && c.name === "Bugatti La Voiture Noire" && c.price === 300_000, "La Voiture Noire's id / name / price");
+  check(!("chiron" in MODELS) && !MODEL_ORDER.some((id) => (id as string) === "chiron"), "the Chiron is gone: La Voiture Noire replaced it");
+  const at = MODEL_ORDER.indexOf("voiturenoire");
+  check(at === MODEL_ORDER.indexOf("f8") + 1 && at === MODEL_ORDER.indexOf("jet") - 1, "La Voiture Noire comes right after the F8 and right before the Jet in the shop");
+  check(c.price > MODELS.f8.price && c.price < MODELS.jet.price, "La Voiture Noire's price sits between the F8's and the Jet's");
   // Faster and quicker than the F8 and planted where the F8 slides; out of the scale, so no other car's bars moved.
-  const f8 = carStats("f8", 1), ch = carStats("chiron", 1);
-  check(ch.speed > f8.speed && ch.accel > f8.accel && ch.grip > f8.grip, "the Chiron is not above the F8 on every stat");
-  check(!!c.hypercar && !c.flying, "the Chiron is a hypercar that does not fly");
+  const f8 = carStats("f8", 1), vn = carStats("voiturenoire", 1);
+  check(vn.speed > f8.speed && vn.accel > f8.accel && vn.grip > f8.grip, "La Voiture Noire is not above the F8 on every stat");
+  check(!!c.hypercar && !c.flying, "La Voiture Noire is a hypercar that does not fly");
   const old = { speed: { min: 0.944416, max: 1.4632 }, accel: { min: 0.92188, max: 1.651 }, grip: { min: 0.74, max: 1.3 } };
   for (const k of ["speed", "accel", "grip"] as const) {
     near(`STAT_RANGE.${k}.min`, STAT_RANGE[k].min, old[k].min, 1e-6);
     near(`STAT_RANGE.${k}.max`, STAT_RANGE[k].max, old[k].max, 1e-6);
   }
   const bar = (k: "speed" | "accel" | "grip", v: number) => ((v - STAT_RANGE[k].min) / (STAT_RANGE[k].max - STAT_RANGE[k].min)) * 100;
-  near("Chiron bar: speed", bar("speed", ch.speed), 80, 1);
-  near("Chiron bar: accel", bar("accel", ch.accel), 72, 1);
-  near("Chiron bar: grip", bar("grip", ch.grip), 46, 1);
-  // Buying it, with and without the money; the paints it can wear.
+  near("Voiture Noire bar: speed", bar("speed", vn.speed), 80, 1);
+  near("Voiture Noire bar: accel", bar("accel", vn.accel), 72, 1);
+  near("Voiture Noire bar: grip", bar("grip", vn.grip), 46, 1);
+  // Buying it, with and without the money; the paints it can wear (a profile that still holds the old Chiron simply loses that entry).
   const poor: Profile = { ...NEW_PROFILE, money: 299_999 }, rich: Profile = { ...NEW_PROFILE, money: 300_000 };
-  check(buyCar(poor, "chiron") === poor, "bought the Chiron with 299 999 €");
-  const bought = buyCar(rich, "chiron");
-  check(bought.money === 0 && bought.selected === "chiron" && !!bought.cars.chiron && bought.cars.chiron.skin === "factory", "buying the Chiron");
-  check(skinOf("chiron", "factory").name === "Bleu Bugatti" && skinOf("chiron", "factory").accent === "#0b0b0e", "the Chiron's factory paint");
-  check(skinsFor("chiron").length === 8 && skinsFor("chiron").every((id) => id === "factory" || !SKINS[id].jet), "the Chiron wears the shared skins and none of the Jet's");
-  check(!skinFits("chiron", "jetGold") && skinFits("chiron", "gold") && !skinFits("jet", "gold"), "skin fit around the Chiron");
+  check(buyCar(poor, "voiturenoire") === poor, "bought La Voiture Noire with 299 999 €");
+  const bought = buyCar(rich, "voiturenoire");
+  check(bought.money === 0 && bought.selected === "voiturenoire" && !!bought.cars.voiturenoire && bought.cars.voiturenoire.skin === "factory", "buying La Voiture Noire");
+  const paint = skinOf("voiturenoire", "factory");
+  check(paint.name === "Noir carbone" && paint.body === "#0a0a0c" && paint.accent === "#2d3036", "La Voiture Noire's factory paint is black");
+  check(skinsFor("voiturenoire").length === 8 && skinsFor("voiturenoire").every((id) => id === "factory" || !SKINS[id].jet), "La Voiture Noire wears the shared skins and none of the Jet's");
+  check(!skinFits("voiturenoire", "jetGold") && skinFits("voiturenoire", "gold") && !skinFits("jet", "gold"), "skin fit around La Voiture Noire");
   // The SQL prices every car like the game does (a drift here would let the server refuse a purchase, or sell it for less).
   const sql = readFileSync(new URL("../supabase/schema.sql", import.meta.url), "utf8");
   const fn = sql.slice(sql.indexOf("function public.racerz_car_price"), sql.indexOf("function public.racerz_skin_price"));
   const prices = new Map([...fn.matchAll(/when '(\w+)' then (\d+)/g)].map((m) => [m[1], Number(m[2])]));
   for (const id of MODEL_ORDER) check(prices.get(id) === MODELS[id].price, `SQL price of ${id}: ${prices.get(id)} (game ${MODELS[id].price})`);
-  check(prices.size === MODEL_ORDER.length, `the SQL prices ${prices.size} cars, the game has ${MODEL_ORDER.length}`);
+  check(prices.size === MODEL_ORDER.length && !prices.has("chiron"), `the SQL prices ${prices.size} cars, the game has ${MODEL_ORDER.length}`);
   // The model builds into finite geometry of a sensible size, in its factory paint and in the shop's.
-  const base = liveResources(), d = new Disposer(), view = { ...blankView("chiron") }, car = new Car3D(d, view, null);
+  const base = liveResources(), d = new Disposer(), view = { ...blankView("voiturenoire") }, car = new Car3D(d, view, null);
   car.update(view, 1 / 60, 1); // (hides the turbo flame, which is not part of the car's size)
   let tris = 0, badV = 0;
   car.group.traverse((o) => {
@@ -266,9 +269,9 @@ console.log("3D garage checks\n");
     tris += (m.geometry.index ? m.geometry.index.count : pos.count) / 3;
     for (let i = 0; i < pos.count * 3; i++) if (!Number.isFinite((pos.array as ArrayLike<number>)[i])) badV++;
   });
-  check(badV === 0, `${badV} non-finite vertices in the Chiron`);
-  check(tris > 3000 && tris < 120_000, `the Chiron has ${Math.round(tris)} triangles`);
-  // (Only what is visible: the hidden turbo flame is not part of the car's size.)
+  check(badV === 0, `${badV} non-finite vertices in La Voiture Noire`);
+  check(tris > 3000 && tris < 120_000, `La Voiture Noire has ${Math.round(tris)} triangles`);
+  // (Only what is visible: the hidden turbo flame is not part of the car's size.) No wing: nothing stands above the roof but the dorsal fin.
   const box = new THREE.Box3();
   car.group.updateMatrixWorld(true);
   const visit = (o: THREE.Object3D) => {
@@ -282,10 +285,32 @@ console.log("3D garage checks\n");
   };
   visit(car.group);
   const size = box.getSize(new THREE.Vector3());
-  check(size.x > 4.2 && size.x < 4.9 && size.z > 1.9 && size.z < 2.3 && size.y > 1.1 && size.y < 1.4, `the Chiron measures ${size.x.toFixed(2)} × ${size.z.toFixed(2)} × ${size.y.toFixed(2)} m (about 4.4 × 2.04 × 1.2)`);
+  check(size.x > 4.4 && size.x < 5.1 && size.z > 1.9 && size.z < 2.3 && size.y > 1.1 && size.y < 1.35, `La Voiture Noire measures ${size.x.toFixed(2)} × ${size.z.toFixed(2)} × ${size.y.toFixed(2)} m (about 4.5 × 2.04 × 1.2)`);
+  // Six exhaust tips in two rows of three, centred; a dorsal fin along the middle (a thin mesh on the centre line); no wing blade across the tail.
+  const tips = new Set<string>();
+  const tipPositions: THREE.Vector3[] = [];
+  car.group.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh || !(m.geometry instanceof THREE.CylinderGeometry)) return;
+    const p = m.position;
+    if (p.x < -2.3 && p.y > 0.4 && p.y < 0.7 && !tips.has(`${p.y.toFixed(2)}/${p.z.toFixed(2)}`)) {
+      tips.add(`${p.y.toFixed(2)}/${p.z.toFixed(2)}`);
+      tipPositions.push(p.clone());
+    }
+  });
+  check(tips.size === 6, `${tips.size} exhaust tips at the tail (expected 6)`);
+  check(new Set(tipPositions.map((p) => p.y.toFixed(2))).size === 2 && tipPositions.every((p) => Math.abs(p.z) <= 0.21), "the six exhaust tips are two centred rows");
+  let wide = 0;
+  car.group.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh || !m.visible) return;
+    const bb = new THREE.Box3().setFromObject(m), s = bb.getSize(new THREE.Vector3());
+    if (bb.min.y > 0.95 && bb.max.x < -1.9 && s.z > 1.2) wide++; // a blade over the tail
+  });
+  check(wide === 0, "something wide stands over the tail: a wing, which La Voiture Noire does not have");
   d.dispose();
-  check(liveResources() === base, `${liveResources() - base} resources alive after the Chiron was freed`);
-  console.log(`  Chiron: 300 000 €, bars 80 / 72 / 46, SQL prices match for all ${MODEL_ORDER.length} cars, ${Math.round(tris)} triangles, ${size.x.toFixed(2)} × ${size.z.toFixed(2)} × ${size.y.toFixed(2)} m`);
+  check(liveResources() === base, `${liveResources() - base} resources alive after La Voiture Noire was freed`);
+  console.log(`  La Voiture Noire: 300 000 €, black, bars 80 / 72 / 46, SQL prices match for all ${MODEL_ORDER.length} cars, six exhausts, no wing, ${Math.round(tris)} triangles, ${size.x.toFixed(2)} × ${size.z.toFixed(2)} × ${size.y.toFixed(2)} m`);
 }
 
 if (failed) {

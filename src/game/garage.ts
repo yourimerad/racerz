@@ -3,7 +3,7 @@
 // is signed in (see account.ts) the account's profile replaces it, and localStorage is left
 // untouched as the guest save.
 
-export type ModelId = "gt" | "mx5" | "p911" | "aventador" | "f8" | "chiron" | "jet";
+export type ModelId = "gt" | "mx5" | "p911" | "aventador" | "f8" | "voiturenoire" | "jet";
 export type SkinId =
   | "factory" | "pearl" | "electric" | "mantis" | "arancio" | "stripes" | "carbon" | "gold"
   | "jetSky" | "jetSunset" | "jetCamo" | "jetCarbon" | "jetNight" | "jetGold";
@@ -55,10 +55,10 @@ export const MODELS: Record<ModelId, CarModel> = {
     id: "f8", name: "Ferrari F8 Spider", tagline: "La plus rapide, mais glissante", price: 150_000, speed: 1.24, accel: 1.3, grip: 0.8,
     factory: { name: "Rosso Corsa", body: "#d40000", accent: "#8a0000" },
   },
-  // The Bugatti Chiron: French racing blue over exposed carbon. Faster and quicker than the F8 and, unlike it, planted (bars 80 / 72 / 46 at level 1).
-  chiron: {
-    id: "chiron", name: "Bugatti Chiron", tagline: "Hypercar : vitesse et stabilité", price: 300_000, speed: 1.36, accel: 1.45, grip: 1.0,
-    factory: { name: "Bleu Bugatti", body: "#0c3ab0", accent: "#0b0b0e" }, hypercar: true,
+  // The Bugatti La Voiture Noire ("the black car"), all black. Faster and quicker than the F8 and, unlike it, planted (bars 80 / 72 / 46 at level 1).
+  voiturenoire: {
+    id: "voiturenoire", name: "Bugatti La Voiture Noire", tagline: "Hypercar noire : vitesse et stabilité", price: 300_000, speed: 1.36, accel: 1.45, grip: 1.0,
+    factory: { name: "Noir carbone", body: "#0a0a0c", accent: "#2d3036" }, hypercar: true,
   },
   // Speed / accel / grip are set so the garage bars read 92 / 85 / 70 at level 1 on the existing scale (STAT_RANGE below).
   jet: {
@@ -66,7 +66,7 @@ export const MODELS: Record<ModelId, CarModel> = {
     factory: { name: "Blanc et rouge", body: "#f2f6fa", accent: "#d63a2f" }, flying: true,
   },
 };
-export const MODEL_ORDER: ModelId[] = ["gt", "mx5", "p911", "aventador", "f8", "chiron", "jet"];
+export const MODEL_ORDER: ModelId[] = ["gt", "mx5", "p911", "aventador", "f8", "voiturenoire", "jet"];
 
 /** The Jet's own flight bar in the garage, out of 100. */
 export const FLY_BAR = 100;
@@ -135,7 +135,7 @@ export type StatKey = "speed" | "accel" | "grip";
 /**
  * Display range per stat, derived from MODELS: from the weakest base car (level 1) to the
  * strongest at MAX_LEVEL, with a small margin below so the weakest value stays visible.
- * The flying Jet and the Chiron are left out, so adding them did not move any other car's bars.
+ * The flying Jet and La Voiture Noire are left out, so adding them did not move any other car's bars.
  */
 export const STAT_RANGE: Record<StatKey, { min: number; max: number }> = (() => {
   const ids = (Object.keys(MODELS) as ModelId[]).filter((id) => !MODELS[id].flying && !MODELS[id].hypercar);

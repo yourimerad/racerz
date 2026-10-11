@@ -92,7 +92,7 @@ export class Orbit {
 /** Half the length of the car, rounded up (a turntable turns it, so this is the radius that must fit); the Jet's wings add to it as they open. */
 export function carRadius(model: ModelId, wing = 0): number {
   if (model === "jet") return 2.9 + 1.0 * clamp(wing, 0, 1);
-  return model === "aventador" ? 2.55 : 2.4;
+  return model === "aventador" || model === "voiturenoire" ? 2.55 : 2.4;
 }
 
 /** The wings' opening at `t` seconds for the Jet on the stage: open for 3 s, folded for 3 s, and so on; 0 for a screen that asks for no motion. */
