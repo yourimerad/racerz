@@ -58,9 +58,11 @@ type Props = {
   record: number | null;
   onStart: () => void;
   debug: boolean;
+  /** Debug mode: starts the saved debug profile over (1 000 000 €, the factory car). */
+  onResetDebug: () => void;
 };
 
-export default function Lobby({ profile, actions, mode, setMode, record, onStart, debug }: Props) {
+export default function Lobby({ profile, actions, mode, setMode, record, onStart, debug, onResetDebug }: Props) {
   const selected = profile.cars[profile.selected];
   const stageRef = useRef<HTMLDivElement>(null);
   const { room, failed } = useShowroom(stageRef);
@@ -106,6 +108,16 @@ export default function Lobby({ profile, actions, mode, setMode, record, onStart
           <div className={styles.money}>
             💰 {formatMoney(profile.money)}
             {debug && <span className={styles.debugBadge}>DEBUG</span>}
+            {debug && (
+              <button
+                type="button"
+                className={styles.linkBtn}
+                title="Remettre le profil debug à 1 000 000 € et sans voiture achetée"
+                onClick={() => window.confirm("Remettre le profil debug à 1 000 000 € et sans voiture achetée ?") && onResetDebug()}
+              >
+                remettre à zéro
+              </button>
+            )}
           </div>
         </div>
       </header>

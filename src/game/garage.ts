@@ -1,5 +1,5 @@
 // Player progression: cars, skins, race payouts and upgrade tiers ("paliers").
-// The player profile is persisted to localStorage (debug mode's profile is not). When the player
+// The player profile is persisted to localStorage; debug mode's profile is saved too, under its own key (it never mixes with the player's). When the player
 // is signed in (see account.ts) the account's profile replaces it, and localStorage is left
 // untouched as the guest save.
 
@@ -247,6 +247,7 @@ export function parseProfile(raw: unknown): Profile {
 }
 
 const STORAGE_KEY = "racerz.profile.v1";
+const DEBUG_STORAGE_KEY = "racerz.debug-profile.v1";
 
 function readStoredProfile(): Profile {
   if (typeof window === "undefined") return NEW_PROFILE;
@@ -312,6 +313,7 @@ if (typeof window !== "undefined") {
       cachedPlayerProfile = null;
       notifyProfile();
     }
+    if (e.key === DEBUG_STORAGE_KEY) invalidateDebugProfile();
   });
 }
 
@@ -328,6 +330,63 @@ export function savePlayerProfile(p: Profile) {
   } else {
     cachedPlayerProfile = p;
     writeStoredProfile(p);
+  }
+  notifyProfile();
+}
+
+// ---------- the debug profile ----------
+// Debug mode plays with its own profile, saved under its own key so a purchase survives a reload (buy the Bugatti with the million, reload, the
+// car is still there and the balance is 700 000 €). It never touches the player's profile nor the account; `resetDebugProfile` starts it over.
+
+function readStoredDebugProfile(): Profile {
+  if (typeof window === "undefined") return DEBUG_PROFILE;
+  try {
+    const raw = window.localStorage.getItem(DEBUG_STORAGE_KEY);
+    if (!raw) return DEBUG_PROFILE;
+    const parsed: unknown = JSON.parse(raw);
+    return typeof parsed === "object" && parsed !== null ? parseProfile(parsed) : DEBUG_PROFILE;
+  } catch {
+    // Corrupted JSON, private browsing, or storage disabled: start from the million.
+    return DEBUG_PROFILE;
+  }
+}
+
+let cachedDebugProfile: Profile | null = null;
+
+/** The debug profile (1 000 000 € and the factory car until something is bought), read from localStorage once. */
+export function getDebugProfile(): Profile {
+  if (cachedDebugProfile === null) cachedDebugProfile = readStoredDebugProfile();
+  return cachedDebugProfile;
+}
+export function getServerDebugProfile(): Profile {
+  return DEBUG_PROFILE;
+}
+/** Forgets what was read, so the next read goes back to localStorage (another tab wrote the key). */
+export function invalidateDebugProfile() {
+  cachedDebugProfile = null;
+  notifyProfile();
+}
+/** Saves the debug profile and notifies subscribers. */
+export function saveDebugProfile(p: Profile) {
+  cachedDebugProfile = p;
+  if (typeof window !== "undefined") {
+    try {
+      window.localStorage.setItem(DEBUG_STORAGE_KEY, JSON.stringify(p));
+    } catch {
+      // Quota exceeded or storage disabled: it lives in memory for this session.
+    }
+  }
+  notifyProfile();
+}
+/** Back to the million and the factory car (the saved copy is removed). */
+export function resetDebugProfile() {
+  cachedDebugProfile = DEBUG_PROFILE;
+  if (typeof window !== "undefined") {
+    try {
+      window.localStorage.removeItem(DEBUG_STORAGE_KEY);
+    } catch {
+      // nothing saved to remove
+    }
   }
   notifyProfile();
 }
