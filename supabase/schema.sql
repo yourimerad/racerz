@@ -162,8 +162,13 @@ begin
   update public.profiles set race_started_at = now() where id = r.id;
 end $$;
 
+-- Contacts barrière que tolère une victoire propre : 2 par défaut, 4 en campagne (à garder aligné avec `cleanMaxHits` de garage.ts).
+create or replace function public.racerz_clean_max_hits(p_mode text) returns integer
+language sql immutable as $$ select case when p_mode = 'countryside' then 4 else 2 end $$;
+
 -- Règlement d'une course : l'argent et les paliers sont recalculés ici, pas par le client.
-create or replace function public.settle_race(p_place integer, p_off_ratio numeric, p_hits integer) returns jsonb
+-- `p_max_hits` = contacts barrière tolérés par une victoire propre dans le mode de la course.
+create or replace function public.racerz_settle(p_place integer, p_off_ratio numeric, p_hits integer, p_max_hits integer) returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare
   r public.profiles; car jsonb; earned integer; clean boolean; palier boolean;
@@ -182,7 +187,7 @@ begin
   car := r.cars -> r.selected;
   lvl := (car ->> 'level')::integer;
   pal := (car ->> 'paliers')::integer;
-  clean := p_place = 1 and p_off_ratio <= 0.05 and p_hits <= 2;
+  clean := p_place = 1 and p_off_ratio <= 0.05 and p_hits <= p_max_hits;
   palier := clean and lvl < 10;
   if palier then
     pal := pal + 1;
@@ -199,6 +204,17 @@ begin
     'profile', public.racerz_profile_json(r),
     'report', jsonb_build_object('place', p_place, 'earned', earned, 'palier', palier, 'levelUp', level_up));
 end $$;
+
+-- Ce que le jeu appelle : avec le mode de la course (le client essaie celle-ci d'abord) ...
+create or replace function public.settle_race(p_place integer, p_off_ratio numeric, p_hits integer, p_mode text) returns jsonb
+language sql security definer set search_path = public as $$
+  select public.racerz_settle(p_place, p_off_ratio, p_hits, public.racerz_clean_max_hits(p_mode))
+$$;
+-- ... et sans (anciens clients : la règle par défaut, 2 contacts).
+create or replace function public.settle_race(p_place integer, p_off_ratio numeric, p_hits integer) returns jsonb
+language sql security definer set search_path = public as $$
+  select public.racerz_settle(p_place, p_off_ratio, p_hits, 2)
+$$;
 
 -- Reprise, une seule fois, de la progression locale (localStorage) d'un joueur non connecté.
 -- Tout est assaini ; l'argent importé est plafonné (le localStorage n'est pas une source de confiance).
@@ -270,5 +286,6 @@ revoke execute on all functions in schema public from public, anon, authenticate
 grant execute on function
   public.get_profile(), public.buy_car(text), public.buy_skin(text), public.equip_skin(text),
   public.select_car(text), public.start_race(), public.settle_race(integer, numeric, integer),
+  public.settle_race(integer, numeric, integer, text),
   public.import_profile(jsonb), public.skip_import(), public.save_settings(boolean)
   to authenticated;

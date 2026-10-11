@@ -124,6 +124,10 @@ export const MAX_LEVEL = 10;
 /** A won race only earns a tier when it was driven cleanly. */
 export const CLEAN_MAX_OFF = 0.05;
 export const CLEAN_MAX_HITS = 2;
+/** Barrier contacts a clean win allows in the modes that differ from the default: the countryside forgives more (its bots are harder, and its hay bales and fences are everywhere). */
+const CLEAN_HITS_BY_MODE: Readonly<Record<string, number>> = { countryside: 4 };
+/** Barrier contacts allowed for a clean win in this mode (`undefined` or an unknown mode: the default). Mirrored in supabase/schema.sql (`racerz_clean_max_hits`). */
+export const cleanMaxHits = (mode?: string): number => (mode !== undefined && Object.hasOwn(CLEAN_HITS_BY_MODE, mode) ? CLEAN_HITS_BY_MODE[mode] : CLEAN_MAX_HITS);
 
 export function carStats(model: ModelId, level: number) {
   const m = MODELS[model], l = level - 1;
@@ -157,13 +161,14 @@ export type RaceReport = {
   levelUp: number | null;
 };
 
-export function settleRace(p: Profile, place: number, offRatio: number, hits: number): { profile: Profile; report: RaceReport } {
+export function settleRace(p: Profile, place: number, offRatio: number, hits: number, mode?: string): { profile: Profile; report: RaceReport } {
+  const maxHits = cleanMaxHits(mode);
   const earned = PAYOUTS[place - 1] ?? 0;
   const car = p.cars[p.selected] ?? { level: 1, paliers: 0, skin: "factory" as SkinId };
   const checks = [
     { label: "Victoire", ok: place === 1 },
     { label: `Hors-piste ${Math.round(offRatio * 100)} % (max ${CLEAN_MAX_OFF * 100} %)`, ok: offRatio <= CLEAN_MAX_OFF },
-    { label: `Contacts barrière ${hits} (max ${CLEAN_MAX_HITS})`, ok: hits <= CLEAN_MAX_HITS },
+    { label: `Contacts barrière ${hits} (max ${maxHits})`, ok: hits <= maxHits },
   ];
   const palier = checks.every((c) => c.ok) && car.level < MAX_LEVEL;
   let { level, paliers } = car;
