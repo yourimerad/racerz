@@ -249,7 +249,7 @@ console.log("3D garage checks\n");
   const bought = buyCar(rich, "voiturenoire");
   check(bought.money === 0 && bought.selected === "voiturenoire" && !!bought.cars.voiturenoire && bought.cars.voiturenoire.skin === "factory", "buying La Voiture Noire");
   const paint = skinOf("voiturenoire", "factory");
-  check(paint.name === "Noir carbone" && paint.body === "#0a0a0c" && paint.accent === "#2d3036", "La Voiture Noire's factory paint is black");
+  check(paint.name === "Noir carbone" && paint.body === "#08080a" && paint.accent === "#2d3036", "La Voiture Noire's factory paint is black");
   check(skinsFor("voiturenoire").length === 8 && skinsFor("voiturenoire").every((id) => id === "factory" || !SKINS[id].jet), "La Voiture Noire wears the shared skins and none of the Jet's");
   check(!skinFits("voiturenoire", "jetGold") && skinFits("voiturenoire", "gold") && !skinFits("jet", "gold"), "skin fit around La Voiture Noire");
   // The SQL prices every car like the game does (a drift here would let the server refuse a purchase, or sell it for less).
