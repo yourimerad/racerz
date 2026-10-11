@@ -58,7 +58,7 @@ export const MODELS: Record<ModelId, CarModel> = {
   // The Bugatti La Voiture Noire ("the black car"), all black. Faster and quicker than the F8 and, unlike it, planted (bars 80 / 72 / 46 at level 1).
   voiturenoire: {
     id: "voiturenoire", name: "Bugatti La Voiture Noire", tagline: "Hypercar noire : vitesse et stabilité", price: 300_000, speed: 1.36, accel: 1.45, grip: 1.0,
-    factory: { name: "Noir carbone", body: "#0a0a0c", accent: "#2d3036" }, hypercar: true,
+    factory: { name: "Noir carbone", body: "#08080a", accent: "#2d3036" }, hypercar: true,
   },
   // Speed / accel / grip are set so the garage bars read 92 / 85 / 70 at level 1 on the existing scale (STAT_RANGE below).
   jet: {
