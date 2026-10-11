@@ -207,10 +207,20 @@ export function accountStartRace() {
  * Settles a finished race on the server. Resolves with the server's report, or null when it
  * refused (the profile is then re-read, so the screen shows the real balance).
  */
-export function accountSettleRace(place: number, offRatio: number, hits: number): Promise<Pick<RaceReport, "earned" | "palier" | "levelUp"> | null> {
+export function accountSettleRace(place: number, offRatio: number, hits: number, mode?: string): Promise<Pick<RaceReport, "earned" | "palier" | "levelUp"> | null> {
   return enqueue(async () => {
     try {
-      const res = (await remote("settle_race", { p_place: place, p_off_ratio: Math.min(1, Math.max(0, offRatio)), p_hits: hits })) as {
+      const args = { p_place: place, p_off_ratio: Math.min(1, Math.max(0, offRatio)), p_hits: hits };
+      // The mode-aware version first (the barrier contacts a clean win allows depend on the mode); a database that has not replayed
+      // schema.sql yet only knows the three-argument one: its rule (2 contacts) applies there.
+      let called: unknown;
+      try {
+        called = await remote("settle_race", { ...args, p_mode: mode ?? "" });
+      } catch (e) {
+        if (!/could not find the function|PGRST202|does not exist/i.test(messageOf(e))) throw e;
+        called = await remote("settle_race", args);
+      }
+      const res = called as {
         profile: unknown;
         report: { earned: number; palier: boolean; levelUp: number | null };
       };

@@ -75,7 +75,8 @@ export const THEMES: Record<ThemeId, Theme> = {
     name: "Campagne",
     emoji: "🌾",
     layout: countrysideMode.layout,
-    bots: { pace: 0.977, spread: 0.035, errors: 6 },
+    // Harder than it was (0.977 ± 0.035, 6 mistakes a minute): with the starter Racerz GT a win is rare, the MX-5 wins about every other race (`pnpm sim countryside`).
+    bots: { pace: 1.0, spread: 0.03, errors: 4 },
     colors: {
       ground: "#2f6b3a", offtrack: "#3a7d44", asphalt: "#4a4e57", kerbA: "#f1f1f1", kerbB: "#d62828", kerbWidth: 18, barrierA: "#b8bec7", barrierB: "#6b717a",
       dash: "rgba(255,255,255,0.55)", minimap: "rgba(255,255,255,0.6)", accent: "#ffd166", skid: "20,20,20",

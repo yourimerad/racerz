@@ -4,8 +4,8 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { ProfileActions } from "@/game/actions";
 import { drawCarSprite } from "@/game/carArt";
 import {
-  type ModelId, type Profile, type SkinId, type StatKey, CLEAN_MAX_HITS, CLEAN_MAX_OFF, MODEL_ORDER, MODELS, PALIERS_PER_LEVEL, PAYOUTS, SKINS,
-  STAT_RANGE, carStats, formatMoney, skinOf, skinsFor,
+  type ModelId, type Profile, type SkinId, type StatKey, CLEAN_MAX_OFF, MODEL_ORDER, MODELS, PALIERS_PER_LEVEL, PAYOUTS, SKINS,
+  STAT_RANGE, carStats, cleanMaxHits, formatMoney, skinOf, skinsFor,
 } from "@/game/garage";
 import { stageChoice } from "@/game/garageView";
 import { INVITE_AT_LOAD, getNetState, getServerNetState, subscribeNet } from "@/game/net/client";
@@ -253,7 +253,7 @@ export default function Lobby({ profile, actions, mode, setMode, record, onStart
           </div>
           <p className={styles.sub}>
             Gains : {PAYOUTS.map((g, i) => `${i + 1}${i ? "e" : "er"} ${formatMoney(g)}`).join(" · ")}. Une victoire propre (≤ {CLEAN_MAX_OFF * 100} % hors-piste,
-            ≤ {CLEAN_MAX_HITS} contacts barrière) rapporte 1 palier ; {PALIERS_PER_LEVEL} paliers = 1 niveau.
+            ≤ {cleanMaxHits(mode)} contacts barrière) rapporte 1 palier ; {PALIERS_PER_LEVEL} paliers = 1 niveau.
           </p>
           {record !== null && <p className={styles.sub}>Record du tour ({THEMES[mode].name}) : {formatTime(record)}</p>}
           <button className={styles.cta} onClick={onStart}>Démarrer (Entrée / Espace)</button>

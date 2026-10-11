@@ -22,7 +22,7 @@ Row Level Security : chaque joueur ne lit que sa ligne et **aucun client ne peut
 et niveaux passent par des fonctions SQL (`buy_car`, `buy_skin`, `settle_race`…) qui recalculent l'argent côté
 serveur (prix, solde, gains par place). Limite connue : le résultat d'une course est rapporté par le navigateur
 (pas de simulation serveur) ; il est borné par un ticket `start_race` à usage unique et une durée minimale de 20 s.
-Si vous changez des prix ou des gains dans `src/game/garage.ts`, reportez-les dans `supabase/schema.sql`.
+Si vous changez des prix, des gains ou la règle de la victoire propre (contacts barrière : 4 en Campagne, 2 ailleurs) dans `src/game/garage.ts`, reportez-les dans `supabase/schema.sql` ; après une mise à jour de ce fichier, rejouez-le dans le SQL Editor (le jeu continue de marcher avant : il retombe sur l'ancienne fonction `settle_race`, avec la règle à 2 contacts).
 
 À la première connexion, une progression locale existante peut être reprise sur le compte (une seule fois, vérifiée
 et plafonnée à 500 000 € côté serveur).

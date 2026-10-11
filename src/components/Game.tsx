@@ -338,7 +338,7 @@ export default function Game() {
         // Settle the profile that was active at race start, not whatever is active now.
         const isDebugRace = raceIsDebugRef.current;
         const current = isDebugRace ? getDebugProfile() : getPlayerProfile();
-        const settled = settleRace(current, place, player.offTime / Math.max(1, player.finishTime ?? race.time), player.hits);
+        const settled = settleRace(current, place, player.offTime / Math.max(1, player.finishTime ?? race.time), player.hits, race.theme.id);
         const onAccount = !isDebugRace && isSignedIn();
         if (isDebugRace) {
           saveDebugProfile(settled.profile); // saved: the debug winnings are still there after a reload
@@ -348,7 +348,7 @@ export default function Game() {
         setReport(settled.report);
         setSettledBalance(settled.profile.money);
         if (onAccount) {
-          void accountSettleRace(place, player.offTime / Math.max(1, player.finishTime ?? race.time), player.hits).then((srv) => {
+          void accountSettleRace(place, player.offTime / Math.max(1, player.finishTime ?? race.time), player.hits, race.theme.id).then((srv) => {
             if (srv) setReport((r) => r && { ...r, earned: srv.earned, palier: srv.palier, levelUp: srv.levelUp });
             setSettledBalance(getPlayerProfile().money);
           });

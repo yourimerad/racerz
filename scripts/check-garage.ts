@@ -11,11 +11,13 @@
 //   (f) the Bugatti La Voiture Noire (it replaced the Chiron): its place and price in the shop (and the SQL's, for every car), its bars, its black
 //       paint, buying it, its 3D build (size, six exhausts, no wing);
 //   (g) the debug profile is saved: buy a car with the million, reload, the car and the balance are still there; it starts again on request,
-//       never mixes with the player's profile, and a corrupted save falls back to the million.
+//       never mixes with the player's profile, and a corrupted save falls back to the million;
+//   (h) the barrier contacts a clean win allows depend on the mode (4 in the countryside, 2 elsewhere), in the game and in the SQL that settles the
+//       race for accounts (which also keeps accepting the old three-argument call).
 
 import {
-  DEBUG_PROFILE, MODEL_ORDER, MODELS, NEW_PROFILE, SKINS, SKIN_ORDER, STAT_RANGE, buyCar, carStats, getDebugProfile, getPlayerProfile, invalidateDebugProfile, resetDebugProfile,
-  saveDebugProfile, savePlayerProfile, skinFits, skinOf, skinsFor, type ModelId, type Profile,
+  CLEAN_MAX_HITS, CLEAN_MAX_OFF, DEBUG_PROFILE, MODEL_ORDER, MODELS, NEW_PROFILE, SKINS, SKIN_ORDER, STAT_RANGE, buyCar, carStats, getDebugProfile, getPlayerProfile, invalidateDebugProfile, resetDebugProfile,
+  cleanMaxHits, saveDebugProfile, savePlayerProfile, settleRace, skinFits, skinOf, skinsFor, type ModelId, type Profile,
 } from "../src/game/garage";
 import { readFileSync } from "node:fs";
 import { Lru, Orbit, carKey, carRadius, stageChoice, stageWing } from "../src/game/garageView";
@@ -363,6 +365,33 @@ console.log("3D garage checks\n");
   check(getDebugProfile().money === 1_000_000, "a corrupted debug save did not fall back to the million");
   delete (globalThis as unknown as { window?: unknown }).window;
   console.log("  debug profile: saved under its own key (1 000 000 € − 300 000 € = 700 000 € and the Bugatti survive a reload), separate from the player's, reset on request, corrupted saves fall back to the million");
+}
+
+// ---------- (h) barrier contacts allowed for a clean win, by mode ----------
+{
+  check(cleanMaxHits("countryside") === 4, `the countryside allows ${cleanMaxHits("countryside")} contacts (expected 4)`);
+  for (const m of ["desert", "northpole", "volcano", undefined, "nowhere", "constructor", "__proto__", "toString"]) {
+    check(cleanMaxHits(m) === CLEAN_MAX_HITS && CLEAN_MAX_HITS === 2, `${String(m)} allows ${cleanMaxHits(m)} contacts (expected the default, 2)`);
+  }
+  const base: Profile = { ...NEW_PROFILE, money: 0 };
+  const win = (hits: number, mode?: string, place = 1, off = 0) => settleRace(base, place, off, hits, mode);
+  for (const hits of [0, 2, 3, 4]) check(win(hits, "countryside").report.palier, `a clean win with ${hits} contacts in the countryside earned no tier`);
+  check(!win(5, "countryside").report.palier, "5 contacts in the countryside still earned a tier");
+  for (const hits of [0, 1, 2]) for (const m of ["desert", "northpole", "volcano", undefined]) check(win(hits, m).report.palier, `a clean win with ${hits} contacts (${String(m)}) earned no tier`);
+  for (const m of ["desert", "northpole", "volcano", undefined]) check(!win(3, m).report.palier, `3 contacts (${String(m)}) earned a tier`);
+  // The rest of the rule is the same everywhere: a win, at most 5 % off the road; the money is the same.
+  check(!win(0, "countryside", 2).report.palier && win(0, "countryside", 2).report.earned === 2500, "second place in the countryside earned a tier, or not 2 500 €");
+  check(!win(0, "countryside", 1, CLEAN_MAX_OFF + 0.01).report.palier, "a win with 6 % off the road earned a tier");
+  check(win(3, "countryside").report.checks.some((c) => c.label === "Contacts barrière 3 (max 4)" && c.ok), `the countryside's report says: ${win(3, "countryside").report.checks.map((c) => c.label).join(" / ")}`);
+  check(win(3, "desert").report.checks.some((c) => c.label === "Contacts barrière 3 (max 2)" && !c.ok), "the desert's report does not say max 2");
+  // The SQL says the same (it settles the race for accounts), and the old three-argument call keeps the default rule.
+  const sql = readFileSync(new URL("../supabase/schema.sql", import.meta.url), "utf8");
+  const fn = /racerz_clean_max_hits\(p_mode text\)[\s\S]*?select case when p_mode = '(\w+)' then (\d+) else (\d+) end/.exec(sql);
+  check(!!fn && fn[1] === "countryside" && Number(fn[2]) === cleanMaxHits("countryside") && Number(fn[3]) === CLEAN_MAX_HITS, `the SQL's contacts rule is ${fn ? fn.slice(1, 4).join(" / ") : "missing"}`);
+  check(/settle_race\(p_place integer, p_off_ratio numeric, p_hits integer\) returns jsonb[\s\S]*?racerz_settle\(p_place, p_off_ratio, p_hits, 2\)/.test(sql), "the old three-argument settle_race no longer applies the default rule (2 contacts)");
+  check(/p_off_ratio <= 0\.05 and p_hits <= p_max_hits/.test(sql) && CLEAN_MAX_OFF === 0.05, "the SQL's off-road limit is not the game's");
+  check(/public\.settle_race\(integer, numeric, integer, text\)/.test(sql), "the four-argument settle_race is not granted to players");
+  console.log("  clean win: 4 barrier contacts in the countryside, 2 elsewhere; the report says so; the SQL says the same and still takes the old call");
 }
 
 if (failed) {
