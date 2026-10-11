@@ -555,7 +555,8 @@ console.log("3D view checks\n");
       worstCalls = Math.max(worstCalls, calls);
     }
     if (worst > 0.75) fail(`${mode}: ${(worst * 100).toFixed(0)} % of the world's triangles are in view at some point of the lap (culling should keep it under 75 %)`);
-    if (worstCalls > 260) fail(`${mode}: ${worstCalls} meshes in view at once (budget 260; a car is ~40, the world ~100)`);
+    // The volcano's lap is ~1 km and hooks back on itself in the east (its lava tube): its road and barrier cells, seen along the bends, come to ~160 world meshes.
+    if (worstCalls > 340) fail(`${mode}: ${worstCalls} meshes in view at once (budget 340; a car is ~40, the world 100–160)`);
     if (mode === "countryside" && !(world.far.length > 0 && sawFar)) fail("countryside: no small props are hidden when far");
     stats.push(`${mode} world ≤ ${(worst * 100).toFixed(0)} % / ${worstCalls} meshes with the cars`);
     d.dispose();

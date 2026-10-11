@@ -1,6 +1,6 @@
 import type { Fx } from "../fx";
 import { disc, mulberry32, range, rock, scatter, TAU, type Circle, type Hazard, type HazardDanger, type HazardWorld, type Rng, type Scene, softBlob } from "../scenery";
-import { locate, type Track, type TrackLayout } from "../track";
+import { isCovered, locate, type Track, type TrackLayout } from "../track";
 import { cachedPadSpots, nearPad } from "../boost";
 import { WALLS } from "../flight";
 import { CAR_RADIUS, isAirborne } from "../car";
@@ -9,9 +9,10 @@ import { vec } from "../vec";
 
 // Volcano: one big cone in the middle of the map, seen from above with the sun at the top-left.
 // Three rings of black rock (irregular outlines, lit on the upper-left, shaded on the lower-right)
-// climb to a crater whose lava lake is purely decorative. The circuit enters at the bottom, climbs
-// the cone's east flank, skirts the crater along its right-hand rim and leaves by the top, then
-// loops back round the west side of the map. The only lava anywhere is the lake and two small
+// climb to a crater whose lava lake is purely decorative. The circuit goes round the volcano on a big
+// ring (west, north, south) and through it: in the east the road dives into the cone by a covered lava
+// tube, half-turns round the crater under the mountain and comes back out (see `layout`; the 3D view
+// builds the tube, the 2D fallback just draws the road over the cone). The only lava anywhere is the lake and two small
 // pools in opposite corners of the terrain. The volcano erupts in a loop (see ERUPTION and
 // VolcanoEruption below): a decorative show driven by the race clock that never touches the cars. Only the
 // aimed bombs (VolcanoHazards, further down) hurt: they warn first, then damage, burn and slow a car.
@@ -26,11 +27,21 @@ export const RING_R = [620, 480, 340] as const;
 export const LIP_R = 215, WALL_R = 190, LAKE_R = 150;
 
 export const layout: TrackLayout = {
+  // The lap: a big ring round the west, north and south of the volcano, and in the east two hooks that dive into the cone — a lava tube
+  // (covered) that runs west along the south of the crater, makes a half-turn round it under the mountain and comes back out along the north.
+  // Start/finish on the southern straight. Built from arcs and straights (ring R 1100, hooks R 400, tube turn R 300): no tight corner.
   points: [
-    [1880, 1950], [1930, 1600], [1880, 1200], [1930, 900], [1830, 600],
-    [1600, 360], [1200, 220], [720, 330], [380, 660], [250, 1150],
-    [330, 1650], [680, 2000], [1100, 2180], [1500, 2030],
+    [1700, 2250], [2000, 2250], [2300, 2250], [2500, 2196], [2646, 2050],
+    [2700, 1850], [2646, 1650], [2500, 1504], [2300, 1450], [2150, 1450],
+    [1825, 1450], [1500, 1450], [1288, 1362], [1200, 1150], [1288, 938],
+    [1500, 850], [1825, 850], [2150, 850], [2300, 850], [2500, 796],
+    [2646, 650], [2700, 450], [2646, 250], [2500, 104], [2300, 50],
+    [1900, 50], [1500, 50], [1255, 78], [1023, 159], [814, 290],
+    [640, 464], [509, 673], [428, 905], [400, 1150], [428, 1395],
+    [509, 1627], [640, 1836], [814, 2010], [1023, 2141], [1255, 2222],
+    [1500, 2250],
   ],
+  covers: [{ from: 9, to: 17 }],
 };
 
 const COL = {
@@ -1092,6 +1103,9 @@ function calmFactor() {
   return typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? 0.35 : 1;
 }
 
+/** Samples either side of a target spot that must be open road (≈ 120 u): the lava tube and its mouths are never targeted. */
+const TUBE_MARGIN = 18;
+
 /** The volcano's hazard: the decorative eruption plus the aimed bombs, pools and damage, stepped by the race clock. */
 export type VolcanoHazard = Hazard & { eruption: VolcanoEruption; hazards: VolcanoHazards };
 
@@ -1133,6 +1147,8 @@ export function createVolcano(track: Track, rng: Rng): VolcanoHazard {
       }
       const p = track.path[i], t = track.tangents[i];
       if (this.nearFinish(p.x / S, p.y / S)) return null;
+      // No bomb falls inside the mountain: nothing aimed at the lava tube, nor at its mouths (the target is 25 wide, the portal 150 u away).
+      for (let m = -TUBE_MARGIN; m <= TUBE_MARGIN; m += 6) if (isCovered(track, i + m)) return null;
       const q = track.path[car.lastIndex], tq = track.tangents[car.lastIndex];
       const lateral = ((car.pos.x - q.x) * -tq.y + (car.pos.y - q.y) * tq.x) / S;
       return { x: p.x / S, y: p.y / S, nx: -t.y, ny: t.x, halfWidth: track.width / 2 / S, lateral };
@@ -1221,7 +1237,7 @@ export function scene(track: Track): Scene {
     { x: b.maxX - corner, y: b.maxY - corner, r: 70 },
   ];
   const occ: Circle[] = [{ x: CONE.x, y: CONE.y, r: RING_R[0] + 30 }, ...pools.map((p) => ({ ...p, r: p.r + 30 }))];
-  const blocks = scatter(track, rng, occ, 46, 10, 30);
+  const blocks = scatter(track, rng, occ, 70, 10, 30);
   const ash = Array.from({ length: 50 }, () => ({
     x: range(rng, b.minX, b.maxX), y: range(rng, b.minY, b.maxY),
     rx: range(rng, 120, 360), ry: range(rng, 50, 160), rot: rng() * Math.PI,

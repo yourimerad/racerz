@@ -4,7 +4,7 @@ import type { ThemeId } from "../themes";
 import type { Track } from "../track";
 import { type FarRule, collectFar, cullable } from "./bake";
 import { type Disposer, type Quality, THREE, makeSky, paintTexture, hash2 } from "./core";
-import { type ProfilePoint, DistField, ribbon, sweep } from "./terrain";
+import { type ProfilePoint, DistField, coverSamples, ribbon, sweep } from "./terrain";
 import { buildClassic } from "./classic";
 import { buildDesert } from "./desert";
 import { buildNorthpole } from "./northpole";
@@ -296,8 +296,12 @@ function buildBarriers(ctx: WorldCtx) {
   const curtain = CURTAIN[mode];
   if (curtain) {
     const H = wallHeightOf(mode), mat = curtainMaterial(d, curtain.color, curtain.alpha, H);
+    // Not over a covered stretch (the volcano's lava tube): inside the mountain there is nothing to fly over.
+    const cover = mode === "volcano" ? track.covers[0] : undefined, n = track.path.length;
+    const span = cover ? coverSamples(track, cover) : null;
+    const from = span ? (span.from + span.count) % n : 0, count = span ? n - span.count : n;
     for (const s of [-1, 1]) {
-      const geo = sweep(d, track, (): ProfilePoint[] => [[s * track.barrier, 0], [s * track.barrier, H]], 0, track.path.length, 8);
+      const geo = sweep(d, track, (): ProfilePoint[] => [[s * track.barrier, 0], [s * track.barrier, H]], from, count, 8);
       const m = new THREE.Mesh(geo, mat);
       m.renderOrder = 3;
       group.add(m);

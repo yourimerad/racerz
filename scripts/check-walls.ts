@@ -16,7 +16,7 @@ import { FLY, WALLS, wallHeightOf } from "../src/game/flight";
 import { aiInput, createRace, stepRace, TOTAL_LAPS, type PlayerCar, type Race } from "../src/game/race";
 import type { VolcanoHazard } from "../src/game/modes/volcano";
 import { THEME_ORDER, type ThemeId } from "../src/game/themes";
-import { locate } from "../src/game/track";
+import { isCovered, locate } from "../src/game/track";
 
 const DT = 1 / 120;
 let failed = false;
@@ -70,6 +70,8 @@ function lift(race: Race, car: Car, alt = FLY.MAX_ALT, energy = FLY.MAX_ENERGY) 
 const distFromRoad = (race: Race, car: Car) => locate(race.track, car.pos).dist;
 /** A spot on the road far from the line, with the outward normal: where the scripted wall tests start. */
 function roadSpot(race: Race, idx = Math.round(race.track.path.length * 0.3)) {
+  // Not inside a covered stretch (the volcano's lava tube, under the mountain): these tests are about the open road and its walls.
+  while ([-60, 0, 60].some((d) => isCovered(race.track, idx + d))) idx += 25;
   const p = race.track.path[idx], t = race.track.tangents[idx];
   return { idx, p, t, nx: -t.y, ny: t.x };
 }

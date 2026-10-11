@@ -165,25 +165,32 @@ export type ProfilePoint = [number, number];
  * (`profile(i, k)`: k = 0..count-1 along the sweep). Use a double-sided material: the profile's winding is the caller's business.
  * Texture: u along the sweep in metres / `repeatM`, v along the profile.
  */
-export function sweep(d: Disposer, track: Track, profile: (i: number, k: number) => ProfilePoint[], from = 0, count = track.path.length, repeatM = 8): THREE.BufferGeometry {
+export function sweep(d: Disposer, track: Track, profile: (i: number, k: number) => ProfilePoint[], from = 0, count = track.path.length, repeatM = 8, step = 1): THREE.BufferGeometry {
   const n = track.path.length, closed = count >= n;
-  const cols = closed ? count + 1 : count, first = profile(from, 0), m = first.length;
+  // A profile every `step` samples (an open sweep always keeps its last sample): the long, gentle shells need far fewer than one a 0.6 m.
+  const ks: number[] = [];
+  if (closed) for (let k = 0; k < count; k++) ks.push(k);
+  else {
+    for (let k = 0; k < count; k += step) ks.push(k);
+    if (ks[ks.length - 1] !== count - 1) ks.push(count - 1);
+  }
+  const cols = closed ? count + 1 : ks.length, first = profile(from, 0), m = first.length;
   const pos = new Float32Array(cols * m * 3), uv = new Float32Array(cols * m * 2);
   let run = 0;
-  for (let k = 0; k < cols; k++) {
-    const i = (from + k) % n, p = track.path[i], t = track.tangents[i];
-    if (k) {
-      const q = track.path[(from + k - 1) % n];
+  for (let c = 0; c < cols; c++) {
+    const k = closed ? c : ks[c], i = (from + k) % n, p = track.path[i], t = track.tangents[i];
+    if (c) {
+      const q = track.path[(from + (closed ? c - 1 : ks[c - 1])) % n];
       run += Math.hypot(p.x - q.x, p.y - q.y) * K;
     }
-    const prof = k === count ? profile(from, 0) : profile(i, k);
+    const prof = closed && c === count ? profile(from, 0) : profile(i, k);
     for (let r = 0; r < m; r++) {
-      const [o, y] = prof[r], v = (k * m + r) * 3;
+      const [o, y] = prof[r], v = (c * m + r) * 3;
       pos[v] = (p.x - t.y * o) * K;
       pos[v + 1] = y;
       pos[v + 2] = (p.y + t.x * o) * K;
-      uv[(k * m + r) * 2] = run / repeatM;
-      uv[(k * m + r) * 2 + 1] = r / (m - 1);
+      uv[(c * m + r) * 2] = run / repeatM;
+      uv[(c * m + r) * 2 + 1] = r / (m - 1);
     }
   }
   const idx = new Uint32Array((cols - 1) * (m - 1) * 6);
