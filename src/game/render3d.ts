@@ -4,6 +4,8 @@ import { Car3D } from "./three/cars";
 import { Disposer, type Quality, type QualityLevel, THREE, liveResources, qualityOf } from "./three/core";
 import { makeEnvironment } from "./three/env";
 import { Gameplay3D } from "./three/gameplay";
+import { QualityGovernor, GOV } from "./three/adapt";
+import { applyFar } from "./three/bake";
 import { type World, buildWorld } from "./three/world";
 import { DistField } from "./three/terrain";
 
@@ -14,6 +16,12 @@ import { DistField } from "./three/terrain";
 export type Renderer3D = {
   /** Draws the race as it is now; `lag` = seconds the simulation has not stepped yet (carries the cars forward). */
   render(race: Race, lag: number): void;
+  /**
+   * Builds this race's scene and warms everything up before the countdown: every shader compiled (also those of the effects that only show
+   * later: flames, explosions, bombs, the yeti), every texture and buffer uploaded, one full frame drawn. Without it each of those would be a
+   * hitch in the middle of the race, the first time it appears.
+   */
+  prepare(race: Race): Promise<void>;
   resize(): void;
   /** Frees everything; the renderer cannot be used afterwards. */
   dispose(): void;
@@ -23,13 +31,13 @@ export type Renderer3D = {
   info(): { level: QualityLevel; fps: number; mode: string | null; resources: number };
 };
 
-const LOW_FPS = 40, LOW_SECONDS = 3;
 
 /** True when a WebGL context can be made; used as the repli to 2D. */
 export function createRenderer3D(host: HTMLElement): Renderer3D | null {
   let renderer: THREE.WebGLRenderer;
   try {
-    renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance", alpha: false });
+    // MSAA costs fill-rate and memory bandwidth, and on a dense screen (retina, phones) the pixels are small enough that the render ratio already hides the jaggies.
+    renderer = new THREE.WebGLRenderer({ antialias: (window.devicePixelRatio || 1) < 1.75, powerPreference: "high-performance", alpha: false });
   } catch {
     return null;
   }
@@ -61,7 +69,8 @@ class Impl implements Renderer3D {
   private last = 0;
   private time = 0;
   private quality: Quality;
-  private frames = { acc: 0, n: 0, fps: 60, bad: 0 };
+  private gov: QualityGovernor;
+  private frames = { acc: 0, n: 0, fps: 60 };
   private onResize = () => this.resize();
   private ro: ResizeObserver | null = null;
   private lost = false;
@@ -76,7 +85,8 @@ class Impl implements Renderer3D {
     this.canvas = renderer.domElement;
     const coarse = typeof window !== "undefined" && !!window.matchMedia?.("(pointer: coarse)").matches;
     this.reduced = typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-    this.quality = qualityOf(coarse ? 1 : 0, window.devicePixelRatio || 1);
+    this.gov = new QualityGovernor(coarse ? 2 : 0); // a phone starts a notch down, a desktop at the best picture
+    this.quality = this.qualityNow();
     Object.assign(this.canvas.style, { width: "100%", height: "100%", display: "block", touchAction: "none" });
     this.canvas.setAttribute("aria-hidden", "true");
     host.appendChild(this.canvas);
@@ -148,6 +158,42 @@ class Impl implements Renderer3D {
     return { level: this.quality.level, fps: this.frames.fps, mode: this.worldMode, resources: liveResources() };
   }
 
+  async prepare(race: Race) {
+    if (this.disposed || this.lost) return;
+    this.warming = true;
+    try {
+      this.renderer.debug.checkShaderErrors = true; // while warming up, a broken shader must show
+      this.render(race, 0); // builds the world, the cars and the effects, places everything, draws once
+      const scene = this.scene, cam = this.camera, saved: { o: THREE.Object3D; visible: boolean; culled: boolean }[] = [];
+      // Everything drawn at least once, hidden effects included (flames, explosions, bombs, the yeti, the tags), and nothing culled, so the
+      // shadow pass meets every kind of object too.
+      scene.traverse((o) => {
+        if (!o.visible || o.frustumCulled) {
+          saved.push({ o, visible: o.visible, culled: o.frustumCulled });
+          o.visible = true;
+          o.frustumCulled = false;
+        }
+      });
+      try {
+        await this.renderer.compileAsync(scene, cam);
+        if (!this.disposed && !this.lost && this.race === race) this.renderer.render(scene, cam); // not if a newer race replaced this one meanwhile
+      } finally {
+        for (const s of saved) {
+          s.o.visible = s.visible;
+          s.o.frustumCulled = s.culled;
+        }
+      }
+      // Programs made from here on are rare; their sync link check would only stall.
+      this.renderer.debug.checkShaderErrors = false;
+    } finally {
+      this.warming = false;
+      this.frames.acc = 0;
+      this.frames.n = 0;
+      this.lastFrame = 0;
+      this.last = 0;
+    }
+  }
+
   /** Builds (or keeps) the mode's world and builds this race's cars and gameplay pieces. */
   private setRace(race: Race) {
     this.raceD.dispose();
@@ -215,6 +261,7 @@ class Impl implements Renderer3D {
       cam.updateProjectionMatrix();
     }
     world.sky.position.copy(cam.position);
+    applyFar(world.far, cam.position);
 
     // The sun follows the car (its shadow map covers ~160 m around it); a high Jet's shadow lands far off, so aim between car and ground.
     const sx = p.x * K, sz = p.y * K, sy = p.alt * 0.5;
@@ -229,7 +276,13 @@ class Impl implements Renderer3D {
     this.watchFrameRate(now);
   }
 
-  /** Under 40 FPS for 3 seconds in a row: a lighter quality level (lighter shadows and fewer particles, then no shadows). */
+  /** The quality of the governor's current step, for this screen. */
+  private qualityNow(): Quality {
+    const st = this.gov.step;
+    return qualityOf(st.level, window.devicePixelRatio || 1, st.scale);
+  }
+
+  /** Every half second the governor is told the frame rate; it lightens the picture quickly when it is slow and brings it back carefully. */
   private watchFrameRate(now: number) {
     const f = this.frames;
     if (this.lastFrame) {
@@ -240,19 +293,20 @@ class Impl implements Renderer3D {
       }
     }
     this.lastFrame = now;
-    if (f.acc >= 1000) {
+    if (f.acc >= GOV.WINDOW * 1000) {
       f.fps = (f.n * 1000) / f.acc;
-      f.bad = f.fps < LOW_FPS ? f.bad + 1 : 0;
       f.acc = 0;
       f.n = 0;
-      if (f.bad >= LOW_SECONDS && this.quality.level < 2) {
-        this.quality = qualityOf((this.quality.level + 1) as QualityLevel, window.devicePixelRatio || 1);
-        f.bad = 0;
+      if (this.warming) return;
+      const step = this.gov.update(f.fps);
+      if (step) {
+        this.quality = this.qualityNow();
         this.applyQuality();
       }
     }
   }
   private lastFrame = 0;
+  private warming = false;
 
   dispose() {
     if (this.disposed) return;

@@ -8,10 +8,10 @@ import { THEME_ORDER, type ThemeId } from "../themes";
 // where it is; what comes in is data from strangers, so every field is checked, clamped and, when it is not what it should be, dropped.
 
 export const NET = {
-  /** Snapshots of one's own car per second in a race of two (fewer with more players, see `snapshotHz`). Kept low on purpose: the hosted realtime service meters messages. */
+  /** Snapshots of one's own car per second in a race of three (more with two players, fewer with four, see `snapshotHz`). Kept low on purpose: the hosted realtime service meters messages. */
   SEND_HZ: 10,
-  /** Opponents are drawn this far in the past (s): there is always a snapshot ahead to blend toward, whatever the jitter. */
-  INTERP_DELAY: 0.15,
+  /** Opponents are drawn at least this far in the past (s): the least delay that still hides the network's jitter. */
+  INTERP_DELAY: 0.1,
   /** How long (s) a missing snapshot is bridged by the last velocity, no longer. */
   EXTRAP_MAX: 0.3,
   MIN_PLAYERS: 2,
@@ -69,11 +69,11 @@ export type Msg = StartMsg | SnapMsg | ByeMsg;
 
 /**
  * Snapshots per second for a race of `players`: every message is also delivered to each of the others, so the load grows with the square of the
- * room (a free Supabase project allows about 100 messages a second in all: 2 players 40, 3 players 90, 4 players 96 with these rates).
+ * room. A free Supabase project allows about 100 messages a second in all: 2 players make 60, 3 players 90, 4 players 96 with these rates.
  */
-export const snapshotHz = (players: number): number => (players <= 2 ? NET.SEND_HZ : players === 3 ? 8 : 6);
-/** How far in the past (s) the opponents are drawn: always enough to have a snapshot ahead at the rate in use. */
-export const interpDelay = (players: number): number => Math.max(NET.INTERP_DELAY, 1.5 / snapshotHz(players));
+export const snapshotHz = (players: number): number => (players <= 2 ? 15 : players === 3 ? NET.SEND_HZ : 6);
+/** How far in the past (s) the opponents are drawn: about a snapshot and a bit, so there is nearly always one ahead to blend toward. */
+export const interpDelay = (players: number): number => Math.max(NET.INTERP_DELAY, 1.15 / snapshotHz(players));
 
 const num = (v: unknown, lo: number, hi: number): number | null => (typeof v === "number" && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : null);
 const isThemeId = (v: unknown): v is ThemeId => typeof v === "string" && (THEME_ORDER as readonly string[]).includes(v);

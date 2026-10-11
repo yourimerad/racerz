@@ -212,7 +212,7 @@ let roomCode = "";
 }
 
 // ---------- (e) the race, over a lossy network ----------
-type Racer = { id: string; name: string; race: Race; sync: RaceSync; clock: ManualClock; truth: { t: number; x: number; y: number }[]; shown: Map<string, { t: number; x: number; y: number }[]> };
+type Racer = { id: string; name: string; race: Race; sync: RaceSync; clock: ManualClock; truth: { t: number; x: number; y: number }[]; shown: Map<string, { t: number; x: number; y: number }[]>; truthF: { t: number; x: number; y: number }[]; shownF: Map<string, { t: number; x: number; y: number }[]> };
 
 function multiOf(players: MultiPlayer[], localId: string): Multi {
   return { players, localId };
@@ -226,7 +226,7 @@ function setupRace(mode: ThemeId, ids: string[], seed: number, w: ReturnType<typ
     const info: StartInfo = { game: "testgame1", mode, seed, players, goAt: clock.t + 6000 + (lateMs[id] ?? 0) * 0 };
     const sync = new RaceSync(w.hub.transport(), players[i], info, clock);
     const race = createRace(mode, { model: players[i].model, skin: "factory", level: 1 }, seed, multiOf(players, id));
-    return { id, name: players[i].name, race, sync, clock, truth: [], shown: new Map() };
+    return { id, name: players[i].name, race, sync, clock, truth: [], shown: new Map(), truthF: [], shownF: new Map() };
   });
   return { players, racers };
 }
@@ -246,6 +246,16 @@ function runRace(w: ReturnType<typeof world>, racers: Racer[], seconds: number, 
       const me = r.race.cars[0];
       stepRace(r.race, me.finishTime !== null ? NO_INPUT : aiInput(r.race, me, DT, false), DT);
       r.sync.sendSnapshot(r.race);
+      if (step % 3 === 0) {
+        // Finer samples (25 ms) to measure how far behind the opponents are shown, in seconds.
+        r.truthF.push({ t, x: me.pos.x, y: me.pos.y });
+        for (const c of r.race.cars) {
+          if (!c.remote || !c.netId) continue;
+          let l = r.shownF.get(c.netId);
+          if (!l) r.shownF.set(c.netId, (l = []));
+          l.push({ t, x: c.pos.x, y: c.pos.y });
+        }
+      }
       if (step % 12 === 0) {
         r.truth.push({ t, x: me.pos.x, y: me.pos.y });
         for (const c of r.race.cars) {
@@ -282,7 +292,7 @@ function runRace(w: ReturnType<typeof world>, racers: Racer[], seconds: number, 
   const times = racers.map((r) => r.race.cars.map((c) => ({ id: c.isPlayer ? r.id : c.netId!, f: c.finishTime! })).sort((a, b) => (a.id < b.id ? -1 : 1)).map((x) => x.f.toFixed(3)).join(","));
   check(times.every((x) => x === times[0]), "a finishing time changed on its way to the other games");
   // What each game shows of the others: close to the truth (a short, steady delay), never jumping.
-  let sum = 0, n = 0, worst = 0, worstJump = 0;
+  let sum = 0, n = 0, worst = 0, worstJump = 0, lag = 0;
   for (const viewer of racers) {
     for (const [id, shown] of viewer.shown) {
       const owner = racers.find((r) => r.id === id)!;
@@ -301,6 +311,29 @@ function runRace(w: ReturnType<typeof world>, racers: Racer[], seconds: number, 
       }
     }
   }
+  // How far behind the truth the opponents are shown, in seconds: for each shown position, how long ago the car really was there.
+  {
+    let lagSum = 0, lagN = 0;
+    for (const viewer of racers) {
+      for (const [id, shown] of viewer.shownF) {
+        const owner = racers.find((r) => r.id === id)!;
+        for (let i = 400; i < shown.length - 4; i += 4) {
+          // Only while it is really driving (a stopped car matches any moment of its past).
+          if (Math.hypot(owner.truthF[i].x - owner.truthF[i - 4].x, owner.truthF[i].y - owner.truthF[i - 4].y) / 0.1 < 150) continue;
+          let best = Infinity, bj = i;
+          for (let j = Math.max(0, i - 24); j <= i + 2 && j < owner.truthF.length; j++) {
+            const dd = Math.hypot(shown[i].x - owner.truthF[j].x, shown[i].y - owner.truthF[j].y);
+            if (dd < best) { best = dd; bj = j; }
+          }
+          lagSum += (i - bj) * 0.025;
+          lagN++;
+        }
+      }
+    }
+    lag = lagSum / Math.max(1, lagN);
+    // The network itself costs 105 ms on average here (60 ms + 0..90 ms jitter): what the game adds is the interpolation delay (about 115 ms with three players).
+    check(lag < 0.25, `opponents are shown ${(lag * 1000).toFixed(0)} ms behind on average (the network's own 105 ms included)`);
+  }
   check(sum / n < 90, `an opponent is shown ${(sum / n).toFixed(0)} px away on average (at best-matching moment)`);
   check(worst < 420, `an opponent is shown ${worst.toFixed(0)} px from where it was`);
   check(worstJump < 140 * 1.5, `an opponent jumped ${worstJump.toFixed(0)} px between two looks 0.1 s apart (top speed ≈ 56 px per look)`);
@@ -308,7 +341,7 @@ function runRace(w: ReturnType<typeof world>, racers: Racer[], seconds: number, 
   check(sentRatio > 0.02 && sentRatio < 0.15, `the fake network lost ${(sentRatio * 100).toFixed(1)} % of what was sent (expected ≈ 8 %)`);
   // A snapshot rate that a hosted realtime service can carry: messages per second for a room of four.
   const perSecond = (w.hub.stats.sent / 95) * 3;
-  console.log(`  race: 3 games over 60-150 ms with ${(w.hub.stats.lost / Math.max(1, w.hub.stats.sent * 2) * 100).toFixed(0)} % loss · everyone finished · same order · opponents ${(sum / n).toFixed(0)} px behind on average (worst ${worst.toFixed(0)}) · biggest jump ${worstJump.toFixed(0)} px · ≈ ${perSecond.toFixed(0)} messages/s received in a room of three`);
+  console.log(`  race: 3 games over 60-150 ms with ${(w.hub.stats.lost / Math.max(1, w.hub.stats.sent * 2) * 100).toFixed(0)} % loss · everyone finished · same order · opponents ${(lag * 1000).toFixed(0)} ms behind (network included) · ${(sum / n).toFixed(0)} px off on average (worst ${worst.toFixed(0)}) · biggest jump ${worstJump.toFixed(0)} px · ≈ ${perSecond.toFixed(0)} messages/s received in a room of three`);
 }
 
 // A slow opponent's game is far behind the wall clock: our place waits for it to reach the moment we finished, never for the wall clock.

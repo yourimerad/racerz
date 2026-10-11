@@ -205,7 +205,8 @@ export function strawBale(): THREE.BufferGeometry {
 }
 
 export function hedge(): THREE.BufferGeometry {
-  return merge([sph(1, 0, 0.6, 0, "#2f5d27", 1, 0.8, 1, 1), sph(0.6, -0.3, 1.0, -0.3, "#467d36", 1, 0.8, 1, 1)]);
+  // 900 of these line the road: a rounder body and a faceted highlight (100 triangles, it was 160) instead of two full spheres.
+  return merge([sph(1, 0, 0.6, 0, "#2f5d27", 1, 0.8, 1, 1), sph(0.6, -0.3, 1.0, -0.3, "#467d36", 1, 0.8, 1, 0)]);
 }
 
 /** A grandstand, front toward +Z: stepped rows, coloured seats, a roof on posts. 13.8 × 7.5 m. */

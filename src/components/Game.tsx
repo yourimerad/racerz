@@ -68,6 +68,17 @@ export default function Game() {
   const glHostRef = useRef<HTMLDivElement>(null);
   const r3dRef = useRef<Renderer3D | null>(null);
   const r3dStatus = useRef<"loading" | "ready" | "failed">("loading");
+  // Each new race is prepared (scene built, every shader compiled, one full frame drawn) before its countdown, never in the middle of it.
+  const prepToken = useRef(0);
+  const prepare3d = useCallback((race: Race) => {
+    const r = r3dRef.current;
+    if (!r) return; // the renderer is not made yet: the effect that makes it prepares the current race
+    r3dStatus.current = "loading";
+    const token = ++prepToken.current;
+    void r.prepare(race).catch(() => undefined).finally(() => {
+      if (token === prepToken.current && r3dRef.current === r) r3dStatus.current = "ready";
+    });
+  }, []);
   const [notice3d, setNotice3d] = useState<string | null>(null);
   const raceRef = useRef<Race | null>(null);
   // An online race: the link with the other players (null in a solo race), and whether this race is one.
@@ -142,10 +153,11 @@ export default function Game() {
     syncRef.current = null;
     setOnline(false);
     raceRef.current = createRace(mode, { model: p.selected, skin: car.skin, level: car.level });
+    prepare3d(raceRef.current);
     setCanFly(raceRef.current.flight !== null);
     inputRef.current = { ...NO_INPUT };
     setScreen("race");
-  }, [mode]);
+  }, [mode, prepare3d]);
 
   // Online: the session says a game is about to start; every player builds the same race (same seed, same grid) and runs it on the shared clock.
   const startOnline = useCallback((info: StartInfo) => {
@@ -156,12 +168,13 @@ export default function Game() {
     syncRef.current?.leave();
     syncRef.current = netSession().beginRace(info);
     raceRef.current = createRace(info.mode, { model: p.selected, skin: car.skin, level: car.level }, info.seed, { players: info.players, localId: myId() });
+    prepare3d(raceRef.current);
     setMode(info.mode);
     setOnline(true);
     setCanFly(raceRef.current.flight !== null);
     inputRef.current = { ...NO_INPUT };
     setScreen("race");
-  }, []);
+  }, [prepare3d]);
   useEffect(() => {
     const session = netSession();
     session.onStart(startOnline);
@@ -249,7 +262,7 @@ export default function Game() {
     let raf = 0, last = performance.now(), acc = 0, resultsShown = false, finishSeen = -1;
 
     const resize = () => {
-      const dpr = window.devicePixelRatio || 1;
+      const dpr = Math.min(window.devicePixelRatio || 1, 2); // the HUD canvas is laid over the 3D view: no need for more than 2x
       canvas.width = canvas.clientWidth * dpr;
       canvas.height = canvas.clientHeight * dpr;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -380,7 +393,16 @@ export default function Game() {
         if (!r) return fail("La 3D a besoin de WebGL, que cet appareil ne fournit pas : le jeu s'affiche en 2D.");
         inst = r;
         r3dRef.current = r;
-        r3dStatus.current = "ready";
+        // The race that is waiting is prepared first (shaders compiled, everything uploaded); the loading screen stays up until then.
+        const waiting = raceRef.current;
+        if (!waiting) {
+          r3dStatus.current = "ready";
+          return;
+        }
+        const token = ++prepToken.current;
+        void r.prepare(waiting).catch(() => undefined).finally(() => {
+          if (!cancelled && token === prepToken.current && r3dRef.current === r) r3dStatus.current = "ready";
+        });
       })
       .catch(() => fail("La 3D n'a pas pu se charger : le jeu s'affiche en 2D."));
     return () => {

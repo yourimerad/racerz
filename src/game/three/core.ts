@@ -37,10 +37,12 @@ export class Disposer {
 /** 0 = everything, 1 = lighter shadows and half the particles, 2 = no shadows, a quarter of the particles, no extra pixel ratio. */
 export type QualityLevel = 0 | 1 | 2;
 export type Quality = { level: QualityLevel; shadows: boolean; shadowSize: number; particles: number; pixelRatio: number };
-export function qualityOf(level: QualityLevel, dpr: number): Quality {
-  if (level === 0) return { level, shadows: true, shadowSize: 2048, particles: 1, pixelRatio: Math.min(dpr, 2) };
-  if (level === 1) return { level, shadows: true, shadowSize: 1024, particles: 0.5, pixelRatio: Math.min(dpr, 1.5) };
-  return { level, shadows: false, shadowSize: 512, particles: 0.25, pixelRatio: 1 };
+/** `scale` multiplies the level's pixel ratio (the governor's finer steps, see adapt.ts). */
+export function qualityOf(level: QualityLevel, dpr: number, scale = 1): Quality {
+  const q = level === 0 ? { level, shadows: true, shadowSize: 2048, particles: 1, pixelRatio: Math.min(dpr, 2) }
+    : level === 1 ? { level, shadows: true, shadowSize: 1024, particles: 0.5, pixelRatio: Math.min(dpr, 1.5) }
+      : { level, shadows: false, shadowSize: 512, particles: 0.25, pixelRatio: 1 };
+  return scale === 1 ? q : { ...q, pixelRatio: Math.max(0.5, q.pixelRatio * scale) };
 }
 
 // ---------- noise ----------
@@ -156,25 +158,44 @@ export function propMaterial(d: Disposer, o: THREE.MeshStandardMaterialParameter
   return d.add(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85, metalness: 0, flatShading: true, ...o }));
 }
 
-/** An instanced mesh from per-instance placements (x, z in metres, y, heading about Y, scale, tint 0xRRGGBB or -1 for none). */
+/**
+ * Instanced meshes from per-instance placements (x, z in metres, y, heading about Y, scale, tint 0xRRGGBB or -1 for none). The instances are
+ * grouped in cells of `cell` metres, one instanced mesh per cell, each with its own bounding sphere: what is out of view is culled (in the shadow
+ * pass too) instead of drawn, which matters when a world has hundreds of trees and hedges. `maxDist` (m, 0 = never) also hides the cells that are
+ * too far to matter (small props: hedges, fence posts), see `collectFar` / `applyFar` in bake.ts. Returns one mesh, or a group of them.
+ */
 export type Placement = { x: number; y?: number; z: number; ry?: number; s?: number; sx?: number; sy?: number; sz?: number; tint?: number };
-export function instanced(d: Disposer, geo: THREE.BufferGeometry, mat: THREE.Material, list: readonly Placement[], shadow = true): THREE.InstancedMesh | null {
+export function instanced(d: Disposer, geo: THREE.BufferGeometry, mat: THREE.Material, list: readonly Placement[], shadow = true, cell = 80, maxDist = 0): THREE.Object3D | null {
   if (!list.length) return null;
   d.add(geo);
-  const mesh = new THREE.InstancedMesh(geo, mat, list.length);
   const color = new THREE.Color();
-  list.forEach((p, i) => {
-    const s = p.s ?? 1;
-    mesh.setMatrixAt(i, mat4(p.x, p.y ?? 0, p.z, 0, p.ry ?? 0, 0, p.sx ?? s, p.sy ?? s, p.sz ?? s));
-    if (p.tint !== undefined && p.tint >= 0) mesh.setColorAt(i, color.setHex(p.tint));
-    else mesh.setColorAt(i, color.setRGB(1, 1, 1));
-  });
-  mesh.instanceMatrix.needsUpdate = true;
-  if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-  mesh.castShadow = shadow;
-  mesh.receiveShadow = true;
-  mesh.frustumCulled = false; // the instances are spread over the whole world: the single bounding sphere of the base geometry would cull them all
-  return mesh;
+  const make = (items: readonly Placement[]) => {
+    const mesh = new THREE.InstancedMesh(geo, mat, items.length);
+    items.forEach((p, i) => {
+      const s = p.s ?? 1;
+      mesh.setMatrixAt(i, mat4(p.x, p.y ?? 0, p.z, 0, p.ry ?? 0, 0, p.sx ?? s, p.sy ?? s, p.sz ?? s));
+      if (p.tint !== undefined && p.tint >= 0) mesh.setColorAt(i, color.setHex(p.tint));
+      else mesh.setColorAt(i, color.setRGB(1, 1, 1));
+    });
+    mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    mesh.castShadow = shadow;
+    mesh.receiveShadow = true;
+    mesh.computeBoundingSphere(); // from the instances, so the renderer can cull the cell
+    if (maxDist > 0) mesh.userData.maxDist = maxDist;
+    return mesh;
+  };
+  const cells = new Map<number, Placement[]>();
+  for (const p of list) {
+    const key = (Math.floor(p.x / cell) + 512) * 1024 + (Math.floor(p.z / cell) + 512);
+    let items = cells.get(key);
+    if (!items) cells.set(key, (items = []));
+    items.push(p);
+  }
+  if (cells.size === 1) return make(list);
+  const group = new THREE.Group();
+  for (const items of cells.values()) group.add(make(items));
+  return group;
 }
 
 // ---------- sky ----------

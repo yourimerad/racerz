@@ -2,6 +2,7 @@ import { type Adapter3D, K } from "../adapter3d";
 import { wallHeightOf } from "../flight";
 import type { ThemeId } from "../themes";
 import type { Track } from "../track";
+import { type FarRule, collectFar, cullable } from "./bake";
 import { type Disposer, type Quality, THREE, makeSky, paintTexture, hash2 } from "./core";
 import { type ProfilePoint, DistField, ribbon, sweep } from "./terrain";
 import { buildClassic } from "./classic";
@@ -311,6 +312,8 @@ export type World = {
   scenery: Scenery;
   sky: THREE.Mesh;
   look: Look;
+  /** Cells of small props hidden beyond their distance (`applyFar` once a frame). */
+  far: FarRule[];
 };
 
 /** Builds the mode's world into a group. Everything it makes is registered in `ctx.d`. */
@@ -320,8 +323,9 @@ export function buildWorld(ctx: WorldCtx): World {
   buildBarriers(ctx);
   buildFinish(ctx);
   const scenery = mode === "desert" ? buildDesert(ctx) : mode === "volcano" ? buildVolcano(ctx) : mode === "northpole" ? buildNorthpole(ctx) : buildClassic(ctx);
+  cullable(d, ctx.group); // the terrain and the road in cells: what is out of view is culled instead of drawn
   const look = LOOKS[mode];
   const sky = makeSky(d, ...look.sky);
   ctx.group.add(sky);
-  return { group: ctx.group, scenery, sky, look };
+  return { group: ctx.group, scenery, sky, look, far: collectFar(ctx.group) };
 }
