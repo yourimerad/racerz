@@ -17,6 +17,8 @@
 //   (k) the realism layers: the procedural surfaces (road grain, sand ripples, snow, ash, rock...) tile without a seam, have unit upward normals,
 //       sensible albedo and roughness and are freed; the sky (sun direction, clouds) and the far ranges (closed rings, finite) build and are freed;
 //       the road's detail UVs close on a whole number of tiles over the lap;
+//   (l) the foliage: the leaf and grass sprites cover a sensible share, the three trees' geometry is finite with unit normals and the old sizes, the canopy
+//       and the grass tuft are sized right (a scale slip once made 30 m leaves), the leaf material is alpha-tested on both faces, all freed;
 //   (g) the yeti's jump (four moments) and a car's explosion with its wreck are read by the adapter and drawn without a leak.
 
 import { Adapter3D, CAM, ChaseCamera, K, toScene, type CamTarget, type CarView } from "../src/game/adapter3d";
@@ -32,6 +34,7 @@ import { DistField, lapMetres, ribbon } from "../src/game/three/terrain";
 import { type SurfaceKind, surface, surfacePixels } from "../src/game/three/pbr";
 import { LOOKS } from "../src/game/three/world";
 import { makeHorizon, makeSkyDome, sunDirection } from "../src/game/three/sky";
+import { grassTexture, grassTuft, leafCanopy, leafMaterial, leafTexture, realisticTree } from "../src/game/three/foliage";
 import { buildWorld } from "../src/game/three/world";
 import { THEME_ORDER, type ThemeId } from "../src/game/themes";
 import { NO_INPUT } from "../src/game/car";
@@ -626,7 +629,7 @@ console.log("3D view checks\n");
 // ---------- (k) procedural surfaces, the sky and the far ranges ----------
 {
   const base = liveResources();
-  const KINDS: SurfaceKind[] = ["asphalt", "sand", "grass", "dirt", "snow", "ice", "rock", "ash", "gravel"];
+  const KINDS: SurfaceKind[] = ["asphalt", "sand", "grass", "dirt", "snow", "ice", "rock", "ash", "gravel", "bark"];
   const N = 128;
   const seams: string[] = [];
   for (const kind of KINDS) {
@@ -700,6 +703,60 @@ console.log("3D view checks\n");
   d.dispose();
   if (liveResources() !== base) fail(`${liveResources() - base} resources alive after the surfaces, skies and ranges were freed`);
   console.log(`  realism layers: ${KINDS.length} procedural surfaces tile without a seam (unit normals, albedo and roughness in range), skies and far ranges build for 4 modes, the road's detail UVs close over the lap, everything freed`);
+}
+
+// ---------- (l) leaves, trees and grass ----------
+{
+  const base = liveResources(), d = new Disposer();
+  // The sprites: enough alpha to read as foliage / blades, not a solid card and not dust.
+  const cover = (t: THREE.DataTexture) => {
+    const px = t.image.data as Uint8Array;
+    let on = 0;
+    for (let i = 3; i < px.length; i += 4) if (px[i] > 127) on++;
+    return on / (px.length / 4);
+  };
+  const leaf = leafTexture(d), grass = grassTexture(d), cl = cover(leaf), cg = cover(grass);
+  if (cl < 0.3 || cl > 0.8) fail(`the leaf sprite covers ${(cl * 100).toFixed(0)} % (expected 30-80 %)`);
+  if (cg < 0.08 || cg > 0.6) fail(`the grass sprite covers ${(cg * 100).toFixed(0)} % (expected 8-60 %)`);
+  // Geometry: finite, unit normals, UVs in the sprite, the sizes the old trees had, same attributes on trunk and leaves.
+  const dims: Record<number, { h: number; r: number }> = { 0: { h: 8.5, r: 4.5 }, 1: { h: 12, r: 3 }, 2: { h: 13, r: 4 } };
+  for (const v of [0, 1, 2] as const) {
+    const tree = realisticTree(v);
+    for (const [name, g] of [["trunk", tree.trunk], ["leaves", tree.leaves]] as const) {
+      const pos = g.attributes.position, nor = g.attributes.normal, uv = g.attributes.uv, col = g.attributes.color;
+      if (!pos || !nor || !uv || !col) {
+        fail(`tree ${v} ${name}: missing attributes`);
+        continue;
+      }
+      let bad = 0, top = 0, reach = 0;
+      for (let i = 0; i < pos.count; i++) {
+        if (![pos.getX(i), pos.getY(i), pos.getZ(i), nor.getX(i), nor.getY(i), nor.getZ(i)].every(Number.isFinite)) bad++;
+        if (Math.abs(Math.hypot(nor.getX(i), nor.getY(i), nor.getZ(i)) - 1) > 0.02) bad++;
+        if (name === "leaves" && (uv.getX(i) < -1e-6 || uv.getX(i) > 1 + 1e-6 || uv.getY(i) < -1e-6 || uv.getY(i) > 1 + 1e-6)) bad++;
+        top = Math.max(top, pos.getY(i));
+        reach = Math.max(reach, Math.hypot(pos.getX(i), pos.getZ(i)));
+      }
+      if (bad) fail(`tree ${v} ${name}: ${bad} bad vertices (non-finite, non-unit normals or UVs outside the sprite)`);
+      if (top > dims[v].h + 3 || reach > dims[v].r + 3) fail(`tree ${v} ${name}: ${top.toFixed(1)} m tall, ${reach.toFixed(1)} m wide (expected about ${dims[v].h} × ${dims[v].r})`);
+      if (name === "leaves" && pos.count / 3 > 900) fail(`tree ${v}: ${pos.count / 3} leaf triangles (budget 900: hundreds of them stand in the forest)`);
+      d.add(g);
+    }
+  }
+  // The canopy scaled by an instance (radius / 4.6) must stay a canopy, not a sky-sized sheet: its own size is about 5 m.
+  const canopy = leafCanopy();
+  canopy.computeBoundingSphere();
+  if (!canopy.boundingSphere || canopy.boundingSphere.radius < 3 || canopy.boundingSphere.radius > 9) fail(`the leaf canopy is ${canopy.boundingSphere?.radius.toFixed(1)} m across (expected 3-9 m radius)`);
+  d.add(canopy);
+  const tuft = grassTuft();
+  tuft.computeBoundingBox();
+  if (!tuft.boundingBox || tuft.boundingBox.max.y < 0.3 || tuft.boundingBox.max.y > 0.8) fail("a grass tuft should be about half a metre tall");
+  d.add(tuft);
+  // Materials: alpha-tested, both faces, a wind clock to read; the same wind drives them all.
+  const wind = { time: { value: 0 } }, mat = leafMaterial(d, leaf, wind);
+  if (mat.alphaTest <= 0 || mat.side !== THREE.DoubleSide) fail("the leaf material must be alpha-tested on both faces");
+  d.dispose();
+  if (liveResources() !== base) fail(`${liveResources() - base} resources alive after the foliage was freed`);
+  console.log(`  foliage: leaf sprite ${(cl * 100).toFixed(0)} % opaque, grass ${(cg * 100).toFixed(0)} %, three trees (finite, unit normals, UVs in the sprite, old sizes, ≤ 900 leaf triangles), canopy and tuft sized right, everything freed`);
 }
 
 // ---------- (f) the winner's fireworks ----------

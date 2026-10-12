@@ -28,7 +28,7 @@ export function placeOf(p: SceneProp, modelR: number, i: number, yaw?: number): 
  */
 export function texturedGround(
   d: Disposer, group: THREE.Group, bounds: { minX: number; minY: number; maxX: number; maxY: number }, outer: string, texW: number,
-  paint: (g: CanvasRenderingContext2D, w: number, h: number, sx: number, sy: number) => void, roughness = 1, grain?: { kind: SurfaceKind; normalScale?: number },
+  paint: (g: CanvasRenderingContext2D, w: number, h: number, sx: number, sy: number) => void, roughness = 1, grain?: { kind: SurfaceKind; normalScale?: number; albedo?: number },
 ) {
   const wm = (bounds.maxX - bounds.minX) * K, hm = (bounds.maxY - bounds.minY) * K, texH = Math.round((texW * hm) / wm);
   const tex = paintTexture(d, texW, texH, (g, w, h) => paint(g, w, h, w / (bounds.maxX - bounds.minX), h / (bounds.maxY - bounds.minY)), { anisotropy: 8 });
@@ -39,7 +39,7 @@ export function texturedGround(
     // The ground's own grain (grass blades, sand ripples, snow crystals, ash grit) as a detail normal / roughness layer, tiled over the map.
     const surf = surface(d, grain.kind);
     planarUv1(geo, surf.tile);
-    detail(mat, surf, { normalScale: grain.normalScale ?? 1 });
+    detail(mat, surf, { normalScale: grain.normalScale ?? 1, albedo: grain.albedo });
   }
   const ground = new THREE.Mesh(geo, mat);
   ground.position.set(((bounds.minX + bounds.maxX) / 2) * K, 0, ((bounds.minY + bounds.maxY) / 2) * K);
@@ -48,7 +48,7 @@ export function texturedGround(
   const farGeo = d.add(new THREE.PlaneGeometry(6000, 6000));
   farGeo.rotateX(-Math.PI / 2);
   const far = new THREE.Mesh(farGeo, d.add(new THREE.MeshStandardMaterial({ color: outer, roughness: 1 })));
-  far.position.set(ground.position.x, -0.06, ground.position.z);
+  far.position.set(ground.position.x, -0.5, ground.position.z);
   far.receiveShadow = true;
   group.add(far);
   return ground;

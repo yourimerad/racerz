@@ -5,7 +5,7 @@ import { type Disposer, THREE, hash2, smoothstep } from "./core";
 // close-up grain, cracks, ripples and glints that a flat colour cannot: the normal map catches the sun, the roughness map breaks the
 // reflections up. Everything wraps, so a small tile covers a whole map.
 
-export type SurfaceKind = "asphalt" | "sand" | "grass" | "dirt" | "snow" | "ice" | "rock" | "ash" | "gravel";
+export type SurfaceKind = "asphalt" | "sand" | "grass" | "dirt" | "snow" | "ice" | "rock" | "ash" | "gravel" | "bark";
 
 export type Surface = {
   /** Albedo detail: near-white greys (the base colour or the vertex colours multiply it), sRGB. */
@@ -98,7 +98,7 @@ const RECIPES: Record<SurfaceKind, Recipe> = {
     texel(u, v, o) {
       const blades = tfbm(u * 1.0, v * 6.0, 64, 3, 31), clump = tfbm(u, v, 9, 3, 33), fine = tfbm(u, v, 160, 2, 35);
       o.h = 0.55 * blades + 0.3 * fine + 0.25 * clump;
-      o.a = 0.74 + 0.4 * (blades - 0.5) + 0.3 * (clump - 0.5) + 0.12 * (fine - 0.5);
+      o.a = 0.92 + 0.4 * (blades - 0.5) + 0.3 * (clump - 0.5) + 0.12 * (fine - 0.5);
       o.r = 0.9 + 0.1 * fine;
     },
   },
@@ -143,6 +143,17 @@ const RECIPES: Record<SurfaceKind, Recipe> = {
       o.h = 0.4 * big + 0.3 * ridge + 0.12 * layer * (0.4 + 0.6 * warp) + 0.2 * fine - 0.35 * fracture;
       o.a = 0.8 + 0.3 * (big - 0.5) + 0.12 * (layer - 0.5) + 0.14 * (fine - 0.5) + 0.1 * (ridge - 0.5) - 0.3 * fracture;
       o.r = 0.9 + 0.1 * fine;
+    },
+  },
+  // Tree bark: deep vertical fissures with ridged plates between them (more cells around the trunk than along it, so the streaks run up).
+  bark: {
+    tile: 1.2, strength: 3.0,
+    texel(u, v, o) {
+      const ridge = 1 - Math.abs(tfbm(u * 6, v, 5, 3, 101) * 2 - 1), fine = tfbm(u * 12, v * 2, 8, 2, 103), plate = tfbm(u * 4, v, 6, 3, 105);
+      const fis = 1 - smoothstep(0.0, 0.18, Math.abs(tfbm(u * 8, v, 6, 2, 107) - 0.5));
+      o.h = 0.55 * ridge + 0.25 * plate + 0.15 * fine - 0.45 * fis;
+      o.a = 0.7 + 0.3 * (plate - 0.5) + 0.2 * (fine - 0.5) - 0.38 * fis;
+      o.r = 0.95;
     },
   },
   // Volcanic ash and basalt grit: coarse, dark, with glassy flecks.
@@ -242,14 +253,26 @@ export const surfacePixels = (kind: SurfaceKind, size = 256) => generate(kind, s
  * Puts a surface on a material as a *detail* layer on the second UV set (`uv1`, in tiles): its normal and roughness maps always, its albedo
  * only when `albedo` is set (then it multiplies the colour or the vertex colours, so give the material a mid-bright base).
  */
-export function detail(mat: THREE.MeshStandardMaterial, s: Surface, o: { normalScale?: number; albedo?: boolean; roughness?: boolean } = {}): THREE.MeshStandardMaterial {
-  s.normal.channel = 1;
-  s.rough.channel = 1;
-  s.map.channel = 1;
+export function detail(mat: THREE.MeshStandardMaterial, s: Surface, o: { normalScale?: number; albedo?: number; roughness?: boolean; channel?: number } = {}): THREE.MeshStandardMaterial {
+  const ch = o.channel ?? 1;
+  s.normal.channel = ch;
+  s.rough.channel = ch;
+  s.map.channel = ch;
   mat.normalMap = s.normal;
   mat.normalScale.set(o.normalScale ?? 1, o.normalScale ?? 1);
   if (o.roughness !== false) mat.roughnessMap = s.rough;
-  if (o.albedo) mat.map = s.map;
+  if (o.albedo) {
+    // The albedo detail multiplies the colour (whatever feeds it: a painted map, vertex colours) at the normal map's own tiling.
+    const k = o.albedo;
+    mat.onBeforeCompile = (shader) => {
+      shader.uniforms.detailAlbedo = { value: s.map };
+      shader.uniforms.detailMix = { value: k };
+      shader.fragmentShader = shader.fragmentShader
+        .replace("#include <common>", "#include <common>\nuniform sampler2D detailAlbedo; uniform float detailMix;")
+        .replace("#include <map_fragment>", "#include <map_fragment>\ndiffuseColor.rgb *= mix(vec3(1.0), texture2D(detailAlbedo, vNormalMapUv).rgb, detailMix);");
+    };
+    mat.customProgramCacheKey = () => `detailAlbedo:${k}`;
+  }
   mat.needsUpdate = true;
   return mat;
 }
