@@ -5,6 +5,7 @@ import type { Track } from "../track";
 import { type FarRule, collectFar, cullable } from "./bake";
 import { type Disposer, type Quality, THREE, paintTexture, hash2 } from "./core";
 import { type Clouds, type Range, type Sky, makeHorizon, makeSkyDome, sunDirection } from "./sky";
+import type { PostLook } from "./post";
 import { type ProfilePoint, DistField, coverSamples, ribbon, sweep } from "./terrain";
 import { type SurfaceKind, detail, surface } from "./pbr";
 import { buildClassic } from "./classic";
@@ -54,12 +55,15 @@ export type Look = {
   haze: number;
   /** The far hills and mountains round the horizon (see sky.ts). */
   ranges: Range[];
+  /** Bloom, vignette and grade (see post.ts). */
+  post: PostLook;
 };
 
 export const LOOKS: Record<ThemeId, Look> = {
   desert: {
     sky: ["#4f8fd0", "#a9cbe0", "#f0d3a8"], fog: "#efd2a6", near: 90, far: 760, sun: "#fff0d0", sunIntensity: 3.0, sunAz: 305, sunEl: 36,
     hemi: ["#fff0d8", "#d9a070", 1.4], exposure: 1.05, haze: 0.2,
+    post: { bloom: 0.16, radius: 0.55, threshold: 1.5, vignette: 0.22, saturation: 1.06, contrast: 1.06, tint: "#fff6ec" },
     clouds: { cover: 0.3, bright: "#fff7e8", shade: "#d6b697", speed: 0.003, scale: 0.55 },
     ranges: [
       { radius: 1000, height: 130, color: "#c58a5e", haze: 0.6, freq: 1.4, seed: 3, plateau: true },
@@ -70,6 +74,7 @@ export const LOOKS: Record<ThemeId, Look> = {
   countryside: {
     sky: ["#3f7fcf", "#9cc4ea", "#d8e8f4"], fog: "#d0e2ef", near: 140, far: 980, sun: "#fff4dc", sunIntensity: 2.6, sunAz: 305, sunEl: 44,
     hemi: ["#e0f0ff", "#3f7a45", 0.9], exposure: 1.0, haze: 0.22,
+    post: { bloom: 0.12, radius: 0.5, threshold: 1.6, vignette: 0.2, saturation: 1.08, contrast: 1.07, tint: "#fffaf2" },
     clouds: { cover: 0.5, bright: "#ffffff", shade: "#9db3cd", speed: 0.004, scale: 0.7 },
     ranges: [
       { radius: 1000, height: 110, color: "#6e8fb0", haze: 0.6, freq: 1.3, seed: 4 },
@@ -80,6 +85,7 @@ export const LOOKS: Record<ThemeId, Look> = {
   northpole: {
     sky: ["#6c9bc9", "#c4dcee", "#eaf3f9"], fog: "#e6f0f7", near: 70, far: 700, sun: "#fff8ea", sunIntensity: 3.0, sunAz: 305, sunEl: 24,
     hemi: ["#e8f4ff", "#dfe9f1", 1.05], exposure: 1.0, haze: 0.28,
+    post: { bloom: 0.1, radius: 0.5, threshold: 2.0, vignette: 0.18, saturation: 1.02, contrast: 1.04, tint: "#f4f8ff" },
     clouds: { cover: 0.62, bright: "#f7fbff", shade: "#a6bdd3", speed: 0.002, scale: 0.5 },
     ranges: [
       { radius: 1000, height: 260, color: "#8fb0cf", haze: 0.5, freq: 1.5, seed: 5, ridged: true, cap: "#ffffff" },
@@ -89,6 +95,7 @@ export const LOOKS: Record<ThemeId, Look> = {
   volcano: {
     sky: ["#1c1016", "#4a2c28", "#a85a32"], fog: "#46302b", near: 100, far: 820, sun: "#ffd2b0", sunIntensity: 4.6, sunAz: 305, sunEl: 20,
     hemi: ["#f0cdb8", "#7a6a60", 2.1], exposure: 1.3, haze: 0.3,
+    post: { bloom: 0.26, radius: 0.6, threshold: 1.5, vignette: 0.28, saturation: 1.08, contrast: 1.08, tint: "#fff3ea" },
     clouds: { cover: 0.7, bright: "#b4745a", shade: "#2a1816", speed: 0.005, scale: 0.6 },
     ranges: [
       { radius: 1000, height: 170, color: "#4a2e2a", haze: 0.5, freq: 1.5, seed: 6, ridged: true, peaks: [{ at: 1.2, width: 0.1, height: 300 }, { at: 4.2, width: 0.13, height: 220 }] },
