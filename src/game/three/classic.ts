@@ -52,7 +52,7 @@ export function buildClassic(ctx: WorldCtx): Scenery {
       g.fillStyle = hash2(i, 5) > 0.5 ? "rgba(255,255,255,0.05)" : "rgba(0,30,0,0.07)";
       g.fillRect(hash2(i, 6) * w, hash2(i, 7) * h, 1 + hash2(i, 8) * 2, 1 + hash2(i, 9) * 2);
     }
-  });
+  }, 1, { kind: "grass", normalScale: 1.0 });
 
   const matProp = propMaterial(d);
   const put = (mesh: THREE.Object3D | null) => {

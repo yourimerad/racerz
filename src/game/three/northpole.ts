@@ -50,7 +50,7 @@ export function buildNorthpole(ctx: WorldCtx): Scenery {
       g.fillStyle = hash2(i, 3) > 0.5 ? "rgba(255,255,255,0.4)" : "rgba(150,185,215,0.12)";
       g.fillRect(hash2(i, 4) * w, hash2(i, 5) * h, 1 + hash2(i, 6) * 2, 1 + hash2(i, 7) * 2);
     }
-  }, 0.85);
+  }, 0.85, { kind: "snow", normalScale: 0.9 });
 
   const matProp = propMaterial(d);
   const put = (m: THREE.Object3D | null) => {

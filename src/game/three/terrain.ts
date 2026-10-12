@@ -127,10 +127,12 @@ export function lapMetres(track: Track): { s: number[]; total: number } {
  * `y`. The texture runs across it (u 0..1, from `a` to `b`) and along it (v, one repeat every `repeatM` metres, rounded so that the lap closes
  * on a whole number of repeats and the pattern has no seam).
  */
-export function ribbon(d: Disposer, track: Track, a: number, b: number, y: number, repeatM: number): THREE.BufferGeometry {
+export function ribbon(d: Disposer, track: Track, a: number, b: number, y: number, repeatM: number, detailTile = 0): THREE.BufferGeometry {
   const n = track.path.length, { s, total } = lapMetres(track);
   const reps = Math.max(1, Math.round(total / repeatM));
-  const pos = new Float32Array((n + 1) * 2 * 3), uv = new Float32Array((n + 1) * 2 * 2), nor = new Float32Array((n + 1) * 2 * 3);
+  // The detail layer's tile is stretched a hair so the lap closes on a whole number of them (no seam at the line).
+  const dTile = detailTile ? total / Math.max(1, Math.round(total / detailTile)) : 0;
+  const pos = new Float32Array((n + 1) * 2 * 3), uv = new Float32Array((n + 1) * 2 * 2), nor = new Float32Array((n + 1) * 2 * 3), uv1 = detailTile ? new Float32Array((n + 1) * 2 * 2) : null;
   for (let i = 0; i <= n; i++) {
     const p = track.path[i % n], t = track.tangents[i % n], v = ((i === n ? total : s[i]) / total) * reps;
     for (let side = 0; side < 2; side++) {
@@ -141,6 +143,11 @@ export function ribbon(d: Disposer, track: Track, a: number, b: number, y: numbe
       nor[k * 3 + 1] = 1;
       uv[k * 2] = side;
       uv[k * 2 + 1] = v;
+      if (uv1) {
+        // The detail layer (grain, cracks): metres across and along the road over the surface's own tile size.
+        uv1[k * 2] = (side ? (b - a) * K : 0) / dTile;
+        uv1[k * 2 + 1] = (i === n ? total : s[i]) / dTile;
+      }
     }
   }
   const idx = new Uint32Array(n * 6);
@@ -152,6 +159,7 @@ export function ribbon(d: Disposer, track: Track, a: number, b: number, y: numbe
   g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
   g.setAttribute("normal", new THREE.BufferAttribute(nor, 3));
   g.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
+  if (uv1) g.setAttribute("uv1", new THREE.BufferAttribute(uv1, 2));
   g.setIndex(new THREE.BufferAttribute(idx, 1));
   g.computeBoundingSphere();
   return g;

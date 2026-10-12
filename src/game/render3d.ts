@@ -77,7 +77,7 @@ class Impl implements Renderer3D {
   private reduced: boolean;
   private disposed = false;
   private debugPose: { px: number; py: number; pz: number; lx: number; ly: number; lz: number; fov?: number } | null = null;
-  private sunDir = new THREE.Vector3(-0.5, 0.78, -0.42).normalize();
+  private sunDir = new THREE.Vector3(-0.5, 0.78, -0.42).normalize(); // replaced by the mode's own when its world is built
 
   constructor(host: HTMLElement, renderer: THREE.WebGLRenderer) {
     this.host = host;
@@ -213,6 +213,7 @@ class Impl implements Renderer3D {
       this.world = buildWorld({ adapter: this.adapter, d: this.worldD, group, quality: this.quality, field });
       this.worldMode = race.theme.id;
       const look = this.world.look;
+      this.sunDir.copy(this.world.sunDir);
       this.scene.fog = new THREE.Fog(look.fog, look.near, look.far);
       this.sun.color.set(look.sun);
       this.sun.intensity = look.sunIntensity;
@@ -261,6 +262,8 @@ class Impl implements Renderer3D {
       cam.updateProjectionMatrix();
     }
     world.sky.position.copy(cam.position);
+    world.horizon.position.set(cam.position.x, 0, cam.position.z);
+    world.sky.tick(this.time);
     applyFar(world.far, cam.position);
 
     // The sun follows the car (its shadow map covers ~160 m around it); a high Jet's shadow lands far off, so aim between car and ground.

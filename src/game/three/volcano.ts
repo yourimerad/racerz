@@ -5,6 +5,7 @@ import { type Key, spline } from "./carbody";
 import { THREE, type Placement, fbm, hash2, instanced, lerp, part, propMaterial, smoothstep, vnoise } from "./core";
 import { placeOf, propsOf, texturedGround } from "./place";
 import * as models from "./props";
+import { surface, triplanar } from "./pbr";
 import { coverSamples, heightfield, sweep } from "./terrain";
 import type { Scenery, WorldCtx } from "./world";
 
@@ -52,7 +53,7 @@ export function buildVolcano(ctx: WorldCtx): Scenery {
       g.fillStyle = hash2(i, 3) > 0.55 ? "rgba(150,138,132,0.10)" : "rgba(0,0,0,0.16)";
       g.fillRect(hash2(i, 4) * w, hash2(i, 5) * h, 1 + hash2(i, 6) * 2, 1 + hash2(i, 7) * 2);
     }
-  });
+  }, 1, { kind: "ash", normalScale: 1.2 });
 
   // ---- the cone: a height field over the volcano's own square ----
   const half = Math.max(RING_R[0] * 2, 1580); // the whole map: the circuit runs round the cone at 1 100 u
@@ -98,7 +99,9 @@ export function buildVolcano(ctx: WorldCtx): Scenery {
     o.g = tmp.g;
     o.b = tmp.b;
   });
-  const cone = new THREE.Mesh(geo, d.add(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, flatShading: true })));
+  // Smooth normals and a triplanar basalt grain (see pbr.ts) in place of the old flat facets.
+  const basalt = surface(d, "rock", 256);
+  const cone = new THREE.Mesh(geo, triplanar(d.add(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95 })), basalt, { tile: 6, albedo: 0.7, normal: 1.0 }));
   cone.position.y = -0.0;
   cone.castShadow = true;
   cone.receiveShadow = true;
@@ -129,7 +132,7 @@ export function buildVolcano(ctx: WorldCtx): Scenery {
     g.computeBoundingSphere();
     return g;
   };
-  const rockMat = d.add(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, flatShading: true, side: THREE.DoubleSide }));
+  const rockMat = triplanar(d.add(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, side: THREE.DoubleSide })), basalt, { tile: 6, albedo: 0.7, normal: 1.0 });
   const linerMat = d.add(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, flatShading: true, side: THREE.DoubleSide }));
   const glowMat = d.add(new THREE.MeshStandardMaterial({ color: "#ff8a2a", emissive: "#ff6a1f", emissiveIntensity: 2.2, roughness: 0.6, side: THREE.DoubleSide }));
   const lampMat = d.add(new THREE.MeshStandardMaterial({ color: "#ffd9a0", emissive: "#ffb060", emissiveIntensity: 2.6, roughness: 0.5 }));
