@@ -8,6 +8,7 @@ import { QualityGovernor, GOV } from "./three/adapt";
 import { applyFar } from "./three/bake";
 import { type World, buildWorld } from "./three/world";
 import { DistField } from "./three/terrain";
+import { Post } from "./three/post";
 
 // The 3D view of a race: one WebGL canvas laid over the 2D canvas (which then only draws the HUD). It reads the race through the adapter and
 // never writes to it, so the race is the same whichever view is on. Loaded on demand (this module and Three.js are a separate chunk): the
@@ -58,6 +59,8 @@ class Impl implements Renderer3D {
   private worldD = new Disposer();
   private raceD = new Disposer();
   private envD = new Disposer();
+  /** Bloom, vignette and grade: made when the world is, used only at the best quality level. */
+  private post: Post | null = null;
   private env: THREE.Texture | null = null;
   private race: Race | null = null;
   private adapter: Adapter3D | null = null;
@@ -148,6 +151,7 @@ class Impl implements Renderer3D {
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
+    this.post?.setSize(w, h, this.quality.pixelRatio);
   }
 
   debugCamera(pose: { px: number; py: number; pz: number; lx: number; ly: number; lz: number; fov?: number } | null) {
@@ -176,7 +180,7 @@ class Impl implements Renderer3D {
       });
       try {
         await this.renderer.compileAsync(scene, cam);
-        if (!this.disposed && !this.lost && this.race === race) this.renderer.render(scene, cam); // not if a newer race replaced this one meanwhile
+        if (!this.disposed && !this.lost && this.race === race) this.draw(0); // not if a newer race replaced this one meanwhile
       } finally {
         for (const s of saved) {
           s.o.visible = s.visible;
@@ -221,6 +225,8 @@ class Impl implements Renderer3D {
       this.hemi.groundColor.set(look.hemi[1]);
       this.hemi.intensity = look.hemi[2];
       this.renderer.toneMappingExposure = look.exposure;
+      if (!this.post) this.post = new Post(this.renderer, this.scene, this.camera, Math.max(2, this.host.clientWidth), Math.max(2, this.host.clientHeight), this.quality.pixelRatio);
+      this.post.setLook(look.post);
       // What the paint and glass reflect: this mode's own sky (the cars only; the world is lit by the sun and the sky light).
       this.envD.dispose();
       this.envD = new Disposer();
@@ -275,8 +281,14 @@ class Impl implements Renderer3D {
     world.scenery.update?.(dt, this.time, a);
     this.play?.update(dt, this.time, cam, this.renderer.domElement.height);
 
-    this.renderer.render(this.scene, cam);
+    this.draw(dt);
     this.watchFrameRate(now);
+  }
+
+  /** One frame: through the bloom and grade at the best quality, straight to the screen otherwise (a slower device, a phone). */
+  private draw(dt: number) {
+    if (this.post && this.quality.post) this.post.render(dt);
+    else this.renderer.render(this.scene, this.camera);
   }
 
   /** The quality of the governor's current step, for this screen. */
@@ -318,6 +330,7 @@ class Impl implements Renderer3D {
     this.ro?.disconnect();
     this.canvas.removeEventListener("webglcontextlost", this.onLost);
     this.play?.dispose();
+    this.post?.dispose();
     this.raceD.dispose();
     this.worldD.dispose();
     this.envD.dispose();

@@ -700,6 +700,13 @@ console.log("3D view checks\n");
       if (Math.abs(last * tile - total) > tile * 0.5 + 1e-3) fail(`${mode}: the detail tile strays from ${tile} m (lap ${total.toFixed(0)} m over ${last} tiles)`);
     }
   }
+  // The picture's last steps (post.ts): only at the best quality level, and each mode's look is within bounds (no washed-out or crushed picture).
+  if (!qualityOf(0, 1).post || qualityOf(1, 1).post || qualityOf(2, 1).post) fail("bloom and grade must run at quality level 0 only");
+  for (const mode of THEME_ORDER) {
+    const p = LOOKS[mode].post;
+    if (!(p.bloom >= 0 && p.bloom <= 0.6 && p.radius > 0 && p.radius <= 1 && p.threshold >= 0.9 && p.vignette >= 0 && p.vignette <= 0.5 && p.saturation >= 0.9 && p.saturation <= 1.3 && p.contrast >= 0.9 && p.contrast <= 1.3)) fail(`${mode}: the post look is out of bounds (${JSON.stringify(p)})`);
+    if (!/^#[0-9a-f]{6}$/i.test(p.tint)) fail(`${mode}: the post tint ${p.tint} is not a colour`);
+  }
   d.dispose();
   if (liveResources() !== base) fail(`${liveResources() - base} resources alive after the surfaces, skies and ranges were freed`);
   console.log(`  realism layers: ${KINDS.length} procedural surfaces tile without a seam (unit normals, albedo and roughness in range), skies and far ranges build for 4 modes, the road's detail UVs close over the lap, everything freed`);

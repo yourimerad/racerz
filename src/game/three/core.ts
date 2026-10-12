@@ -36,12 +36,12 @@ export class Disposer {
 
 /** 0 = everything, 1 = lighter shadows and half the particles, 2 = no shadows, a quarter of the particles, no extra pixel ratio. */
 export type QualityLevel = 0 | 1 | 2;
-export type Quality = { level: QualityLevel; shadows: boolean; shadowSize: number; particles: number; pixelRatio: number };
+export type Quality = { level: QualityLevel; shadows: boolean; shadowSize: number; particles: number; pixelRatio: number; /** Bloom, vignette and colour grade (best level only). */ post: boolean };
 /** `scale` multiplies the level's pixel ratio (the governor's finer steps, see adapt.ts). */
 export function qualityOf(level: QualityLevel, dpr: number, scale = 1): Quality {
-  const q = level === 0 ? { level, shadows: true, shadowSize: 2048, particles: 1, pixelRatio: Math.min(dpr, 2) }
-    : level === 1 ? { level, shadows: true, shadowSize: 1024, particles: 0.5, pixelRatio: Math.min(dpr, 1.5) }
-      : { level, shadows: false, shadowSize: 512, particles: 0.25, pixelRatio: 1 };
+  const q = level === 0 ? { level, shadows: true, shadowSize: 2048, particles: 1, pixelRatio: Math.min(dpr, 2), post: true }
+    : level === 1 ? { level, shadows: true, shadowSize: 1024, particles: 0.5, pixelRatio: Math.min(dpr, 1.5), post: false }
+      : { level, shadows: false, shadowSize: 512, particles: 0.25, pixelRatio: 1, post: false };
   return scale === 1 ? q : { ...q, pixelRatio: Math.max(0.5, q.pixelRatio * scale) };
 }
 
