@@ -2,6 +2,7 @@ import { K } from "../adapter3d";
 import { mulberry32 } from "../scenery";
 import { THREE, type Placement, hash2, instanced, propMaterial, mat4, part } from "./core";
 import { faceRoad, placeOf, propsOf, texturedGround } from "./place";
+import { barkMaterial, grassTexture, grassTuft, leafCanopy, leafMaterial, leafTexture, realisticTree } from "./foliage";
 import * as models from "./props";
 import { coverSamples } from "./terrain";
 import type { Scenery, WorldCtx } from "./world";
@@ -11,8 +12,8 @@ import type { Scenery, WorldCtx } from "./world";
 // curtain that shows the flight rules' 35 m "wall" come from world.ts.
 
 const FIELDS = [
-  { fill: "#6aa84f", stripe: "rgba(255,255,255,0.06)" }, { fill: "#5e9a45", stripe: "rgba(0,0,0,0.05)" }, { fill: "#86b85e", stripe: "rgba(255,255,255,0.07)" },
-  { fill: "#8b6b4a", stripe: "rgba(60,40,20,0.35)" }, { fill: "#d8c165", stripe: "rgba(255,240,170,0.45)" }, { fill: "#c9b052", stripe: "rgba(120,100,30,0.25)" },
+  { fill: "#6f9a4c", stripe: "rgba(255,255,255,0.05)" }, { fill: "#628c44", stripe: "rgba(0,0,0,0.05)" }, { fill: "#7fa857", stripe: "rgba(255,255,255,0.06)" },
+  { fill: "#7d6446", stripe: "rgba(50,34,18,0.32)" }, { fill: "#c9b55f", stripe: "rgba(255,240,170,0.38)" }, { fill: "#b8a24f", stripe: "rgba(120,100,30,0.22)" },
 ];
 
 export function buildClassic(ctx: WorldCtx): Scenery {
@@ -48,11 +49,20 @@ export function buildClassic(ctx: WorldCtx): Scenery {
       g.stroke();
       g.restore();
     }
+    // Large soft patches (lusher and drier grass, damp ground) over the patchwork: the fields stop looking like flat paint.
+    for (let i = 0; i < 260; i++) {
+      const x = hash2(i, 31) * w, y = hash2(i, 32) * h, r = (30 + hash2(i, 33) * 110) * sx, warm = hash2(i, 34) > 0.5;
+      const gr = g.createRadialGradient(x, y, 0, x, y, r);
+      gr.addColorStop(0, warm ? "rgba(190,170,90,0.20)" : "rgba(20,60,20,0.20)");
+      gr.addColorStop(1, "rgba(0,0,0,0)");
+      g.fillStyle = gr;
+      g.fillRect(x - r, y - r, r * 2, r * 2);
+    }
     for (let i = 0; i < 14000; i++) {
       g.fillStyle = hash2(i, 5) > 0.5 ? "rgba(255,255,255,0.05)" : "rgba(0,30,0,0.07)";
       g.fillRect(hash2(i, 6) * w, hash2(i, 7) * h, 1 + hash2(i, 8) * 2, 1 + hash2(i, 9) * 2);
     }
-  }, 1, { kind: "grass", normalScale: 1.0 });
+  }, 1, { kind: "grass", normalScale: 1.0, albedo: 0.9 });
 
   const matProp = propMaterial(d);
   const put = (mesh: THREE.Object3D | null) => {
@@ -62,7 +72,8 @@ export function buildClassic(ctx: WorldCtx): Scenery {
     list.map((p, i) => ({ ...placeOf(p, modelR, i, faceRoad(field, path, p.x, p.y)), s: stretch }));
 
   // ---- trees: oaks, poplars and tall forest trees, a mix by position; the big trunks at the canopy entrances ----
-  const smooth = propMaterial(d, { flatShading: false, roughness: 0.9 });
+  const wind = { time: { value: 0 } };
+  const leaves = leafMaterial(d, leafTexture(d), wind, { swayFrom: 3, amp: 0.12 }), bark = barkMaterial(d);
   const byVariant: Placement[][] = [[], [], []];
   const autumn = [0xffffff, 0xf2f6dc, 0xe9f0c8, 0xfff2c0];
   propsOf(props, "tree").forEach((p, i) => {
@@ -84,7 +95,12 @@ export function buildClassic(ctx: WorldCtx): Scenery {
       }
     }
   });
-  byVariant.forEach((list, v) => put(instanced(d, models.treeModel(v as 0 | 1 | 2), smooth, list)));
+  // Real leaves: crowns of alpha-tested leaf cards lit by crown-round normals, over barked trunks (see foliage.ts).
+  byVariant.forEach((list, v) => {
+    const tree = realisticTree(v as 0 | 1 | 2);
+    put(instanced(d, tree.trunk, bark, list));
+    put(instanced(d, tree.leaves, leaves, list));
+  });
   put(instanced(d, models.hedge(), matProp, propsOf(props, "hedge").slice(0, 900).map((p, i) => placeOf(p, 1, i)), false, 60, 170));
 
   // ---- hay: the square bales that line the village bend (the physical bumpers), irregular, and the round ones in the fields ----
@@ -133,11 +149,27 @@ export function buildClassic(ctx: WorldCtx): Scenery {
         if (rng() < 0.14) continue; // a gap: a shaft of light
         const lat = (s - 1) * track.barrier * 0.7 + (rng() - 0.5) * 80, r = (45 + rng() * 40) * K;
         const v = 215 + Math.floor(rng() * 40);
-        blobs.push({ x: (p.x - t.y * lat + (rng() - 0.5) * 40) * K, y: 11.5 + rng() * 1.5, z: (p.y + t.x * lat + (rng() - 0.5) * 40) * K, s: r, ry: rng() * 6, tint: ((v * 0.9) << 16) | (v << 8) | (v * 0.75) });
+        blobs.push({ x: (p.x - t.y * lat + (rng() - 0.5) * 40) * K, y: 11.5 + rng() * 1.5, z: (p.y + t.x * lat + (rng() - 0.5) * 40) * K, s: r / 4.6, ry: rng() * 6, tint: ((v * 0.9) << 16) | (v << 8) | (v * 0.75) });
       }
     }
   });
-  put(instanced(d, models.leafMass(), smooth, blobs));
+  put(instanced(d, leafCanopy(), leaves, blobs));
 
-  return {};
+  // ---- grass: tufts of blades along both sides of the road, thinning out with distance (hidden beyond 140 m) ----
+  const tufts: Placement[] = [], grng = mulberry32(2077), tints = [0xffffff, 0xe6ecc4, 0xd2e0a4, 0xf2f0d0, 0xc8d89a];
+  for (let i = 0; i < path.length; i += 2) {
+    const p = path[i], t = track.tangents[i];
+    for (const side of [-1, 1]) {
+      for (let k = 0; k < 8; k++) {
+        const lat = side * (track.barrier + 14 + 380 * Math.pow(grng(), 2)), jx = (grng() - 0.5) * 30;
+        const x = p.x - t.y * lat + t.x * jx, y = p.y + t.x * lat + t.y * jx;
+        const dist = field.query(x, y, track.barrier + 40);
+        if (isFinite(dist) && dist < track.barrier + 10) continue; // not on another stretch of the circuit
+        tufts.push({ x: x * K, z: y * K, s: 0.8 + grng() * 1.0, ry: grng() * 6.28, tint: tints[Math.floor(grng() * tints.length)] });
+      }
+    }
+  }
+  put(instanced(d, grassTuft(), leafMaterial(d, grassTexture(d), wind, { swayFrom: 0, amp: 0.9, alphaTest: 0.4, glow: 0.12 }), tufts, false, 60, 140));
+
+  return { update: (_dt, time) => { wind.time.value = time; } };
 }
