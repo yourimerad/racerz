@@ -78,7 +78,7 @@ export const LOOKS: Record<ThemeId, Look> = {
     ],
   },
   northpole: {
-    sky: ["#6c9bc9", "#c4dcee", "#eaf3f9"], fog: "#e6f0f7", near: 70, far: 700, sun: "#fff8ea", sunIntensity: 2.3, sunAz: 305, sunEl: 24,
+    sky: ["#6c9bc9", "#c4dcee", "#eaf3f9"], fog: "#e6f0f7", near: 70, far: 700, sun: "#fff8ea", sunIntensity: 3.0, sunAz: 305, sunEl: 24,
     hemi: ["#e8f4ff", "#dfe9f1", 1.05], exposure: 1.0, haze: 0.28,
     clouds: { cover: 0.62, bright: "#f7fbff", shade: "#a6bdd3", speed: 0.002, scale: 0.5 },
     ranges: [
@@ -87,8 +87,8 @@ export const LOOKS: Record<ThemeId, Look> = {
     ],
   },
   volcano: {
-    sky: ["#1c1016", "#4a2c28", "#a85a32"], fog: "#46302b", near: 100, far: 820, sun: "#ffd2b0", sunIntensity: 2.8, sunAz: 305, sunEl: 20,
-    hemi: ["#e4c6b8", "#6a5e58", 1.4], exposure: 1.25, haze: 0.3,
+    sky: ["#1c1016", "#4a2c28", "#a85a32"], fog: "#46302b", near: 100, far: 820, sun: "#ffd2b0", sunIntensity: 4.6, sunAz: 305, sunEl: 20,
+    hemi: ["#f0cdb8", "#7a6a60", 2.1], exposure: 1.3, haze: 0.3,
     clouds: { cover: 0.7, bright: "#b4745a", shade: "#2a1816", speed: 0.005, scale: 0.6 },
     ranges: [
       { radius: 1000, height: 170, color: "#4a2e2a", haze: 0.5, freq: 1.5, seed: 6, ridged: true, peaks: [{ at: 1.2, width: 0.1, height: 300 }, { at: 4.2, width: 0.13, height: 220 }] },

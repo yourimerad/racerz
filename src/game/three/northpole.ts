@@ -3,6 +3,8 @@ import { mulberry32 } from "../scenery";
 import { makeBear } from "./bear";
 import { THREE, type Placement, fbm, hash2, instanced, part, propMaterial, smoothstep } from "./core";
 import { placeOf, propsOf, texturedGround } from "./place";
+import { barkMaterial, leafMaterial, needleTexture, realisticFir } from "./foliage";
+import { surface, triplanar } from "./pbr";
 import * as models from "./props";
 import { coverSamples, sweep } from "./terrain";
 import type { Scenery, WorldCtx } from "./world";
@@ -57,7 +59,10 @@ export function buildNorthpole(ctx: WorldCtx): Scenery {
     if (m) group.add(m);
   };
   // ---- firs, igloos, penguins, ice blocks ----
-  put(instanced(d, models.firModel(), matProp, propsOf(props, "fir").map((p, i) => placeOf(p, 2.2, i))));
+  // Firs: sprays of needle sprites (snow settled on them) over a barked trunk (see foliage.ts).
+  const wind = { time: { value: 0 } }, firs = propsOf(props, "fir").map((p, i) => placeOf(p, 2.2, i)), fir = realisticFir();
+  put(instanced(d, fir.trunk, barkMaterial(d), firs));
+  put(instanced(d, fir.leaves, leafMaterial(d, needleTexture(d, 0.5), wind, { swayFrom: 2, amp: 0.05, glow: 0.14 }), firs));
   put(instanced(d, models.igloo(), matProp, propsOf(props, "igloo").map((p, i) => placeOf(p, 4, i, -(p.a ?? 0)))));
   put(instanced(d, models.iceBlock(), matProp, propsOf(props, "iceblock").map((p, i) => placeOf(p, 1.5, i, -(p.a ?? 0)))));
   const penguins: Placement[] = [];
@@ -77,7 +82,7 @@ export function buildNorthpole(ctx: WorldCtx): Scenery {
   const cover = track.covers[0];
   if (cover) {
     const { from, count } = coverSamples(track, cover);
-    const iceMat = d.add(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.28, metalness: 0.04, flatShading: true, side: THREE.DoubleSide }));
+    const iceMat = triplanar(d.add(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.34, metalness: 0.03, side: THREE.DoubleSide })), surface(d, "snow", 256), { tile: 3.2, albedo: 0.35, normal: 0.9 });
     const tint = (geo: THREE.BufferGeometry, m: number, innerFrom: number) => {
       const p = geo.attributes.position, cols = new Float32Array(p.count * 3), ice = new THREE.Color(ICE), snow = new THREE.Color(SNOW), deep = new THREE.Color(DEEP), c = new THREE.Color();
       for (let i = 0; i < p.count; i++) {
@@ -162,5 +167,5 @@ export function buildNorthpole(ctx: WorldCtx): Scenery {
       group.add(frame);
     }
   }
-  return {};
+  return { update: (_dt, time) => { wind.time.value = time; } };
 }

@@ -4,6 +4,7 @@ import { THREE, type Placement, fbm, hash2, instanced, mat4, merge, part, propMa
 import { placeOf, propsOf } from "./place";
 import * as models from "./props";
 import { surface, triplanar } from "./pbr";
+import { leafMaterial, leafTexture, realisticCactus, realisticShrub } from "./foliage";
 import { heightfield } from "./terrain";
 import type { Scenery, WorldCtx } from "./world";
 
@@ -18,7 +19,7 @@ const COL = {
 
 export function buildDesert(ctx: WorldCtx): Scenery {
   const { adapter, d, group, field, quality } = ctx, track = adapter.race.track, b = track.bounds;
-  const H = wallHeightOf("desert"), barrierM = track.barrier * K;
+  const H = wallHeightOf("desert"), barrierM = track.barrier * K, wind = { time: { value: 0 } };
   const colFloor = new THREE.Color(COL.floor), colFoot = new THREE.Color(COL.foot), colCliff = new THREE.Color(COL.cliff), colAlt = new THREE.Color(COL.cliffAlt);
   const colRim = new THREE.Color(COL.rim), colPlat = new THREE.Color(COL.plateau), colPatch = new THREE.Color(COL.patch), colLight = new THREE.Color(COL.light);
   const tmp = new THREE.Color();
@@ -79,15 +80,28 @@ export function buildDesert(ctx: WorldCtx): Scenery {
   const onTop = (p: { x: number; y: number }) => height(p.x, p.y, 1).h;
   const rocks = propsOf(adapter.props, "rock").map((p, i): Placement => ({ ...placeOf(p, 1, i), y: onTop(p) - 0.15, s: (p.r * K) * 1.05 }));
   const cacti = propsOf(adapter.props, "cactus").map((p, i): Placement => ({ ...placeOf(p, 1.3, i), y: onTop(p) - 0.05 }));
-  const rock = instanced(d, models.rockModel(1, "#98582f", "#b06a3e"), matProp, rocks);
-  const cactus = instanced(d, models.cactusModel(), matProp, cacti);
+  // Boulders with the canyon's own rock grain (smooth normals, triplanar detail), fluted cacti and dry shrubs.
+  const boulderMat = triplanar(d.add(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95 })), rockSurf, { tile: 2.4, albedo: 0.6, normal: 1.1 });
+  const rock = instanced(d, models.rockModel(1, "#98582f", "#b06a3e"), boulderMat, rocks);
+  const cactus = instanced(d, realisticCactus(), d.add(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.8 })), cacti);
   if (rock) group.add(rock);
   if (cactus) group.add(cactus);
+  // Shrubs by every cactus and boulder (deterministic offsets), swaying a little in the wind.
+  const shrubs: Placement[] = [];
+  [...propsOf(adapter.props, "cactus"), ...propsOf(adapter.props, "rock")].forEach((p, i) => {
+    for (let k = 0; k < 2; k++) {
+      const a = hash2(i, k, 301) * Math.PI * 2, r = (p.r + 30 + hash2(i, k, 303) * 90), x = p.x + Math.cos(a) * r, y = p.y + Math.sin(a) * r;
+      if (isFinite(field.query(x, y, track.barrier + 60)) && field.query(x, y, track.barrier + 60) < track.barrier + 45) continue; // not on the road or its run-off
+      shrubs.push({ x: x * K, z: y * K, y: onTop({ x, y }) - 0.05, s: 0.7 + hash2(i, k, 305) * 0.9, ry: hash2(i, k, 307) * 6.28, tint: [0xffffff, 0xe8e0c0, 0xd8d0a0][(i + k) % 3] });
+    }
+  });
+  const shrubMesh = instanced(d, realisticShrub(), leafMaterial(d, leafTexture(d, true), wind, { swayFrom: 0.2, amp: 0.1, glow: 0.12 }), shrubs, true, 80, 260);
+  if (shrubMesh) group.add(shrubMesh);
 
   // ---- the rock bridge ----
   const cover = track.covers[0];
   if (cover) buildBridge(ctx, cover, matProp);
-  return {};
+  return { update: (_dt, time) => { wind.time.value = time; } };
 }
 
 function buildBridge(ctx: WorldCtx, cover: { start: number; end: number }, matProp: THREE.MeshStandardMaterial) {

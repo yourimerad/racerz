@@ -34,7 +34,7 @@ import { DistField, lapMetres, ribbon } from "../src/game/three/terrain";
 import { type SurfaceKind, surface, surfacePixels } from "../src/game/three/pbr";
 import { LOOKS } from "../src/game/three/world";
 import { makeHorizon, makeSkyDome, sunDirection } from "../src/game/three/sky";
-import { grassTexture, grassTuft, leafCanopy, leafMaterial, leafTexture, realisticTree } from "../src/game/three/foliage";
+import { grassTexture, grassTuft, leafCanopy, leafMaterial, leafTexture, needleTexture, realisticCactus, realisticFir, realisticShrub, realisticTree } from "../src/game/three/foliage";
 import { buildWorld } from "../src/game/three/world";
 import { THEME_ORDER, type ThemeId } from "../src/game/themes";
 import { NO_INPUT } from "../src/game/car";
@@ -751,12 +751,39 @@ console.log("3D view checks\n");
   tuft.computeBoundingBox();
   if (!tuft.boundingBox || tuft.boundingBox.max.y < 0.3 || tuft.boundingBox.max.y > 0.8) fail("a grass tuft should be about half a metre tall");
   d.add(tuft);
+  // Conifer, cactus and shrub: finite, unit normals, the old sizes; the needle sprite (plain and snowy) covers a sensible share.
+  for (const snow of [0, 0.5]) {
+    const cn = cover(needleTexture(d, snow));
+    if (cn < 0.07 || cn > 0.6) fail(`the needle sprite (snow ${snow}) covers ${(cn * 100).toFixed(0)} % (expected 7-60 %)`);
+  }
+  const bounds = (g: THREE.BufferGeometry, what: string) => {
+    const pos = g.attributes.position, nor = g.attributes.normal;
+    let bad = 0, top = 0, reach = 0;
+    for (let i = 0; i < pos.count; i++) {
+      if (![pos.getX(i), pos.getY(i), pos.getZ(i), nor.getX(i), nor.getY(i), nor.getZ(i)].every(Number.isFinite) || Math.abs(Math.hypot(nor.getX(i), nor.getY(i), nor.getZ(i)) - 1) > 0.02) bad++;
+      top = Math.max(top, pos.getY(i));
+      reach = Math.max(reach, Math.hypot(pos.getX(i), pos.getZ(i)));
+    }
+    if (bad) fail(`${what}: ${bad} bad vertices`);
+    return { top, reach, tris: pos.count / 3 };
+  };
+  const fir = realisticFir(), fl = bounds(fir.leaves, "fir needles"), ft = bounds(fir.trunk, "fir trunk");
+  if (fl.top < 8 || fl.top > 12.5 || fl.reach < 1.5 || fl.reach > 4) fail(`the fir is ${fl.top.toFixed(1)} m tall and ${fl.reach.toFixed(1)} m wide (expected ~11 × 2.5)`);
+  if (fl.tris > 700 || ft.tris > 700) fail(`the fir has ${fl.tris} needle and ${ft.tris} trunk triangles (budget 700 each: dozens of them stand at the pole)`);
+  d.add(fir.leaves);
+  d.add(fir.trunk);
+  const cactus = realisticCactus(), cb = bounds(cactus, "cactus");
+  if (cb.top < 3.5 || cb.top > 6 || cb.reach > 3) fail(`the cactus is ${cb.top.toFixed(1)} m tall and ${cb.reach.toFixed(1)} m wide (expected ~4.5 × 2.5)`);
+  d.add(cactus);
+  const shrub = realisticShrub(), sb = bounds(shrub, "shrub");
+  if (sb.top > 2.5 || sb.reach > 2.5) fail(`the shrub is ${sb.top.toFixed(1)} m tall and ${sb.reach.toFixed(1)} m wide (expected under 2.5 m)`);
+  d.add(shrub);
   // Materials: alpha-tested, both faces, a wind clock to read; the same wind drives them all.
   const wind = { time: { value: 0 } }, mat = leafMaterial(d, leaf, wind);
   if (mat.alphaTest <= 0 || mat.side !== THREE.DoubleSide) fail("the leaf material must be alpha-tested on both faces");
   d.dispose();
   if (liveResources() !== base) fail(`${liveResources() - base} resources alive after the foliage was freed`);
-  console.log(`  foliage: leaf sprite ${(cl * 100).toFixed(0)} % opaque, grass ${(cg * 100).toFixed(0)} %, three trees (finite, unit normals, UVs in the sprite, old sizes, ≤ 900 leaf triangles), canopy and tuft sized right, everything freed`);
+  console.log(`  foliage: fir, cactus and shrub sized right, needle sprite covers a sensible share; leaf sprite ${(cl * 100).toFixed(0)} % opaque, grass ${(cg * 100).toFixed(0)} %, three trees (finite, unit normals, UVs in the sprite, old sizes, ≤ 900 leaf triangles), canopy and tuft sized right, everything freed`);
 }
 
 // ---------- (f) the winner's fireworks ----------

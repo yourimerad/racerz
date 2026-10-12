@@ -2,7 +2,7 @@ import { K } from "../adapter3d";
 import { CONE, LAKE_R, RING_R } from "../modes/volcano";
 import { mulberry32 } from "../scenery";
 import { type Key, spline } from "./carbody";
-import { THREE, type Placement, fbm, hash2, instanced, lerp, part, propMaterial, smoothstep, vnoise } from "./core";
+import { THREE, type Placement, fbm, hash2, instanced, lerp, part, smoothstep, vnoise } from "./core";
 import { placeOf, propsOf, texturedGround } from "./place";
 import * as models from "./props";
 import { surface, triplanar } from "./pbr";
@@ -229,6 +229,43 @@ export function buildVolcano(ctx: WorldCtx): Scenery {
     }
   }
 
+  // ---- lava cracks: glowing fissures running down the cone from the crater (they pulse with the eruption) ----
+  const crackMat = d.add(new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }));
+  {
+    const pos: number[] = [], col: number[] = [], idx: number[] = [], hot = new THREE.Color("#ffd45a"), mid = new THREE.Color("#ff7a24"), cool = new THREE.Color("#b3300f"), tint = new THREE.Color();
+    for (let c = 0; c < 46; c++) {
+      const ang = hash2(c, 1, 401) * Math.PI * 2, r = 200 + hash2(c, 2, 401) * 150;
+      let x = CONE.x + Math.cos(ang) * r, y = CONE.y + Math.sin(ang) * r;
+      const steps = 9 + Math.floor(hash2(c, 3, 401) * 9), width = 0.35 + hash2(c, 4, 401) * 0.5;
+      let dir = ang; // heading down the slope, with wander
+      let prev: [number, number, number, number] | null = null;
+      let ok = true;
+      for (let k = 0; k <= steps && ok; k++) {
+        const dist = field.query(x, y, 300);
+        if (isFinite(dist) && dist * K < barrierM + 9) { ok = false; break; } // keep clear of the road and the tube
+        const h = terrain(x, y).h + 0.07, t = k / steps, nx = -Math.sin(dir), nz = Math.cos(dir), w = width * (1 - 0.65 * t) * (0.7 + 0.6 * hash2(c, k, 403));
+        const a: [number, number, number] = [x * K + nx * w, h, y * K + nz * w], b: [number, number, number] = [x * K - nx * w, h, y * K - nz * w];
+        tint.copy(t < 0.35 ? hot.clone().lerp(mid, t / 0.35) : mid.clone().lerp(cool, (t - 0.35) / 0.65));
+        const base = pos.length / 3;
+        pos.push(...a, ...b);
+        col.push(tint.r, tint.g, tint.b, tint.r, tint.g, tint.b);
+        if (prev) idx.push(base - 2, base - 1, base, base - 1, base + 1, base);
+        prev = [x, y, h, t];
+        dir += (hash2(c, k, 405) - 0.5) * 0.9;
+        const stepLen = 26 + hash2(c, k, 407) * 22;
+        x += Math.cos(dir) * stepLen;
+        y += Math.sin(dir) * stepLen;
+      }
+    }
+    if (idx.length) {
+      const g = d.add(new THREE.BufferGeometry());
+      g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+      g.setAttribute("color", new THREE.Float32BufferAttribute(col, 3));
+      g.setIndex(idx);
+      group.add(new THREE.Mesh(g, crackMat));
+    }
+  }
+
   // ---- the crater lake: four layers of lava, irregular and slowly turning ----
   const lakeY = 25.1, R = LAKE_R * K, layers: THREE.Mesh[] = [], mats: THREE.MeshStandardMaterial[] = [];
   COL.lake.forEach((c, i) => {
@@ -255,9 +292,8 @@ export function buildVolcano(ctx: WorldCtx): Scenery {
   group.add(glow);
 
   // ---- black rocks, and the two lava pools in the corners ----
-  const matProp = propMaterial(d);
   const rocks = propsOf(adapter.props, "rock").map((p, i): Placement => ({ ...placeOf(p, 1, i), s: p.r * K * 1.05, y: terrain(p.x, p.y).h - 0.1 }));
-  const rockMesh = instanced(d, models.rockModel(2, "#1e1715", "#3a2e2a"), matProp, rocks);
+  const rockMesh = instanced(d, models.rockModel(2, "#1e1715", "#3a2e2a"), triplanar(d.add(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95 })), basalt, { tile: 2.2, albedo: 0.75, normal: 1.1 }), rocks);
   if (rockMesh) group.add(rockMesh);
   const pools = propsOf(adapter.props, "lavapool");
   pools.forEach((p, k) => {
@@ -288,6 +324,7 @@ export function buildVolcano(ctx: WorldCtx): Scenery {
         mats[i].emissiveIntensity = lerp(0.7, 2.0, g) + i * 0.15 + flash * 2 + Math.sin(time * (1.3 + i) + i) * 0.12;
       });
       glow.intensity = 14000 * g + 120000 * flash;
+      crackMat.color.setScalar(0.65 + 0.5 * g + flash * 0.6 + Math.sin(time * 2.1) * 0.05);
       void dt;
     },
   };
