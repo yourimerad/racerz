@@ -8,7 +8,7 @@ import { surface } from "./pbr";
 // ---------- textures ----------
 
 /** A leafy sprite: ~140 small leaves (ellipses with a pale vein, dark edge, varied green) on a transparent ground; the empty texels keep a leaf green so mipmaps do not darken the edge. */
-export function leafTexture(d: Disposer): THREE.DataTexture {
+export function leafTexture(d: Disposer, dry = false): THREE.DataTexture {
   const n = 256, data = new Uint8Array(new ArrayBuffer(n * n * 4));
   for (let i = 0; i < n * n; i++) {
     data[i * 4] = 58;
@@ -16,7 +16,7 @@ export function leafTexture(d: Disposer): THREE.DataTexture {
     data[i * 4 + 2] = 38;
     data[i * 4 + 3] = 0;
   }
-  const deep = [34, 84, 30], fresh = [128, 176, 52];
+  const deep = dry ? [92, 86, 46] : [34, 84, 30], fresh = dry ? [186, 172, 98] : [128, 176, 52];
   for (let L = 0; L < 150; L++) {
     const cx = hash2(L, 1, 11) * n, cy = hash2(L, 2, 11) * n, ang = hash2(L, 3, 11) * Math.PI * 2, a = 9 + 12 * hash2(L, 4, 11), b = a * 0.44;
     const shade = 0.62 + 0.5 * hash2(L, 5, 11), mixc = hash2(L, 6, 11) * hash2(L, 7, 11), ca = Math.cos(ang), sa = Math.sin(ang);
@@ -93,7 +93,11 @@ export function leafMaterial(d: Disposer, map: THREE.Texture, wind: Wind, o: { s
 {
   float h = max(0.0, position.y - ${from.toFixed(2)});
   float k = h * ${amp.toFixed(3)} / (h + 2.0);
+  #ifdef USE_INSTANCING
   vec3 wp = (modelMatrix * instanceMatrix * vec4(position, 1.0)).xyz;
+  #else
+  vec3 wp = (modelMatrix * vec4(position, 1.0)).xyz;
+  #endif
   transformed.x += sin(windTime * 1.7 + wp.x * 0.21 + wp.z * 0.17) * k + sin(windTime * 3.1 + wp.z * 0.9) * k * 0.25;
   transformed.z += cos(windTime * 1.3 + wp.z * 0.19 + wp.x * 0.13) * k * 0.7;
 }`);
@@ -269,4 +273,167 @@ export function grassTuft(): THREE.BufferGeometry {
     parts.push(ng);
   }
   return mergeAll(parts);
+}
+
+// ---------- conifers ----------
+
+/** A spray of conifer branchlets (a central twig, side twigs, short needles) on a transparent ground; `snow` (0..1) dusts the needles white. */
+export function needleTexture(d: Disposer, snow = 0): THREE.DataTexture {
+  const w = 128, h = 128, data = new Uint8Array(new ArrayBuffer(w * h * 4));
+  for (let i = 0; i < w * h; i++) {
+    data[i * 4] = 40;
+    data[i * 4 + 1] = 84;
+    data[i * 4 + 2] = 52;
+    data[i * 4 + 3] = 0;
+  }
+  const plot = (x: number, y: number, r: number, rgb: number[], k: number) => {
+    for (let j = Math.floor(y - r); j <= Math.ceil(y + r); j++) {
+      for (let i = Math.floor(x - r); i <= Math.ceil(x + r); i++) {
+        if (i < 0 || i >= w || j < 0 || j >= h || Math.hypot(i + 0.5 - x, j + 0.5 - y) > r) continue;
+        const q = (j * w + i) * 4;
+        const white = snow > 0 && hash2(i, j, 91) < snow * (0.25 + 0.75 * (j / h)) ? 1 : 0; // snow settles on the upper (tip-ward) half
+        for (let c = 0; c < 3; c++) data[q + c] = Math.min(255, Math.round(white ? 235 + 20 * hash2(i, j, 92) : rgb[c] * k));
+        data[q + 3] = 255;
+      }
+    }
+  };
+  const twig = (x0: number, y0: number, x1: number, y1: number, needle: number, seed: number) => {
+    const len = Math.hypot(x1 - x0, y1 - y0), steps = Math.ceil(len);
+    for (let s = 0; s <= steps; s++) {
+      const t = s / steps, x = x0 + (x1 - x0) * t, y = y0 + (y1 - y0) * t;
+      plot(x, y, 1.1, [70, 52, 36], 1);
+      if (s % 2) continue;
+      const nl = needle * (1 - 0.5 * t);
+      for (const side of [-1, 1]) {
+        const a = Math.atan2(y1 - y0, x1 - x0) + side * (0.95 + 0.25 * hash2(s, seed, 93));
+        for (let k = 0; k <= nl; k += 1) plot(x + Math.cos(a) * k, y + Math.sin(a) * k, 1.3 - 0.7 * (k / nl), [34 + 40 * (k / nl), 82 + 50 * (k / nl), 50 + 20 * (k / nl)], 0.8 + 0.4 * hash2(s, seed, 94));
+      }
+    }
+  };
+  // The main twig runs up the sprite (the base is at the bottom, v = 0); side twigs fan out along it.
+  twig(w / 2, 2, w / 2 + 3, h - 4, 11, 1);
+  for (let k = 0; k < 9; k++) {
+    const y0 = 12 + k * 12, len = 40 - k * 3.2, dir = k % 2 ? 1 : -1;
+    twig(w / 2 + 1, y0, w / 2 + dir * len + 1, Math.min(h - 3, y0 + len * 0.55), 9, 10 + k);
+    twig(w / 2 + 1, y0 + 5, w / 2 - dir * (len * 0.8) + 1, Math.min(h - 3, y0 + 5 + len * 0.45), 9, 30 + k);
+  }
+  const t = d.add(new THREE.DataTexture(data, w, h, THREE.RGBAFormat));
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.magFilter = THREE.LinearFilter;
+  t.minFilter = THREE.LinearMipmapLinearFilter;
+  t.generateMipmaps = true;
+  t.needsUpdate = true;
+  return t;
+}
+
+/**
+ * A fir: a straight trunk and seven tiers of branch sprays (two crossed layers each), drooping, shorter toward the top. About 2.4 m radius at the
+ * base, 11 m tall, origin on the ground; same attributes as `realisticTree`. The sprites carry the needles (and the snow, see `needleTexture`).
+ */
+export function realisticFir(): Tree {
+  const wood: THREE.BufferGeometry[] = [bough(0, 0, 0, 0, 1.0, 0, 0.55, 0.3, 21, c3("#2a1e14"), c3("#4a3624")), bough(0, 0.9, 0, 0, 10.8, 0, 0.3, 0.05, 22, c3("#34261a"), c3("#5a4430"), 8, 6)];
+  const cards: THREE.BufferGeometry[] = [];
+  const dark = c3("#a8c0ae"), light = c3("#ffffff");
+  for (let tier = 0; tier < 7; tier++) {
+    const y = 1.5 + tier * 1.4, R = 2.5 - tier * 0.3, n = 13 - tier, w = 1.5 + R * 0.35;
+    for (let layer = 0; layer < 2; layer++) {
+      const pos = new Float32Array(n * 4 * 3), nor = new Float32Array(n * 4 * 3), uv = new Float32Array(n * 4 * 2), col = new Float32Array(n * 4 * 3), idx: number[] = [];
+      for (let k = 0; k < n; k++) {
+        const a = ((k + layer * 0.5 + 0.3 * hash2(k, tier, 61 + layer)) / n) * Math.PI * 2, dx = Math.cos(a), dz = Math.sin(a), px = -dz, pz = dx;
+        const r0 = 0.25, y0 = y + layer * 0.35, droop = R * (0.38 + 0.12 * hash2(k, tier, 63)), len = R * (0.82 + 0.3 * hash2(k, tier, 65));
+        const tipX = dx * len, tipZ = dz * len, tipY = y0 - droop;
+        const corners = [[dx * r0 - px * w * 0.25, y0, dz * r0 - pz * w * 0.25, 0, 0], [dx * r0 + px * w * 0.25, y0, dz * r0 + pz * w * 0.25, 1, 0], [tipX + px * w * 0.5, tipY, tipZ + pz * w * 0.5, 1, 1], [tipX - px * w * 0.5, tipY, tipZ - pz * w * 0.5, 0, 1]];
+        const nx = dx * 0.4, ny = 0.9, nz = dz * 0.4, nl = Math.hypot(nx, ny, nz), shade = 0.55 + 0.45 * (tier / 6) * 0.6 + 0.3 * hash2(k, tier, 67);
+        corners.forEach(([x, yy, z, u, v], c) => {
+          const q = (k * 4 + c) * 3;
+          pos.set([x, yy, z], q);
+          nor.set([nx / nl, ny / nl, nz / nl], q);
+          uv.set([u, v], (k * 4 + c) * 2);
+          const t = Math.min(1, shade * (0.7 + 0.5 * v));
+          col.set([dark.r + (light.r - dark.r) * t, dark.g + (light.g - dark.g) * t, dark.b + (light.b - dark.b) * t], q);
+        });
+        const b = k * 4;
+        idx.push(b, b + 1, b + 2, b, b + 2, b + 3);
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+      g.setAttribute("normal", new THREE.BufferAttribute(nor, 3));
+      g.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
+      g.setAttribute("color", new THREE.BufferAttribute(col, 3));
+      g.setIndex(idx);
+      cards.push(g.toNonIndexed());
+      g.dispose();
+    }
+  }
+  return { trunk: mergeAll(wood), leaves: mergeAll(cards) };
+}
+
+// ---------- desert plants ----------
+
+/** A ribbed tube along a path (points x, y, z) with radii at its ends, `ribs` flutes, a domed tip; attributes: position, normal, uv, color. For cactus columns and arms. */
+function ribbedTube(path: [number, number, number][], r0: number, r1: number, ribs: number, seed: number, base: THREE.Color, rib: THREE.Color, dome = true): THREE.BufferGeometry {
+  const rings = path.length + (dome ? 2 : 0), seg = ribs * 3, pos: number[] = [], col: number[] = [], uv: number[] = [], idx: number[] = [];
+  const tmp = new THREE.Color(), tan = new THREE.Vector3(), a = new THREE.Vector3(), b = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0);
+  for (let i = 0; i < rings; i++) {
+    const pi = Math.min(i, path.length - 1), p = path[pi], t = pi / Math.max(1, path.length - 1);
+    const prev = path[Math.max(0, pi - 1)], next = path[Math.min(path.length - 1, pi + 1)];
+    tan.set(next[0] - prev[0], next[1] - prev[1], next[2] - prev[2]).normalize();
+    a.crossVectors(Math.abs(tan.y) > 0.95 ? new THREE.Vector3(1, 0, 0) : up, tan).normalize();
+    b.crossVectors(tan, a).normalize();
+    let r = r0 + (r1 - r0) * t;
+    let lift = 0;
+    if (dome && i >= path.length) {
+      const k = (i - path.length + 1) / 2; // 0.5, 1 : the tip closes like a dome
+      r *= Math.sqrt(Math.max(0, 1 - k * k)) + 0.02;
+      lift = r0 * 0.5 * k;
+    }
+    for (let j = 0; j <= seg; j++) {
+      const ang = (j / seg) * Math.PI * 2, flute = 1 + 0.13 * Math.cos(ang * ribs) + 0.03 * (hash2(j, i, seed) - 0.5);
+      const rr = r * flute, cx = Math.cos(ang) * rr, cy = Math.sin(ang) * rr;
+      pos.push(p[0] + a.x * cx + b.x * cy + tan.x * lift, p[1] + a.y * cx + b.y * cy + tan.y * lift, p[2] + a.z * cx + b.z * cy + tan.z * lift);
+      const ridge = 0.5 + 0.5 * Math.cos(ang * ribs);
+      tmp.copy(base).lerp(rib, ridge * 0.7 + 0.15 * hash2(j, i, seed + 5));
+      col.push(tmp.r, tmp.g, tmp.b);
+      uv.push(j / seg, i / rings);
+    }
+  }
+  for (let i = 0; i < rings - 1; i++) {
+    for (let j = 0; j < seg; j++) {
+      const q = i * (seg + 1) + j;
+      idx.push(q, q + 1, q + seg + 1, q + 1, q + seg + 2, q + seg + 1);
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
+  g.setAttribute("color", new THREE.Float32BufferAttribute(col, 3));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  const out = g.toNonIndexed();
+  g.dispose();
+  return out;
+}
+
+/** A saguaro: a fluted green column with two arms that bend up (4.5 m tall, like the old model), smooth and vertex-coloured (darker valleys, paler ribs). */
+export function realisticCactus(): THREE.BufferGeometry {
+  const base = c3("#3e6a35"), rib = c3("#86a85a");
+  const arm = (x0: number, y0: number, dir: number, reach: number, rise: number, r: number, seed: number) => {
+    const path: [number, number, number][] = [];
+    for (let i = 0; i <= 6; i++) {
+      const t = i / 6, out = reach * Math.sin(t * Math.PI * 0.5), up = y0 + rise * (t * t) + 0.12 * t;
+      path.push([x0 + dir * out, up, 0]);
+    }
+    return ribbedTube(path, r, r * 0.92, 7, seed, base, rib);
+  };
+  return mergeAll([
+    ribbedTube(Array.from({ length: 8 }, (_, i) => [0, (i / 7) * 4.1, 0] as [number, number, number]), 0.48, 0.4, 9, 1, base, rib),
+    arm(0.3, 1.5, 1, 1.4, 1.7, 0.27, 2),
+    arm(-0.3, 2.2, -1, 1.25, 1.35, 0.24, 3),
+  ]);
+}
+
+/** A dry desert shrub: three low clusters of small grey-green leaves (about 1.6 m across). */
+export function realisticShrub(): THREE.BufferGeometry {
+  const dark = c3("#5a5a30"), light = c3("#b4ac62");
+  return mergeAll([leafCluster(0, 0.45, 0, 0.8, 0.45, 0.8, 26, 81, dark, light, 0.5), leafCluster(0.55, 0.35, 0.3, 0.55, 0.33, 0.55, 18, 82, dark, light, 0.45), leafCluster(-0.5, 0.3, -0.3, 0.5, 0.3, 0.5, 16, 83, dark, light, 0.45)]);
 }

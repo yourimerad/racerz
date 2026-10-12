@@ -123,15 +123,15 @@ const RECIPES: Record<SurfaceKind, Recipe> = {
       o.r = 0.82 - 0.55 * glint + 0.1 * (fine - 0.5);
     },
   },
-  // Road ice: very smooth, scratched, with a web of cracks under the surface.
+  // Road ice: very smooth, scratched, with a web of cracks under the surface (few and faint: a road, not a tiled floor).
   ice: {
-    tile: 2.2, strength: 0.9,
+    tile: 2.6, strength: 0.8,
     texel(u, v, o) {
       const wide = tfbm(u, v, 4, 3, 61), scratch = tfbm(u * 1.0, v * 24.0, 18, 2, 63);
-      const web = worley(u, v, 7, 65), crack = 1 - smoothstep(0.0, 0.05, web.f2 - web.f1);
-      o.h = 0.3 * wide + 0.14 * (scratch > 0.6 ? scratch : 0.4) - 0.3 * crack;
-      o.a = 0.92 + 0.08 * wide - 0.18 * crack;
-      o.r = 0.36 + 0.3 * (scratch - 0.5) + 0.2 * (wide - 0.5) + 0.35 * crack;
+      const web = worley(u, v, 3, 65), crack = (1 - smoothstep(0.0, 0.03, web.f2 - web.f1)) * (0.4 + 0.6 * tfbm(u, v, 6, 2, 67));
+      o.h = 0.3 * wide + 0.14 * (scratch > 0.6 ? scratch : 0.4) - 0.18 * crack;
+      o.a = 0.94 + 0.06 * wide - 0.1 * crack;
+      o.r = 0.36 + 0.3 * (scratch - 0.5) + 0.2 * (wide - 0.5) + 0.25 * crack;
     },
   },
   // Rock face: weathered stone with faint horizontal strata, erosion pits and a few fractures.
@@ -306,7 +306,13 @@ export function triplanar(mat: THREE.MeshStandardMaterial, s: Surface, o: { tile
     shader.uniforms.tpMix = { value: new THREE.Vector2(albedo, normal) };
     shader.vertexShader = shader.vertexShader
       .replace("#include <common>", "#include <common>\nvarying vec3 vTpPos; varying vec3 vTpNor;")
-      .replace("#include <begin_vertex>", "#include <begin_vertex>\nvTpPos = (modelMatrix * vec4(transformed, 1.0)).xyz; vTpNor = normalize(mat3(modelMatrix) * objectNormal);");
+      .replace("#include <begin_vertex>", `#include <begin_vertex>
+#ifdef USE_INSTANCING
+mat4 tpM = modelMatrix * instanceMatrix;
+#else
+mat4 tpM = modelMatrix;
+#endif
+vTpPos = (tpM * vec4(transformed, 1.0)).xyz; vTpNor = normalize(mat3(tpM) * objectNormal);`);
     shader.fragmentShader = shader.fragmentShader
       .replace("#include <common>", `#include <common>
 varying vec3 vTpPos; varying vec3 vTpNor;
@@ -326,7 +332,7 @@ tpSetup();
       .replace("#include <roughnessmap_fragment>", `#include <roughnessmap_fragment>
 roughnessFactor *= texture2D(tpRough, tpUx).g * tpW.x + texture2D(tpRough, tpUy).g * tpW.y + texture2D(tpRough, tpUz).g * tpW.z;`)
       .replace("#include <normal_fragment_maps>", `{
-  vec3 gn = normalize(vTpNor);
+  vec3 gn = normalize(vTpNor) * faceDirection; // two-sided shells: the face we see is the one that counts, whatever the winding
   vec3 tx = texture2D(tpNormal, tpUx).xyz * 2.0 - 1.0, ty = texture2D(tpNormal, tpUy).xyz * 2.0 - 1.0, tz = texture2D(tpNormal, tpUz).xyz * 2.0 - 1.0;
   tx.xy *= tpMix.y; ty.xy *= tpMix.y; tz.xy *= tpMix.y;
   // Whiteout blend: each projection's tilt added to the geometric normal's components along its plane.
