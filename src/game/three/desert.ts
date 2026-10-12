@@ -3,6 +3,7 @@ import { wallHeightOf } from "../flight";
 import { THREE, type Placement, fbm, hash2, instanced, mat4, merge, part, propMaterial, smoothstep, vnoise } from "./core";
 import { placeOf, propsOf } from "./place";
 import * as models from "./props";
+import { surface, triplanar } from "./pbr";
 import { heightfield } from "./terrain";
 import type { Scenery, WorldCtx } from "./world";
 
@@ -59,7 +60,9 @@ export function buildDesert(ctx: WorldCtx): Scenery {
     o.g = tmp.g;
     o.b = tmp.b;
   });
-  const terrain = new THREE.Mesh(geo, d.add(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, flatShading: true })));
+  // Smooth shading plus a triplanar rock grain (level strata on the cliffs, fine sandstone on the slopes) instead of the old flat facets.
+  const rockSurf = surface(d, "rock", 256);
+  const terrain = new THREE.Mesh(geo, triplanar(d.add(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95 })), rockSurf, { tile: 7, albedo: 0.6, normal: 0.95 }));
   terrain.castShadow = true;
   terrain.receiveShadow = true;
   group.add(terrain);
@@ -128,7 +131,7 @@ function buildBridge(ctx: WorldCtx, cover: { start: number; end: number }, matPr
   }
   g.setAttribute("color", new THREE.BufferAttribute(cols, 3));
   g.computeVertexNormals();
-  const deck = new THREE.Mesh(d.add(g), d.add(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, flatShading: true })));
+  const deck = new THREE.Mesh(d.add(g), triplanar(d.add(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95 })), surface(d, "rock", 256), { tile: 7, albedo: 0.6, normal: 0.95 }));
   deck.castShadow = true;
   deck.receiveShadow = true;
 

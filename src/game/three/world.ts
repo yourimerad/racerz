@@ -3,8 +3,10 @@ import { wallHeightOf } from "../flight";
 import type { ThemeId } from "../themes";
 import type { Track } from "../track";
 import { type FarRule, collectFar, cullable } from "./bake";
-import { type Disposer, type Quality, THREE, makeSky, paintTexture, hash2 } from "./core";
+import { type Disposer, type Quality, THREE, paintTexture, hash2 } from "./core";
+import { type Clouds, type Range, type Sky, makeHorizon, makeSkyDome, sunDirection } from "./sky";
 import { type ProfilePoint, DistField, coverSamples, ribbon, sweep } from "./terrain";
+import { type SurfaceKind, detail, surface } from "./pbr";
 import { buildClassic } from "./classic";
 import { buildDesert } from "./desert";
 import { buildNorthpole } from "./northpole";
@@ -41,19 +43,64 @@ export type Look = {
   far: number;
   sun: string;
   sunIntensity: number;
+  /** Where the sun is: azimuth (0 = north, 90 = east) and elevation, degrees. */
+  sunAz: number;
+  sunEl: number;
   hemi: [string, string, number];
   /** Tone mapping exposure. */
   exposure: number;
+  clouds: Clouds;
+  /** How far up the sky the haze of the horizon climbs (0..1). */
+  haze: number;
+  /** The far hills and mountains round the horizon (see sky.ts). */
+  ranges: Range[];
 };
 
 export const LOOKS: Record<ThemeId, Look> = {
-  desert: { sky: ["#5f9bd6", "#bcd4e3", "#f2d5a6"], fog: "#f0d0a0", near: 90, far: 760, sun: "#fff1d2", sunIntensity: 2.9, hemi: ["#fff0d8", "#d9a070", 1.5], exposure: 1.05 },
-  countryside: { sky: ["#4b8ad4", "#a8cbec", "#dcebf5"], fog: "#d0e2ef", near: 140, far: 980, sun: "#fff6e2", sunIntensity: 2.5, hemi: ["#e0f0ff", "#3f7a45", 0.9], exposure: 1.0 },
-  northpole: { sky: ["#7aa4cc", "#cde2f0", "#eef6fb"], fog: "#e6f0f7", near: 70, far: 700, sun: "#fffaf0", sunIntensity: 2.1, hemi: ["#e8f4ff", "#dfe9f1", 1.05], exposure: 1.0 },
-  volcano: { sky: ["#1c1016", "#4a2c28", "#a85a32"], fog: "#46302b", near: 100, far: 820, sun: "#ffe2cc", sunIntensity: 2.8, hemi: ["#e4c6b8", "#6a5e58", 1.5], exposure: 1.25 },
+  desert: {
+    sky: ["#4f8fd0", "#a9cbe0", "#f0d3a8"], fog: "#efd2a6", near: 90, far: 760, sun: "#fff0d0", sunIntensity: 3.0, sunAz: 305, sunEl: 36,
+    hemi: ["#fff0d8", "#d9a070", 1.4], exposure: 1.05, haze: 0.2,
+    clouds: { cover: 0.3, bright: "#fff7e8", shade: "#d6b697", speed: 0.003, scale: 0.55 },
+    ranges: [
+      { radius: 1000, height: 130, color: "#c58a5e", haze: 0.6, freq: 1.4, seed: 3, plateau: true },
+      { radius: 900, height: 78, color: "#b66d44", haze: 0.42, freq: 2.2, seed: 8, plateau: true },
+      { radius: 800, height: 24, color: "#d6a46c", haze: 0.28, freq: 3.2, seed: 12 },
+    ],
+  },
+  countryside: {
+    sky: ["#3f7fcf", "#9cc4ea", "#d8e8f4"], fog: "#d0e2ef", near: 140, far: 980, sun: "#fff4dc", sunIntensity: 2.6, sunAz: 305, sunEl: 44,
+    hemi: ["#e0f0ff", "#3f7a45", 0.9], exposure: 1.0, haze: 0.22,
+    clouds: { cover: 0.5, bright: "#ffffff", shade: "#9db3cd", speed: 0.004, scale: 0.7 },
+    ranges: [
+      { radius: 1000, height: 110, color: "#6e8fb0", haze: 0.6, freq: 1.3, seed: 4 },
+      { radius: 900, height: 55, color: "#5f8a5c", haze: 0.4, freq: 2.2, seed: 9 },
+      { radius: 820, height: 16, color: "#3f6a3e", haze: 0.28, freq: 13, seed: 15 },
+    ],
+  },
+  northpole: {
+    sky: ["#6c9bc9", "#c4dcee", "#eaf3f9"], fog: "#e6f0f7", near: 70, far: 700, sun: "#fff8ea", sunIntensity: 2.3, sunAz: 305, sunEl: 24,
+    hemi: ["#e8f4ff", "#dfe9f1", 1.05], exposure: 1.0, haze: 0.28,
+    clouds: { cover: 0.62, bright: "#f7fbff", shade: "#a6bdd3", speed: 0.002, scale: 0.5 },
+    ranges: [
+      { radius: 1000, height: 260, color: "#8fb0cf", haze: 0.5, freq: 1.5, seed: 5, ridged: true, cap: "#ffffff" },
+      { radius: 900, height: 140, color: "#a9c6df", haze: 0.34, freq: 2.4, seed: 11, ridged: true, cap: "#ffffff" },
+    ],
+  },
+  volcano: {
+    sky: ["#1c1016", "#4a2c28", "#a85a32"], fog: "#46302b", near: 100, far: 820, sun: "#ffd2b0", sunIntensity: 2.8, sunAz: 305, sunEl: 20,
+    hemi: ["#e4c6b8", "#6a5e58", 1.4], exposure: 1.25, haze: 0.3,
+    clouds: { cover: 0.7, bright: "#b4745a", shade: "#2a1816", speed: 0.005, scale: 0.6 },
+    ranges: [
+      { radius: 1000, height: 170, color: "#4a2e2a", haze: 0.5, freq: 1.5, seed: 6, ridged: true, peaks: [{ at: 1.2, width: 0.1, height: 300 }, { at: 4.2, width: 0.13, height: 220 }] },
+      { radius: 900, height: 80, color: "#3a2420", haze: 0.34, freq: 2.6, seed: 13, ridged: true },
+    ],
+  },
 };
 
 export const FLOOR_Y = 0.03;
+
+/** What each mode's road is made of (see pbr.ts). */
+const ROAD_SURFACE: Record<ThemeId, SurfaceKind> = { desert: "sand", countryside: "asphalt", northpole: "ice", volcano: "asphalt" };
 
 // ---------- road textures ----------
 
@@ -248,16 +295,19 @@ function buildRoad(ctx: WorldCtx) {
     map: road, roughness: mode === "northpole" ? 0.18 : 0.88, metalness: mode === "northpole" ? 0.05 : 0, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1,
     ...(road ? {} : { color: st.base }),
   }));
-  const roadMesh = new THREE.Mesh(ribbon(d, track, -half, half, FLOOR_Y, 8), roadMat);
+  // The road's own grain: aggregate and hairline cracks on asphalt, ripples on the desert track, scratched ice at the pole.
+  const surf = surface(d, ROAD_SURFACE[mode], 384);
+  detail(roadMat, surf, { normalScale: mode === "northpole" ? 0.55 : mode === "desert" ? 0.7 : 1 });
+  const roadMesh = new THREE.Mesh(ribbon(d, track, -half, half, FLOOR_Y, 8, surf.tile), roadMat);
   roadMesh.receiveShadow = true;
   group.add(roadMesh);
 
   const kerbHalf = st.kerbW / 2;
   if (kerbHalf > 0) {
     const kerb = paintTexture(d, 16, 128, (g, w, h) => paintKerb(g, w, h, st.kerbA, st.kerbB), { repeat: true });
-    const kerbMat = d.add(new THREE.MeshStandardMaterial({ map: kerb, roughness: 0.75, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1, ...(kerb ? {} : { color: st.kerbA }) }));
+    const kerbMat = detail(d.add(new THREE.MeshStandardMaterial({ map: kerb, roughness: 0.75, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1, ...(kerb ? {} : { color: st.kerbA }) })), surf, { normalScale: 0.8 });
     for (const s of [-1, 1]) {
-      const m = new THREE.Mesh(ribbon(d, track, s > 0 ? half : -half - kerbHalf, s > 0 ? half + kerbHalf : -half, FLOOR_Y + 0.005, 6), kerbMat);
+      const m = new THREE.Mesh(ribbon(d, track, s > 0 ? half : -half - kerbHalf, s > 0 ? half + kerbHalf : -half, FLOOR_Y + 0.005, 6, surf.tile), kerbMat);
       m.receiveShadow = true;
       group.add(m);
     }
@@ -314,7 +364,11 @@ function buildBarriers(ctx: WorldCtx) {
 export type World = {
   group: THREE.Group;
   scenery: Scenery;
-  sky: THREE.Mesh;
+  sky: Sky;
+  /** The far ranges: moves with the camera like the sky. */
+  horizon: THREE.Group;
+  /** Where the sun is, in the world. */
+  sunDir: THREE.Vector3;
   look: Look;
   /** Cells of small props hidden beyond their distance (`applyFar` once a frame). */
   far: FarRule[];
@@ -328,8 +382,10 @@ export function buildWorld(ctx: WorldCtx): World {
   buildFinish(ctx);
   const scenery = mode === "desert" ? buildDesert(ctx) : mode === "volcano" ? buildVolcano(ctx) : mode === "northpole" ? buildNorthpole(ctx) : buildClassic(ctx);
   cullable(d, ctx.group); // the terrain and the road in cells: what is out of view is culled instead of drawn
-  const look = LOOKS[mode];
-  const sky = makeSky(d, ...look.sky);
+  const look = LOOKS[mode], sunDir = sunDirection(look.sunAz, look.sunEl);
+  const sky = makeSkyDome(d, { sky: look.sky, fog: look.fog, sun: look.sun, clouds: look.clouds, haze: look.haze }, sunDir);
   ctx.group.add(sky);
-  return { group: ctx.group, scenery, sky, look, far: collectFar(ctx.group) };
+  const horizon = makeHorizon(d, look.ranges, look.fog);
+  ctx.group.add(horizon);
+  return { group: ctx.group, scenery, sky, horizon, sunDir, look, far: collectFar(ctx.group) };
 }

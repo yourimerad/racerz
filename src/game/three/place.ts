@@ -1,6 +1,7 @@
 import { K } from "../adapter3d";
 import type { SceneProp } from "../scenery";
 import { type Disposer, type Placement, THREE, hash2, paintTexture } from "./core";
+import { type SurfaceKind, detail, planarUv1, surface } from "./pbr";
 import type { DistField } from "./terrain";
 
 // Placing scenery: props from the mode's own data, facing the road, with small deterministic variations.
@@ -27,13 +28,20 @@ export function placeOf(p: SceneProp, modelR: number, i: number, yaw?: number): 
  */
 export function texturedGround(
   d: Disposer, group: THREE.Group, bounds: { minX: number; minY: number; maxX: number; maxY: number }, outer: string, texW: number,
-  paint: (g: CanvasRenderingContext2D, w: number, h: number, sx: number, sy: number) => void, roughness = 1,
+  paint: (g: CanvasRenderingContext2D, w: number, h: number, sx: number, sy: number) => void, roughness = 1, grain?: { kind: SurfaceKind; normalScale?: number },
 ) {
   const wm = (bounds.maxX - bounds.minX) * K, hm = (bounds.maxY - bounds.minY) * K, texH = Math.round((texW * hm) / wm);
   const tex = paintTexture(d, texW, texH, (g, w, h) => paint(g, w, h, w / (bounds.maxX - bounds.minX), h / (bounds.maxY - bounds.minY)), { anisotropy: 8 });
   const geo = d.add(new THREE.PlaneGeometry(wm, hm));
   geo.rotateX(-Math.PI / 2);
-  const ground = new THREE.Mesh(geo, d.add(new THREE.MeshStandardMaterial({ map: tex, roughness, ...(tex ? {} : { color: outer }) })));
+  const mat = d.add(new THREE.MeshStandardMaterial({ map: tex, roughness, ...(tex ? {} : { color: outer }) }));
+  if (grain) {
+    // The ground's own grain (grass blades, sand ripples, snow crystals, ash grit) as a detail normal / roughness layer, tiled over the map.
+    const surf = surface(d, grain.kind);
+    planarUv1(geo, surf.tile);
+    detail(mat, surf, { normalScale: grain.normalScale ?? 1 });
+  }
+  const ground = new THREE.Mesh(geo, mat);
   ground.position.set(((bounds.minX + bounds.maxX) / 2) * K, 0, ((bounds.minY + bounds.maxY) / 2) * K);
   ground.receiveShadow = true;
   group.add(ground);

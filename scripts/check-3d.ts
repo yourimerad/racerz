@@ -14,6 +14,9 @@
 //       culled cells, instanced props into cells too, and what is in view along the lap stays well under the whole world;
 //   (j) the quality governor: it lightens the picture within a couple of seconds on a slow device, never for a screen that is merely capped at 30 Hz,
 //       ignores a single hitch, comes back carefully and does not oscillate;
+//   (k) the realism layers: the procedural surfaces (road grain, sand ripples, snow, ash, rock...) tile without a seam, have unit upward normals,
+//       sensible albedo and roughness and are freed; the sky (sun direction, clouds) and the far ranges (closed rings, finite) build and are freed;
+//       the road's detail UVs close on a whole number of tiles over the lap;
 //   (g) the yeti's jump (four moments) and a car's explosion with its wreck are read by the adapter and drawn without a leak.
 
 import { Adapter3D, CAM, ChaseCamera, K, toScene, type CamTarget, type CarView } from "../src/game/adapter3d";
@@ -25,7 +28,10 @@ import { applyFar, splitMesh } from "../src/game/three/bake";
 import { Disposer, THREE, instanced, liveResources, qualityOf, type Placement } from "../src/game/three/core";
 import { Effects3D, Fireworks3D } from "../src/game/three/effects";
 import { Gameplay3D } from "../src/game/three/gameplay";
-import { DistField } from "../src/game/three/terrain";
+import { DistField, lapMetres, ribbon } from "../src/game/three/terrain";
+import { type SurfaceKind, surface, surfacePixels } from "../src/game/three/pbr";
+import { LOOKS } from "../src/game/three/world";
+import { makeHorizon, makeSkyDome, sunDirection } from "../src/game/three/sky";
 import { buildWorld } from "../src/game/three/world";
 import { THEME_ORDER, type ThemeId } from "../src/game/themes";
 import { NO_INPUT } from "../src/game/car";
@@ -615,6 +621,85 @@ console.log("3D view checks\n");
   // A phone starts a notch down; a governor started past the end of the ladder stays on it.
   if (new QualityGovernor(99).index !== LADDER.length - 1 || new QualityGovernor(-3).index !== 0) fail("the start step is not clamped to the ladder");
   console.log(`  governor: ${LADDER.length} steps, lighter within ~2 s on a slow device, not for a 30 Hz screen or one hitch, back carefully, no oscillation`);
+}
+
+// ---------- (k) procedural surfaces, the sky and the far ranges ----------
+{
+  const base = liveResources();
+  const KINDS: SurfaceKind[] = ["asphalt", "sand", "grass", "dirt", "snow", "ice", "rock", "ash", "gravel"];
+  const N = 128;
+  const seams: string[] = [];
+  for (const kind of KINDS) {
+    const px = surfacePixels(kind, N);
+    let badNormal = 0, albSum = 0, rouSum = 0;
+    const colDiff = new Float64Array(N); // mean |Δ| between column i and the next one (the last wraps to the first), over the rows
+    for (let j = 0; j < N; j++) {
+      for (let i = 0; i < N; i++) {
+        const q = (j * N + i) * 4, nx = (px.nor[q] / 255) * 2 - 1, ny = (px.nor[q + 1] / 255) * 2 - 1, nz = (px.nor[q + 2] / 255) * 2 - 1;
+        if (Math.abs(Math.hypot(nx, ny, nz) - 1) > 0.05 || nz < 0.15) badNormal++;
+        albSum += px.col[q];
+        rouSum += px.rou[q];
+        colDiff[i] += Math.abs(px.col[q] - px.col[(j * N + ((i + 1) % N)) * 4]) / N;
+      }
+    }
+    // The jump across the wrap must be no worse than the worst between ordinary neighbours (a crack on the seam line is a crack, not a seam).
+    const alb = albSum / (N * N), rou = rouSum / (N * N), wrapMean = colDiff[N - 1];
+    let innerMax = 0;
+    for (let i = 0; i < N - 1; i++) innerMax = Math.max(innerMax, colDiff[i]);
+    if (badNormal) fail(`surface ${kind}: ${badNormal} normals are not unit length or do not face up`);
+    if (alb < 130 || alb > 250) fail(`surface ${kind}: mean albedo ${alb.toFixed(0)} (it multiplies a colour: expected 130..250)`);
+    if (rou < 40 || rou > 255) fail(`surface ${kind}: mean roughness ${rou.toFixed(0)}`);
+    if (wrapMean > innerMax * 1.15 + 1) seams.push(`${kind} (${wrapMean.toFixed(1)} vs ${innerMax.toFixed(1)})`);
+    // The same recipe twice is the same picture.
+    const again = surfacePixels(kind, N);
+    if (again !== px) fail(`surface ${kind}: not kept for the session`);
+  }
+  if (seams.length) fail(`surfaces with a visible seam where they wrap: ${seams.join(", ")}`);
+  const d = new Disposer();
+  const a = surface(d, "asphalt", 64), b = surface(d, "asphalt", 64);
+  if (a !== b) fail("a surface asked for twice by the same view was built twice");
+  if (d.size !== 3) fail(`a surface should hold 3 textures, the view holds ${d.size}`);
+  // The sun: azimuth 0 = north (−z), 90 = east (+x); elevation up.
+  const north = sunDirection(0, 0), east = sunDirection(90, 0), up = sunDirection(0, 90);
+  near("sun north z", north.z, -1, 1e-6);
+  near("sun east x", east.x, 1, 1e-6);
+  near("sun overhead y", up.y, 1, 1e-6);
+  for (const mode of THEME_ORDER) {
+    const look = LOOKS[mode], sun = sunDirection(look.sunAz, look.sunEl);
+    near(`${mode}: sun direction length`, sun.length(), 1, 1e-6);
+    if (look.sunEl < 5 || look.sunEl > 80) fail(`${mode}: sun elevation ${look.sunEl}`);
+    const sky = makeSkyDome(d, { sky: look.sky, fog: look.fog, sun: look.sun, clouds: look.clouds, haze: look.haze }, sun);
+    sky.tick(12.5);
+    if ((sky.material as THREE.ShaderMaterial).uniforms.time.value !== 12.5) fail(`${mode}: the clouds do not drift with the clock`);
+    const ring = makeHorizon(d, look.ranges, look.fog);
+    if (ring.children.length !== look.ranges.length) fail(`${mode}: ${ring.children.length} ranges built for ${look.ranges.length}`);
+    ring.children.forEach((m, i) => {
+      const pos = (m as THREE.Mesh).geometry.attributes.position, r = look.ranges[i], N1 = pos.count / 2;
+      let top = 0, bad = 0;
+      for (let k = 0; k < N1; k++) {
+        const x = pos.getX(k * 2 + 1), h = pos.getY(k * 2 + 1), z = pos.getZ(k * 2 + 1);
+        if (![x, h, z].every(Number.isFinite)) bad++;
+        top = Math.max(top, h);
+        if (Math.abs(Math.hypot(x, z) - r.radius) > 1e-3) bad++;
+      }
+      // The ring closes: the last column is the first.
+      if (Math.hypot(pos.getX(0) - pos.getX(pos.count - 2), pos.getZ(0) - pos.getZ(pos.count - 2)) > 1e-3) bad++;
+      if (bad) fail(`${mode}: range ${i} has ${bad} bad vertices or does not close`);
+      const peak = (r.peaks ?? []).reduce((m2, p) => Math.max(m2, p.height), 0);
+      if (top <= 0 || top > r.height + peak + 1) fail(`${mode}: range ${i} reaches ${top.toFixed(0)} m (height ${r.height} + peaks ${peak})`);
+    });
+    // The road's detail UVs: whole tiles over the lap (no seam at the finish line), growing along the road.
+    const race = fresh(mode), tile = 1.6, geo = ribbon(d, race.track, -95, 95, 0, 8, tile), uv1 = geo.attributes.uv1;
+    if (!uv1) fail(`${mode}: no detail UVs on the road ribbon`);
+    else {
+      const last = uv1.getY(uv1.count - 1), { total } = lapMetres(race.track);
+      if (Math.abs(last - Math.round(last)) > 1e-4) fail(`${mode}: the road's detail layer closes on ${last.toFixed(4)} tiles, not a whole number`);
+      if (Math.abs(last * tile - total) > tile * 0.5 + 1e-3) fail(`${mode}: the detail tile strays from ${tile} m (lap ${total.toFixed(0)} m over ${last} tiles)`);
+    }
+  }
+  d.dispose();
+  if (liveResources() !== base) fail(`${liveResources() - base} resources alive after the surfaces, skies and ranges were freed`);
+  console.log(`  realism layers: ${KINDS.length} procedural surfaces tile without a seam (unit normals, albedo and roughness in range), skies and far ranges build for 4 modes, the road's detail UVs close over the lap, everything freed`);
 }
 
 // ---------- (f) the winner's fireworks ----------

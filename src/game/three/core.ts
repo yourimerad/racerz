@@ -200,27 +200,6 @@ export function instanced(d: Disposer, geo: THREE.BufferGeometry, mat: THREE.Mat
 
 // ---------- sky ----------
 
-/** A gradient dome that follows the camera: zenith, middle, horizon (the horizon colour is the fog's). */
-export function makeSky(d: Disposer, top: string, mid: string, horizon: string): THREE.Mesh {
-  const geo = d.add(new THREE.SphereGeometry(1, 24, 16));
-  const mat = d.add(new THREE.ShaderMaterial({
-    side: THREE.BackSide, depthWrite: false, fog: false,
-    uniforms: { top: { value: new THREE.Color(top) }, mid: { value: new THREE.Color(mid) }, horizon: { value: new THREE.Color(horizon) } },
-    vertexShader: "varying vec3 vDir; void main(){ vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }",
-    fragmentShader: `uniform vec3 top; uniform vec3 mid; uniform vec3 horizon; varying vec3 vDir;
-      void main(){ float h = clamp(vDir.y, -0.1, 1.0);
-        vec3 c = mix(horizon, mid, smoothstep(0.0, 0.22, h)); c = mix(c, top, smoothstep(0.18, 0.85, h));
-        gl_FragColor = vec4(c, 1.0);
-#include <colorspace_fragment>
- }`,
-  }));
-  const mesh = new THREE.Mesh(geo, mat);
-  mesh.scale.setScalar(1200);
-  mesh.renderOrder = -10;
-  mesh.frustumCulled = false;
-  return mesh;
-}
-
 // ---------- pooled particles ----------
 
 /**
