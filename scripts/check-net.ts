@@ -483,6 +483,34 @@ const spreadOf = (xs: number[]) => Math.max(...xs) - Math.min(...xs);
     void peak;
   }
 
+  // (8) A game that was frozen (busy loading) does not trust what it handles right after: the green lights that piled up in its queue say nothing
+  // of when they arrived. It takes none of them, says "ready" when it is, and takes the fresh one it is answered with.
+  {
+    const w = world({ latency: 20, jitter: 0, loss: 0, random: mulberry32(30) });
+    const { racers } = setupRace("desert", ids.slice(0, 2), 14, w, { ready: false });
+    const [host, guest] = racers;
+    type Inner = { onMessage(m: unknown): void; lastStep: number };
+    const inner = guest.sync as unknown as Inner;
+    inner.lastStep = guest.clock.now() - 20_000; // its timer has not run for 20 s
+    inner.onMessage({ type: "go", from: host.id, in: 3000 });
+    check(guest.sync.goAt === null, "a green light handled right after a freeze was used");
+    guest.clock.advance(100);
+    inner.onMessage({ type: "go", from: host.id, in: 3000 });
+    check(guest.sync.goAt !== null, "a green light handled with the timer running was not used");
+    // Not ready when the host gave up waiting at 25 s, but healthy and told: it forgets that light when it becomes ready, and takes the host's answer.
+    const w2 = world({ latency: 20, jitter: 0, loss: 0, random: mulberry32(31) });
+    const t2 = setupRace("desert", ids.slice(0, 2), 15, w2, { ready: false });
+    startRun(w2, t2.racers, { strt0001: 500 }, 30_000);
+    const [h2, g2] = t2.racers;
+    check(g2.sync.goAt !== null && h2.sync.goAt !== null, "the host did not give the green light after the wait");
+    g2.sync.setReady();
+    check(g2.sync.goAt === null, "a game that becomes ready keeps a green light it heard before");
+    startRun(w2, t2.racers, { strt0001: 500, strt0002: 30_000 }, 31_000);
+    const fresh = greenOf(g2), hostGreen = greenOf(h2);
+    check(fresh !== null && hostGreen !== null && Math.abs(fresh - hostGreen) < 40, `after becoming ready the game's green light is ${fresh} ms, the host's ${hostGreen}`);
+    console.log("  start: a green light handled after a freeze is not trusted; a game that becomes ready asks again and takes the fresh one");
+  }
+
   // (7) What the start costs the hosted service: a room of four counts messages sent plus delivered (about 100 a second is the free allowance).
   {
     const w = world({ latency: 40, jitter: 10, loss: 0, random: mulberry32(27) });

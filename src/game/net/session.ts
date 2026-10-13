@@ -434,12 +434,15 @@ export class RaceSync {
   private lastSeen = new Map<string, number>();
   private absentSince = new Map<string, number>();
   private stopTimer: () => void;
+  /** When the start's timer last ran: a message handled long after it sat in the queue while the game was frozen. */
+  private lastStep: number;
 
   constructor(transport: Transport, me: MultiPlayer, info: StartInfo, clock: Clock) {
     this.info = info;
     this.me = me;
     this.clock = clock;
     this.startedAt = clock.now();
+    this.lastStep = this.startedAt;
     this.order = [info.host, ...info.players.map((p) => p.id).filter((id) => id !== info.host)];
     const meta: Member = { ...me, since: clock.now() };
     this.channel = transport.join(raceChannel(info.game), meta, {
@@ -510,6 +513,14 @@ export class RaceSync {
     this.isReady = true;
     this.readyAt = this.clock.now();
     this.readyFrom.add(this.me.id);
+    // A green light heard before this game was ready may have been handled long after it arrived (this game was busy loading): forget it,
+    // the `ready` just sent is answered with a fresh one, handled at once.
+    if (!this.begun && !this.deciding && this.goTime !== null) {
+      this.goTime = null;
+      this.goRaw = Infinity;
+      this.goBy = Infinity;
+      this.goFrom = null;
+    }
     this.step();
   }
 
@@ -555,6 +566,7 @@ export class RaceSync {
   private step() {
     if (this.closed) return;
     const now = this.clock.now();
+    this.lastStep = now;
     const leader = this.leader(now);
     // The host (or whoever stands in for it) gives the green light once every game that is there is ready, or the wait is over.
     // (A host that comes back after the wait is over listens a moment first: the next player may have given it already.)
@@ -624,7 +636,9 @@ export class RaceSync {
   private onGo(from: string, inMs: number) {
     const rank = this.order.indexOf(from);
     if (this.begun || rank < 0) return;
-    const raw = this.clock.now() + inMs;
+    const now = this.clock.now();
+    if (now - this.lastStep > NET.STALL_MS) return; // handled after a freeze: when it arrived is unknown, the next copy (or the answer to our next "ready") will do
+    const raw = now + inMs;
     if (this.goTime === null || rank < this.goBy) {
       this.goRaw = raw;
       this.goBy = rank;

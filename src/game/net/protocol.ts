@@ -30,6 +30,8 @@ export const NET = {
   /** A game that is waiting measures the round trip to the host: this often (ms) for the first PING_SAMPLES, then a third as often, keeping the shortest of the last twelve. Kept light: every message is also delivered to each of the others. */
   PING_EVERY_MS: 500,
   PING_SAMPLES: 4,
+  /** A green light handled more than this long (ms) after the last tick of the start's timer was probably queued while the game was frozen: its arrival time is unknown, so it is not used (a fresh one is asked for). */
+  STALL_MS: 500,
   /** A player that has not joined the race channel at all (nor been heard) this long (ms) after the start never got the message: it is not waited for. */
   JOIN_MAX_MS: 10_000,
   /** A host that comes back ready after the wait is over first listens this long (ms): the next player may already have given the green light. */
