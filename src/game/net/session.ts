@@ -10,9 +10,9 @@ import type { Channel, Transport } from "./transport";
 
 // The online mode, from "I want to play with others" to "the race is over". Two parts, both independent of how messages travel:
 //   NetSession — finding a game: the quick-match queue of a mode, or a friends' room with a four-letter code; who is there; who starts; the
-//                start message (game id, shared seed, the grid in order, the seconds to the green light).
-//   RaceSync   — during the race: tells the others where our car is ten times a second, shows theirs by blending the snapshots we get, and
-//                knows when everybody is done. Every game plays its own car; nothing here can move our car, only the opponents' copies.
+//                start message (game id, shared seed, the grid in order, the host).
+//   RaceSync   — the start (everybody says "ready", the host gives one green light for all), then during the race: tells the others where
+//                our car is ten times a second, shows theirs by blending the snapshots we get, and knows when everybody is done. Every game plays its own car; nothing here can move our car, only the opponents' copies.
 
 // ---------- time ----------
 
@@ -87,8 +87,11 @@ export type SessionState = {
   error: string | null;
 };
 
-/** A game that is about to start: what every game needs to build the same race. `goAt` = the green light, on this machine's clock. */
-export type StartInfo = { game: string; mode: ThemeId; seed: number; players: MultiPlayer[]; goAt: number };
+/**
+ * A game that is about to start: what every game needs to build the same race. The green light is not part of it: it is set once every game
+ * says it is ready, by the `host` (see `RaceSync`).
+ */
+export type StartInfo = { game: string; mode: ThemeId; seed: number; players: MultiPlayer[]; host: string };
 
 /** The place of someone who has not yet seen the room (after everybody). */
 const JOINING = 1e15;
@@ -272,7 +275,7 @@ export class NetSession {
     const game = `${this.me.id.slice(0, 6)}${Math.floor(this.random() * 36 ** 5).toString(36).padStart(5, "0")}`;
     const strip = (m: Member): MultiPlayer => ({ id: m.id, name: m.name, model: m.model, skin: m.skin, level: m.level });
     const msg: StartMsg = {
-      type: "start", game, mode: this.state.mode, seed, startIn: NET.START_IN,
+      type: "start", game, mode: this.state.mode, seed, host: this.me.id,
       players: shuffled(members.map(strip), mulberry32(seed)),
     };
     const channel = this.channel, token = this.gen;
@@ -299,7 +302,7 @@ export class NetSession {
   private applyStart(msg: StartMsg) {
     if (this.started.has(msg.game)) return;
     this.started.add(msg.game);
-    const info: StartInfo = { game: msg.game, mode: msg.mode, seed: msg.seed, players: msg.players, goAt: this.clock.now() + msg.startIn * 1000 };
+    const info: StartInfo = { game: msg.game, mode: msg.mode, seed: msg.seed, players: msg.players, host: msg.host };
     this.set({ phase: "starting", mode: msg.mode });
     // A quick-match queue is left once the start message has been said enough times for everybody to hear it; a friends' room is kept for the next game.
     if (this.state.kind === "quick") {
@@ -367,6 +370,20 @@ const lerpAngle = (a: number, b: number, u: number) => {
 /** How long a race counts down before the green light (race.ts: COUNTDOWN). */
 const COUNTDOWN_MS = 3000;
 
+/** What the start screen can say: how many of the players have said they are ready. */
+export type Lobby = { ready: number; total: number };
+
+/**
+ * One race, from "everybody has been told" to "everybody is done".
+ *
+ * The start. Every game builds the race and gets its 3D view ready, which takes each machine a different time, then says `ready`. The host
+ * (the player who started the game; if it is gone or never shows up, the next on the list) waits until every game present has said so, or
+ * `NET.READY_MAX_MS` has passed, and then sets the green light `NET.GO_LEAD_MS` ahead and says `go`. That message is a duration, "in so many
+ * ms", never a time of day, so no machine's clock is compared with another's: the receiver puts the green light at the moment the message
+ * arrived plus that duration, less half of the round trip to the host measured with `ping`/`pong` (the shortest one seen), and keeps the
+ * earliest of the copies it gets (the host repeats it): the one that travelled fastest. A game that is slow, or late, or whose `go` was lost,
+ * keeps saying `ready` and is told again, with the green light already behind it, so it joins the race where it is.
+ */
 export class RaceSync {
   readonly info: StartInfo;
   private clock: Clock;
@@ -388,11 +405,45 @@ export class RaceSync {
   private closed = false;
   /** Opponents that have left (or stopped answering), by player id, and when we decided so: shown as out of the race until they speak again. */
   private goneAt = new Map<string, number>();
+  // --- the start ---
+  private startedAt: number;
+  /** The players in the order they may give the green light: the host first, then the grid. */
+  private order: string[];
+  /** Our game is ready (built, 3D up), and who else has said so. */
+  private isReady = false;
+  private readyAt = 0;
+  private readyFrom = new Set<string>();
+  private lastReady = -1e9;
+  /** The green light on this machine's clock (null until a `go` has been heard or given), and the position in `order` of whoever it came from. */
+  private goTime: number | null = null;
+  private goBy = Infinity;
+  /** Where the green light would fall with no trip taken off (the earliest arrival of the host's message + what it says), and who said it. */
+  private goRaw = Infinity;
+  private goFrom: string | null = null;
+  /** We are the one giving the green light: how many times it was said, and when last. */
+  private deciding = false;
+  private goSaid = 0;
+  private lastGo = -1e9;
+  private answeredReady = new Map<string, number>();
+  /** The shortest round trips (ms) to each player, from `ping`s, and the pings in flight. */
+  private trips = new Map<string, number[]>();
+  private pingsOut = new Map<number, number>();
+  private pingN = 0;
+  private lastPing = -1e9;
+  /** When we heard anything from each player, and since when one has been missing from the race channel's presence. */
+  private lastSeen = new Map<string, number>();
+  private absentSince = new Map<string, number>();
+  private stopTimer: () => void;
+  /** When the start's timer last ran: a message handled long after it sat in the queue while the game was frozen. */
+  private lastStep: number;
 
   constructor(transport: Transport, me: MultiPlayer, info: StartInfo, clock: Clock) {
     this.info = info;
     this.me = me;
     this.clock = clock;
+    this.startedAt = clock.now();
+    this.lastStep = this.startedAt;
+    this.order = [info.host, ...info.players.map((p) => p.id).filter((id) => id !== info.host)];
     const meta: Member = { ...me, since: clock.now() };
     this.channel = transport.join(raceChannel(info.game), meta, {
       onMessage: (raw) => this.onMessage(raw),
@@ -401,6 +452,11 @@ export class RaceSync {
         if (status === "joined") this.joined = true;
       },
     });
+    this.stopTimer = clock.every(100, () => this.step());
+  }
+
+  private inGame(id: string) {
+    return this.info.players.some((p) => p.id === id);
   }
 
   private onMessage(raw: unknown) {
@@ -411,8 +467,16 @@ export class RaceSync {
       if (msg.from !== this.me.id) this.left.add(msg.from);
       return;
     }
-    if (msg.type !== "snap" || msg.from === this.me.id) return;
-    if (!this.info.players.some((p) => p.id === msg.from)) return; // not in this game
+    if (msg.type === "start" || msg.from === this.me.id || !this.inGame(msg.from)) return;
+    this.lastSeen.set(msg.from, this.clock.now());
+    if (msg.type === "ready") return this.onReady(msg.from);
+    if (msg.type === "go") return this.onGo(msg.from, msg.in);
+    if (msg.type === "ping") {
+      if (msg.to === this.me.id && this.joined) this.channel.send({ type: "pong", from: this.me.id, to: msg.from, n: msg.n });
+      return;
+    }
+    if (msg.type === "pong") return this.onPong(msg.from, msg.to, msg.n);
+    if (msg.type !== "snap") return;
     if (msg.snap.s <= (this.lastSeq.get(msg.from) ?? -1)) return; // older than one we have
     this.lastSeq.set(msg.from, msg.snap.s);
     const now = this.clock.now();
@@ -432,17 +496,166 @@ export class RaceSync {
       const m = parseMember(r);
       if (m) ids.add(m.id);
     }
-    for (const id of ids) this.everPresent.add(id);
+    const now = this.clock.now();
+    for (const id of ids) {
+      this.everPresent.add(id);
+      this.absentSince.delete(id);
+    }
+    for (const id of this.everPresent) if (!ids.has(id) && !this.absentSince.has(id)) this.absentSince.set(id, now);
     this.present = ids;
   }
 
-  /** The green light's time on this machine's clock. */
-  get goAt() {
-    return this.info.goAt;
+  // ---------- the start ----------
+
+  /** Our game is ready: the race is built and the 3D view is up (or will not be). Says so to the others, and keeps saying it until the green light is heard. Once. */
+  setReady() {
+    if (this.closed || this.isReady) return;
+    this.isReady = true;
+    this.readyAt = this.clock.now();
+    this.readyFrom.add(this.me.id);
+    // A green light heard before this game was ready may have been handled long after it arrived (this game was busy loading): forget it,
+    // the `ready` just sent is answered with a fresh one, handled at once.
+    if (!this.begun && !this.deciding && this.goTime !== null) {
+      this.goTime = null;
+      this.goRaw = Infinity;
+      this.goBy = Infinity;
+      this.goFrom = null;
+    }
+    this.step();
   }
-  /** Seconds to the green light (negative once it has come). */
+
+  /**
+   * Whether a player is out of the start: said goodbye, or has been missing from the channel for a moment and has not been heard from, or
+   * never came to the channel at all (it joins as soon as it has the start message, however long its 3D takes to load).
+   */
+  private isAbsent(id: string, now: number): boolean {
+    if (this.left.has(id)) return true;
+    if (!this.everPresent.has(id) && !this.lastSeen.has(id)) return now - this.startedAt >= NET.JOIN_MAX_MS;
+    const since = this.absentSince.get(id);
+    return since !== undefined && now - since >= NET.ABSENT_MS && now - (this.lastSeen.get(id) ?? -1e9) > NET.ABSENT_MS;
+  }
+
+  /**
+   * Who gives the green light: the first on the list that is still there. Once the wait is over (`READY_MAX_MS`, plus a grace) a player who has
+   * not even said it is ready is passed over too, so a host stuck loading does not hold the others up.
+   */
+  private leader(now: number): string {
+    const late = now - this.startedAt >= NET.READY_MAX_MS + NET.HOST_GRACE_MS;
+    for (const id of this.order) {
+      if (id === this.me.id) return id;
+      if (this.isAbsent(id, now) || (late && !this.readyFrom.has(id))) continue;
+      return id;
+    }
+    return this.me.id;
+  }
+
+  /** Who the start is waiting for, as a count: the players that are still there, and how many of them are ready. */
+  lobby(): Lobby | null {
+    if (this.goTime !== null) return null;
+    const now = this.clock.now(), here = this.info.players.filter((p) => p.id === this.me.id || !this.isAbsent(p.id, now));
+    return { ready: here.filter((p) => this.readyFrom.has(p.id)).length, total: here.length };
+  }
+
+  private send(msg: Parameters<Channel["send"]>[0]): boolean {
+    if (this.closed || !this.joined) return false;
+    this.channel.send(msg);
+    return true;
+  }
+
+  /** Called every 100 ms (and when something changes): says "ready" again, gives the green light when it is time, repeats it, measures the trip to the host. */
+  private step() {
+    if (this.closed) return;
+    const now = this.clock.now();
+    this.lastStep = now;
+    const leader = this.leader(now);
+    // The host (or whoever stands in for it) gives the green light once every game that is there is ready, or the wait is over.
+    // (A host that comes back after the wait is over listens a moment first: the next player may have given it already.)
+    const listening = now - this.startedAt >= NET.READY_MAX_MS + NET.HOST_GRACE_MS && now - this.readyAt < NET.LISTEN_MS;
+    if (this.goTime === null && this.isReady && leader === this.me.id && !listening) {
+      const waiting = this.info.players.some((p) => p.id !== this.me.id && !this.readyFrom.has(p.id) && !this.isAbsent(p.id, now));
+      if (!waiting || now - this.startedAt >= NET.READY_MAX_MS) {
+        this.goTime = now + NET.GO_LEAD_MS;
+        this.goBy = this.order.indexOf(this.me.id);
+        this.deciding = true;
+      }
+    }
+    if (this.deciding && this.goSaid < NET.GO_REPEATS && now - this.lastGo >= NET.GO_REPEAT_MS) this.sayGo(now, true);
+    // A game that has not heard the green light keeps saying it is ready.
+    if (this.goTime === null && this.isReady && now - this.lastReady >= NET.READY_REPEAT_MS && this.send({ type: "ready", from: this.me.id })) this.lastReady = now;
+    // …and, until the race has begun, measures how long a message takes to the one who gives (or has given) the green light: often at first, then now and then.
+    const caller = this.goFrom ?? leader;
+    if (!this.begun && !this.deciding && caller !== this.me.id) {
+      const samples = this.trips.get(caller)?.length ?? 0;
+      if (now - this.lastPing >= (samples < NET.PING_SAMPLES ? NET.PING_EVERY_MS : NET.PING_EVERY_MS * 3)) {
+        const n = this.pingN++;
+        if (this.send({ type: "ping", from: this.me.id, to: caller, n })) {
+          this.lastPing = now;
+          this.pingsOut.set(n, now);
+          this.pingsOut.delete(n - 16);
+        }
+      }
+    }
+  }
+
+  private sayGo(now: number, burst: boolean) {
+    if (this.goTime === null || !this.send({ type: "go", from: this.me.id, in: Math.round(this.goTime - now) })) return;
+    this.lastGo = now;
+    if (burst) this.goSaid++;
+  }
+
+  private onReady(from: string) {
+    this.readyFrom.add(from);
+    const now = this.clock.now();
+    // The green light is already set and this game is still asking: tell it again (it may have been lost, or this game may be late).
+    if (this.deciding && now - (this.answeredReady.get(from) ?? -1e9) >= NET.GO_REPEAT_MS) {
+      this.answeredReady.set(from, now);
+      this.sayGo(now, false);
+    }
+    this.step();
+  }
+
+  private onPong(from: string, to: string, n: number) {
+    const sent = this.pingsOut.get(n);
+    if (to !== this.me.id || sent === undefined) return;
+    this.pingsOut.delete(n);
+    const list = this.trips.get(from) ?? [];
+    list.push(Math.max(0, this.clock.now() - sent));
+    if (list.length > 12) list.shift();
+    this.trips.set(from, list);
+    // A better idea of the trip moves a green light that came from this player a little (until the race has begun: a few hundredths of a second).
+    if (!this.begun && !this.deciding && this.goFrom === from) this.goTime = this.goRaw - this.oneWay(from);
+  }
+
+  /** Half the shortest round trip we measured to a player (ms): about how long a message from it takes. Nothing measured, nothing taken off. */
+  private oneWay(id: string): number {
+    const list = this.trips.get(id);
+    return list?.length ? Math.min(400, Math.min(...list) / 2) : 0;
+  }
+
+  /** A green light heard: the one from the player earliest on the list wins; copies from the same player are merged by keeping the one that arrived fastest. */
+  private onGo(from: string, inMs: number) {
+    const rank = this.order.indexOf(from);
+    if (this.begun || rank < 0) return;
+    const now = this.clock.now();
+    if (now - this.lastStep > NET.STALL_MS) return; // handled after a freeze: when it arrived is unknown, the next copy (or the answer to our next "ready") will do
+    const raw = now + inMs;
+    if (this.goTime === null || rank < this.goBy) {
+      this.goRaw = raw;
+      this.goBy = rank;
+      this.goFrom = from;
+      this.deciding = false; // someone ahead of us in the list gave it: it is theirs to repeat
+    } else if (rank === this.goBy) this.goRaw = Math.min(this.goRaw, raw);
+    else return;
+    this.goTime = this.goRaw - this.oneWay(from);
+  }
+
+  /** The green light's time on this machine's clock, or null while the start is waiting for the others. */
+  get goAt(): number | null {
+    return this.goTime;
+  }
+  /** Seconds to the green light (negative once it has come); Infinity while it has not been given. */
   secondsToGo(): number {
-    return (this.info.goAt - this.clock.now()) / 1000;
+    return this.goTime === null ? Infinity : (this.goTime - this.clock.now()) / 1000;
   }
 
   /**
@@ -450,14 +663,14 @@ export class RaceSync {
    * time it says yes, `startClock` puts the race's clock where it belongs.
    */
   live(): boolean {
-    return this.clock.now() >= this.info.goAt - COUNTDOWN_MS;
+    return this.goTime !== null && this.clock.now() >= this.goTime - COUNTDOWN_MS;
   }
 
   /** Sets the race's clock from the shared start (late games join the countdown where it is, or the race where it is). Once. */
   startClock(race: Race) {
-    if (this.begun) return;
+    if (this.begun || this.goTime === null) return;
     this.begun = true;
-    race.time = (this.clock.now() - this.info.goAt) / 1000;
+    race.time = (this.clock.now() - this.goTime) / 1000;
     if (race.time >= 0 && race.phase === "countdown") race.phase = "racing";
   }
 
@@ -527,7 +740,7 @@ export class RaceSync {
     // must not take a player who is driving out of the race); or has gone quiet (after being heard, or never having come at all long after the start).
     const talking = heard && silent < 2000;
     const left = this.left.has(id) || (this.everPresent.has(id) && !this.present.has(id) && !talking);
-    const quiet = heard ? silent > NET.STALE_MS : now - this.info.goAt > 15_000;
+    const quiet = heard ? silent > NET.STALE_MS : now - (this.goTime ?? now) > 15_000;
     if (!left && !quiet) return;
     if (left && !this.joined) return;
     this.goneAt.set(id, now);
@@ -576,6 +789,7 @@ export class RaceSync {
     if (this.closed) return;
     this.channel.send({ type: "bye", from: this.me.id });
     this.closed = true;
+    this.stopTimer();
     this.channel.leave();
   }
 }

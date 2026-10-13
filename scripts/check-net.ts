@@ -5,8 +5,11 @@
 //   (a) the language: what a stranger sends is checked, clamped or dropped (names, ids, skins, snapshots, start messages, room codes);
 //   (b) quick-match tables: the same list gives the same tables everywhere, four to a table, the leader is the longest waiter, nobody is in two tables;
 //   (c) friends' rooms: a code, the host (first in), the host's mode followed by the others, only the host starts, a full room refuses a fifth, one
-//       shared start for everybody (same game, same seed, same grid order, a green light a few seconds on);
+//       shared start for everybody (same game, same seed, same grid order, the starter named as host);
 //   (d) quick match end to end: players meeting in a queue are started together, once, the mode keeps them apart, a full table starts at once;
+//   (e0) the start: nobody leaves the grid before everybody is ready, then every game gets the same green light (within a few hundredths of a second,
+//       whatever its clock, its distance, its loading time or the messages lost), a late or lost game joins where the race is, a host that is gone or stuck
+//       is replaced, the start fits the hosted service's message budget;
 //   (e) the race: three games, each driving its own car over a lossy 60-150 ms network — everyone finishes, sees the others where they are (a
 //       short, steady delay, no jumps), agrees with them on the order, and the countdown ends together;
 //   (f) people leaving: a goodbye, a closed connection and plain silence each take the car out of the others' race, and the race still ends;
@@ -57,11 +60,22 @@ const player = (id: string, name = id, model: MultiPlayer["model"] = "gt"): Mult
   check(!!back && back.s === 7 && back.b === true && Math.abs(back.x - car.pos.x) < 0.06 && back.f === null && back.d === false && back.t === 12.35, "a snapshot does not survive the wire");
   check(parseSnap({ ...snap, x: Number.NaN }) === null && parseSnap({ ...snap, hp: "x" }) === null && parseSnap({ ...snap, f: "soon" }) === null && parseSnap({ ...snap, t: "now" }) === null, "a snapshot with a bad number is accepted");
   check(parseSnap({ ...snap, x: 1e12 })?.x === 1e5, "a huge coordinate is not clamped");
-  const start = { type: "start", game: "g1234", mode: "desert", seed: 99, startIn: 6, players: [player("aaaa1111"), player("bbbb2222"), player("aaaa1111"), { id: "x" }] };
+  const start = { type: "start", game: "g1234", mode: "desert", seed: 99, host: "bbbb2222", players: [player("aaaa1111"), player("bbbb2222"), player("aaaa1111"), { id: "x" }] };
   const ps = parseMsg(start);
   check(ps?.type === "start" && ps.players.length === 2, "a start message keeps duplicates or junk players");
+  check(ps?.type === "start" && ps.host === "bbbb2222", "the host named in a start message is not kept");
+  const hostOf = (host: unknown) => { const m = parseMsg({ ...start, host }); return m?.type === "start" ? m.host : null; };
+  check(hostOf("cccc3333") === "aaaa1111" && hostOf(undefined) === "aaaa1111" && hostOf(42) === "aaaa1111", "a host who is not one of the players (or none) does not fall back to the first on the grid");
+  // The start's own messages: ready, the green light (a duration), the round trip.
+  const rdy = parseMsg({ type: "ready", from: "aaaa1111" });
+  check(rdy?.type === "ready" && rdy.from === "aaaa1111" && parseMsg({ type: "ready" }) === null && parseMsg({ type: "ready", from: "a b" }) === null, "a ready message is not checked");
+  const go = (v: unknown) => { const m = parseMsg({ type: "go", from: "aaaa1111", in: v }); return m?.type === "go" ? m.in : null; };
+  check(go(4000) === 4000 && go(-9000) === -9000 && go(1e9) === 60_000 && go(-1e12) === -3_600_000 && go("soon") === null && go(Number.NaN) === null && go(undefined) === null, "a green light is not clamped / refused when odd");
+  const pg = parseMsg({ type: "ping", from: "aaaa1111", to: "bbbb2222", n: 3.7 }), pn = parseMsg({ type: "pong", from: "bbbb2222", to: "aaaa1111", n: 3 });
+  check(pg?.type === "ping" && pg.n === 3 && pg.to === "bbbb2222" && pn?.type === "pong" && pn.n === 3, "ping / pong are not understood");
+  check(parseMsg({ type: "ping", from: "aaaa1111", n: 1 }) === null && parseMsg({ type: "pong", from: "aaaa1111", to: "bbbb2222", n: -4 })?.type === "pong" && parseMsg({ type: "ping", from: "aaaa1111", to: "bbbb2222", n: "x" }) === null, "a ping without a target, or with a bad number, is accepted");
   check(parseMsg({ ...start, players: [player("aaaa1111")] }) === null, "a start with one player is accepted");
-  check(parseMsg({ ...start, mode: "moon" }) === null && parseMsg({ ...start, startIn: -1 })?.type === "start", "start message mode / delay checks");
+  check(parseMsg({ ...start, mode: "moon" }) === null, "a start message in an unknown mode is accepted");
   check(parseMsg({ ...start, players: Array.from({ length: 9 }, (_, i) => player(`pl${i}xxxx`)) })?.type === "start", "a start with too many players is refused instead of cut");
   const many = parseMsg({ ...start, players: Array.from({ length: 9 }, (_, i) => player(`pl${i}xxxx`)) });
   check(many?.type === "start" && many.players.length === NET.MAX_PLAYERS, "a start message names more than four players");
@@ -97,10 +111,10 @@ type Client = { id: string; name: string; clock: ManualClock; session: NetSessio
 function world(opts: ConstructorParameters<typeof MemoryHub>[0] = {}) {
   const hub = new MemoryHub({ random: mulberry32(7), ...opts });
   const clients: Client[] = [];
-  const add = (id: string, name = id, offset = 0): Client => {
+  const add = (id: string, name = id, offset = 0, link: { out?: number; in?: number } = {}): Client => {
     const clock = new ManualClock();
     clock.t = EPOCH + offset; // every machine's clock says something different (as real ones, a few seconds apart)
-    const session = new NetSession(hub.transport(), player(id, name), clock, mulberry32(id.length * 31 + clients.length));
+    const session = new NetSession(hub.transport(link), player(id, name), clock, mulberry32(id.length * 31 + clients.length));
     const c: Client = { id, name, clock, session, starts: [], states: [] };
     session.onStart((info) => c.starts.push(info));
     session.subscribe(() => c.states.push(session.getState()));
@@ -152,10 +166,7 @@ let roomCode = "";
   const g0 = got[0][0];
   check(got.every((s) => s[0].game === g0.game && s[0].seed === g0.seed && s[0].mode === "volcano" && JSON.stringify(s[0].players) === JSON.stringify(g0.players)), "the players were not given the same game, seed and grid");
   check(g0.players.length === 4 && new Set(g0.players.map((p) => p.id)).size === 4, "the grid is not four different players");
-  for (const x of [a, b, c, d]) {
-    const info = x.starts[0], wait = info.goAt - x.clock.t;
-    check(wait <= NET.START_IN * 1000 && wait > (NET.START_IN - 1.5) * 1000 - 1200, `${x.name}'s green light is ${wait} ms away on its own clock`);
-  }
+  check(got.every((s) => s[0].host === a.id), `the start does not name its starter as host: ${got.map((s) => s[0].host).join(",")}`);
   check(e.starts.length === 0, "the refused player was started");
   // Back to the room after the race; leaving empties it.
   a.session.raceOver();
@@ -212,21 +223,34 @@ let roomCode = "";
 }
 
 // ---------- (e) the race, over a lossy network ----------
-type Racer = { id: string; name: string; race: Race; sync: RaceSync; clock: ManualClock; truth: { t: number; x: number; y: number }[]; shown: Map<string, { t: number; x: number; y: number }[]>; truthF: { t: number; x: number; y: number }[]; shownF: Map<string, { t: number; x: number; y: number }[]> };
+type Racer = { id: string; name: string; race: Race; sync: RaceSync; clock: ManualClock; /** What the clock said when the hub's time was 0: hub time = clock − base. */ base: number; truth: { t: number; x: number; y: number }[]; shown: Map<string, { t: number; x: number; y: number }[]>; truthF: { t: number; x: number; y: number }[]; shownF: Map<string, { t: number; x: number; y: number }[]> };
 
 function multiOf(players: MultiPlayer[], localId: string): Multi {
   return { players, localId };
 }
 
-function setupRace(mode: ThemeId, ids: string[], seed: number, w: ReturnType<typeof world>, lateMs: Record<string, number> = {}) {
+type SetupOpts = {
+  /** Every game says it is ready at once (the default); false: the test says so when it wants. */
+  ready?: boolean;
+  /** Extra delay (ms) on each player's line, one way out and one way in. */
+  links?: Record<string, { out?: number; in?: number }>;
+  /** Who started the game (the first by default). */
+  host?: string;
+  /** Players of the game whose machine never joined it (they never got the start message): no sync is made for them. */
+  absent?: string[];
+};
+
+function setupRace(mode: ThemeId, ids: string[], seed: number, w: ReturnType<typeof world>, opts: SetupOpts = {}) {
   const players = ids.map((id) => player(id, id.slice(0, 4).toUpperCase(), id.startsWith("jet") ? "jet" : "gt"));
-  const racers: Racer[] = ids.map((id, i) => {
+  const racers: Racer[] = ids.flatMap((id, i) => {
+    if (opts.absent?.includes(id)) return [];
     const clock = new ManualClock();
     clock.t = EPOCH + i * 13_337 - 20_000; // different clocks again
-    const info: StartInfo = { game: "testgame1", mode, seed, players, goAt: clock.t + 6000 + (lateMs[id] ?? 0) * 0 };
-    const sync = new RaceSync(w.hub.transport(), players[i], info, clock);
+    const info: StartInfo = { game: "testgame1", mode, seed, players, host: opts.host ?? ids[0] };
+    const sync = new RaceSync(w.hub.transport(opts.links?.[id]), players[i], info, clock);
+    if (opts.ready !== false) sync.setReady();
     const race = createRace(mode, { model: players[i].model, skin: "factory", level: 1 }, seed, multiOf(players, id));
-    return { id, name: players[i].name, race, sync, clock, truth: [], shown: new Map(), truthF: [], shownF: new Map() };
+    return [{ id, name: players[i].name, race, sync, clock, base: clock.t - w.hub.now, truth: [], shown: new Map(), truthF: [], shownF: new Map() }];
   });
   return { players, racers };
 }
@@ -267,6 +291,240 @@ function runRace(w: ReturnType<typeof world>, racers: Racer[], seconds: number, 
       }
     }
     w.hub.advance(stepMs);
+  }
+}
+
+// ---------- (e0) the start: one green light for everybody ----------
+/** Runs the hub and the racers' clocks together (in 10 ms steps) up to hub time `untilMs`; each racer says it is ready at its time in `readyAt`. */
+function startRun(w: ReturnType<typeof world>, racers: Racer[], readyAt: Record<string, number>, untilMs: number, each?: (hubMs: number) => void) {
+  while (w.hub.now < untilMs) {
+    for (const r of racers) {
+      if (readyAt[r.id] !== undefined && w.hub.now >= readyAt[r.id]) r.sync.setReady();
+      r.clock.advance(10);
+    }
+    w.hub.advance(10);
+    each?.(w.hub.now);
+  }
+}
+/** When (hub time, ms) a racer's green light falls — its own clock minus what that clock was at hub time 0 — or null while it has none. */
+const greenOf = (r: Racer): number | null => (r.sync.goAt === null ? null : r.sync.goAt - r.base);
+const spreadOf = (xs: number[]) => Math.max(...xs) - Math.min(...xs);
+
+{
+  const ids = ["strt0001", "strt0002", "strt0003", "strt0004"];
+  // (1) A slow game holds everybody up; nobody runs before every game is ready; one green light for all, over a bad network that loses messages.
+  const spreads: number[] = [];
+  for (let seedNo = 0; seedNo < 6; seedNo++) {
+    const w = world({ latency: 60, jitter: 90, loss: 0.3, lossy: ["snap", "ready", "go", "ping", "pong"], random: mulberry32(100 + seedNo) });
+    const { racers } = setupRace("desert", ids, 5, w, { ready: false });
+    const readyAt: Record<string, number> = { strt0001: 1200, strt0002: 3400, strt0003: 9000, strt0004: 5200 };
+    let early = "", lobbyMid: { ready: number; total: number } | null = null;
+    startRun(w, racers, readyAt, 24_000, (t) => {
+      const last = Math.max(...Object.values(readyAt));
+      for (const r of racers) if (t < last && (r.sync.live() || r.sync.goAt !== null) && !early) early = `${r.name} had a green light at ${t} ms, before the last game was ready (${last})`;
+      if (t === 4000) lobbyMid = racers[0].sync.lobby();
+    });
+    check(!early, early);
+    const greens = racers.map(greenOf);
+    check(greens.every((g) => g !== null), `seed ${seedNo}: not every game was given a green light: ${greens.join(",")}`);
+    if (greens.some((g) => g === null)) continue;
+    const g = greens as number[];
+    spreads.push(spreadOf(g));
+    check(Math.min(...g) >= 9000 + NET.GO_LEAD_MS - 100 && Math.max(...g) <= 9000 + NET.GO_LEAD_MS + 4500, `seed ${seedNo}: the green light fell at ${g.map((x) => (x / 1000).toFixed(2)).join(" / ")} s, the last game being ready at 9 s`);
+    check(spreadOf(g) < 100, `seed ${seedNo}: the green lights of four games fall ${spreadOf(g).toFixed(0)} ms apart`);
+    const lm = lobbyMid as { ready: number; total: number } | null;
+    check(!!lm && lm.total === 4 && lm.ready >= 1 && lm.ready <= 3, `seed ${seedNo}: the lobby counted ${JSON.stringify(lm)} ready at 4 s (two games had said so)`);
+    check(racers.every((r) => r.sync.lobby() === null), "the lobby still counts after the green light");
+    check(racers.every((r) => r.sync.live() && r.sync.secondsToGo() < 0), `seed ${seedNo}: at 24 s the games are not all racing`);
+  }
+  spreads.sort((a, b) => a - b);
+  check(spreads.length === 6 && spreads[2] < 40, `with 30 % of the start messages lost and 60-150 ms trips, half the starts differ by more than 40 ms: ${spreads.map((x) => x.toFixed(0)).join(" ")}`);
+  console.log(`  start: four games, the slowest ready at 9 s · nobody moves before · green lights ${spreads.map((x) => x.toFixed(0)).join("/")} ms apart over 6 runs at 60-150 ms trips and 30 % messages lost`);
+
+  // (2) A player far away (a slow line both ways) does not start late: the trip is measured and taken off. A line slower one way only cannot be told from a long one: that is half its difference.
+  {
+    const mk = (links: Record<string, { out?: number; in?: number }>) => {
+      const w = world({ latency: 50, jitter: 20, loss: 0, random: mulberry32(21) });
+      const { racers } = setupRace("desert", ids, 6, w, { ready: false, links });
+      startRun(w, racers, { strt0001: 500, strt0002: 500, strt0003: 500, strt0004: 500 }, 12_000);
+      return racers.map(greenOf);
+    };
+    const far = mk({ strt0003: { out: 150, in: 150 } }), lopsided = mk({ strt0003: { out: 0, in: 120 } }), near = mk({});
+    check([far, lopsided, near].every((gs) => gs.every((x) => x !== null)), "a start with a far player did not happen");
+    const s = (gs: (number | null)[]) => spreadOf(gs as number[]);
+    check(s(near) < 25, `on a good network the green lights fall ${s(near).toFixed(0)} ms apart`);
+    check(s(far) < 40, `a player 300 ms away starts ${s(far).toFixed(0)} ms off the others (the trip should be taken off)`);
+    check(s(lopsided) < 90, `a line 120 ms slower one way starts ${s(lopsided).toFixed(0)} ms off (half of it expected)`);
+    console.log(`  start: good network ${s(near).toFixed(0)} ms apart · a player 300 ms away ${s(far).toFixed(0)} ms · a line 120 ms slower one way ${s(lopsided).toFixed(0)} ms (can't be told from a long one)`);
+  }
+
+  // (3) A game that never gets ready: the others wait for it, but not for ever; when it does come, it joins the race where it is.
+  {
+    const w = world({ latency: 50, jitter: 30, loss: 0, random: mulberry32(22) });
+    const { racers } = setupRace("desert", ids.slice(0, 3), 7, w, { ready: false });
+    startRun(w, racers, { strt0001: 1000, strt0002: 1500 }, 24_000);
+    check(racers.every((r) => r.sync.goAt === null && !r.sync.live()), "the start did not wait for a game that is not ready");
+    check(racers[0].sync.lobby()?.ready === 2 && racers[0].sync.lobby()?.total === 3, `the lobby says ${JSON.stringify(racers[0].sync.lobby())} with two games ready out of three`);
+    startRun(w, racers, { strt0001: 1000, strt0002: 1500 }, 27_000);
+    const early = racers.slice(0, 2).map(greenOf) as number[];
+    check(early.every((x) => x !== null) && Math.min(...early) >= NET.READY_MAX_MS + NET.GO_LEAD_MS - 100 && Math.max(...early) <= NET.READY_MAX_MS + NET.GO_LEAD_MS + 600, `after the wait the green light fell at ${early.map((x) => (x / 1000).toFixed(2)).join(" / ")} s`);
+    check(spreadOf(early) < 40, `the two ready games start ${spreadOf(early).toFixed(0)} ms apart`);
+    // The third finally comes, long after the green light: it is told, and its race clock is where the others' is.
+    startRun(w, racers, { strt0001: 1000, strt0002: 1500, strt0003: 40_000 }, 42_000);
+    const all = racers.map(greenOf) as number[];
+    check(all.every((x) => x !== null) && spreadOf(all) < 40, `the late game's green light is ${all.map((x) => (x / 1000).toFixed(2)).join(" / ")} s, not the others'`);
+    const late = racers[2];
+    check(late.sync.live(), "the late game is not racing");
+    late.sync.startClock(late.race);
+    check(late.race.phase === "racing" && Math.abs(late.race.time - (42_000 - all[0]) / 1000) < 0.06, `the late game's race clock reads ${late.race.time.toFixed(2)} s, the others' ${((42_000 - all[0]) / 1000).toFixed(2)} s`);
+    console.log("  start: a game that is not ready holds the others for 25 s at most; when it comes it is told, and joins on the shared clock");
+  }
+
+  // (4) The host is gone (closed its tab before the start): the next player gives the green light at once, without waiting for it.
+  {
+    const w = world({ latency: 50, jitter: 30, loss: 0, random: mulberry32(23) });
+    const { racers } = setupRace("desert", ids.slice(0, 3), 8, w, { ready: false });
+    startRun(w, racers, { strt0002: 1500, strt0003: 2500 }, 9000, (t) => {
+      if (t === 800) racers[0].sync.leave();
+    });
+    const gs = racers.slice(1).map(greenOf);
+    check(gs.every((x) => x !== null), "with the host gone, nobody gave the green light");
+    if (gs.every((x) => x !== null)) check(Math.max(...(gs as number[])) < 9000 && spreadOf(gs as number[]) < 40, `with the host gone the green light fell at ${gs.map((x) => ((x ?? 0) / 1000).toFixed(2)).join(" / ")} s`);
+    // Stuck rather than gone (present, never ready): passed over once the wait and its grace are over.
+    const w2 = world({ latency: 50, jitter: 30, loss: 0, random: mulberry32(24) });
+    const t2 = setupRace("desert", ids.slice(0, 3), 9, w2, { ready: false });
+    startRun(w2, t2.racers, { strt0002: 1000, strt0003: 1000 }, 27_500);
+    check(t2.racers.every((r) => r.sync.goAt === null), "the host was passed over before the wait was over");
+    startRun(w2, t2.racers, { strt0002: 1000, strt0003: 1000 }, 33_000);
+    const g2 = t2.racers.slice(1).map(greenOf) as number[];
+    check(g2.every((x) => x !== null) && Math.min(...g2) >= NET.READY_MAX_MS + NET.HOST_GRACE_MS + NET.GO_LEAD_MS - 100 && Math.max(...g2) <= NET.READY_MAX_MS + NET.HOST_GRACE_MS + NET.GO_LEAD_MS + 600, `a stuck host was replaced at ${g2.map((x) => (x / 1000).toFixed(2)).join(" / ")} s`);
+    startRun(w2, t2.racers, { strt0002: 1000, strt0003: 1000, strt0001: 35_000 }, 37_000);
+    const g3 = t2.racers.map(greenOf) as number[];
+    check(g3.every((x) => x !== null) && spreadOf(g3) < 100, `the stuck host, when it came back, was given a different green light: ${g3.map((x) => (x / 1000).toFixed(2)).join(" / ")} s`);
+    console.log("  start: a host that is gone is replaced at once, one that is stuck after the wait; the stuck one joins the same race when it comes back");
+  }
+
+  // (4b) A player who never came to the game (it never got the start message): waited for a short while, not for the whole 25 s.
+  {
+    const w = world({ latency: 50, jitter: 30, loss: 0, random: mulberry32(28) });
+    const { racers } = setupRace("desert", ids.slice(0, 3), 12, w, { ready: false, absent: ["strt0003"] });
+    startRun(w, racers, { strt0001: 1000, strt0002: 1500 }, 9500);
+    check(racers.every((r) => r.sync.goAt === null), "the start did not wait for a player who might still be on its way");
+    startRun(w, racers, { strt0001: 1000, strt0002: 1500 }, 16_000);
+    const gs = racers.map(greenOf) as number[];
+    check(gs.every((x) => x !== null) && Math.min(...gs) >= NET.JOIN_MAX_MS + NET.GO_LEAD_MS - 100 && Math.max(...gs) <= NET.JOIN_MAX_MS + NET.GO_LEAD_MS + 600 && spreadOf(gs) < 40, `with a player who never came, the green light fell at ${gs.map((x) => (x / 1000).toFixed(2)).join(" / ")} s (expected ≈ ${(NET.JOIN_MAX_MS + NET.GO_LEAD_MS) / 1000})`);
+  }
+
+  // (4c) A stuck host that comes back ready just after the next player took over, on a line that delivers late: it listens first, it does not start a second race.
+  {
+    const w = world({ latency: 50, jitter: 30, loss: 0, random: mulberry32(29) });
+    const { racers } = setupRace("desert", ids.slice(0, 3), 13, w, { ready: false, links: { strt0001: { out: 800, in: 800 } } });
+    startRun(w, racers, { strt0002: 1000, strt0003: 1000, strt0001: 28_500 }, 36_000);
+    const g = racers.map(greenOf) as number[];
+    // It takes the others' green light (a second late at worst: it only heard it as the countdown began), never its own, which would fall ≥ 1.5 s + 4 s after it was ready.
+    check(g.every((x) => x !== null) && Math.abs(g[0] - g[1]) < 1000 && Math.abs(g[1] - g[2]) < 40 && g[0] < 28_500 + NET.LISTEN_MS + NET.GO_LEAD_MS - 500, `a host back just after the takeover started its own race: ${g.map((x) => (x / 1000).toFixed(2)).join(" / ")} s`);
+  }
+
+  // (5) The host is the slow one: the others wait, then everybody goes together.
+  {
+    const w = world({ latency: 50, jitter: 30, loss: 0, random: mulberry32(25) });
+    const { racers } = setupRace("desert", ids, 10, w, { ready: false });
+    startRun(w, racers, { strt0001: 12_000, strt0002: 800, strt0003: 800, strt0004: 800 }, 20_000);
+    const gs = racers.map(greenOf) as number[];
+    check(gs.every((x) => x !== null) && Math.min(...gs) >= 12_000 + NET.GO_LEAD_MS - 100 && Math.max(...gs) <= 12_000 + NET.GO_LEAD_MS + 300 && spreadOf(gs) < 40, `a slow host: green lights at ${gs.map((x) => (x / 1000).toFixed(2)).join(" / ")} s`);
+  }
+
+  // (6) End to end, through the session: a room of four with clocks seconds apart, the starter is the host, each game ready after its own loading time.
+  {
+    const w = world({ latency: 60, jitter: 60, loss: 0.2, lossy: ["snap", "start", "ready", "go", "ping", "pong"], random: mulberry32(26) });
+    const c = [w.add("room0001", "A", 0), w.add("room0002", "B", 7777, { out: 40, in: 40 }), w.add("room0003", "C", -4000), w.add("room0004", "D", 123, { out: 80, in: 80 })];
+    c[0].session.createRoom("volcano");
+    w.tick(300);
+    const code = c[0].session.getState().code ?? "";
+    for (const x of c.slice(1)) {
+      x.session.joinRoom(code);
+      w.tick(300);
+    }
+    check(c[0].session.startRoom(), "the room could not be started");
+    const syncs = new Map<string, RaceSync>(), readyAt = new Map<string, number>();
+    const loading: Record<string, number> = { room0001: 800, room0002: 2500, room0003: 6000, room0004: 1500 };
+    const hubGreen = (x: Client) => { const g = syncs.get(x.id)?.goAt; return g == null ? null : g - (x.clock.t - w.hub.now); };
+    let sentBefore = w.hub.stats.sent + w.hub.stats.delivered;
+    const startedAt = w.hub.now;
+    let peak = 0, worstEarly = "";
+    for (let step = 0; step < 2500; step++) {
+      for (const x of c) {
+        if (x.starts.length && !syncs.has(x.id)) {
+          const sy = x.session.beginRace(x.starts[0]);
+          syncs.set(x.id, sy);
+          readyAt.set(x.id, w.hub.now + loading[x.id]);
+        }
+        const sy = syncs.get(x.id);
+        if (sy && w.hub.now >= (readyAt.get(x.id) ?? Infinity)) sy.setReady();
+      }
+      w.tick(10);
+      if ((step + 1) % 100 === 0) {
+        const total = w.hub.stats.sent + w.hub.stats.delivered;
+        peak = Math.max(peak, total - sentBefore);
+        sentBefore = total;
+      }
+      const lastReady = readyAt.size === 4 ? Math.max(...readyAt.values()) : Infinity;
+      for (const x of c) if (hubGreen(x) !== null && w.hub.now < lastReady && !worstEarly) worstEarly = `${x.name} had a green light at ${w.hub.now}, before the last game was ready (${lastReady})`;
+    }
+    check(!worstEarly, worstEarly);
+    check(c.every((x) => x.starts.length === 1 && x.starts[0].host === "room0001"), "the room's starter is not named host in everybody's start");
+    const gs = c.map(hubGreen);
+    check(gs.every((x) => x !== null), `through the session, not every game was given a green light: ${gs.join(",")}`);
+    if (gs.every((x) => x !== null)) {
+      const g = gs as number[], last = Math.max(...readyAt.values());
+      check(spreadOf(g) < 100 && Math.min(...g) >= last + NET.GO_LEAD_MS - 100, `through the session the green lights fall at ${g.map((x) => ((x - startedAt) / 1000).toFixed(2)).join(" / ")} s (${spreadOf(g).toFixed(0)} ms apart), the last game being ready at ${((last - startedAt) / 1000).toFixed(2)} s`);
+      console.log(`  start: a room of four through the session (clocks seconds apart, 20 % of messages lost, loading times 0.8-6 s) · green lights ${spreadOf(g).toFixed(0)} ms apart, ${(Math.min(...g) - last).toFixed(0)} ms after the last game was ready`);
+    }
+    void peak;
+  }
+
+  // (8) A game that was frozen (busy loading) does not trust what it handles right after: the green lights that piled up in its queue say nothing
+  // of when they arrived. It takes none of them, says "ready" when it is, and takes the fresh one it is answered with.
+  {
+    const w = world({ latency: 20, jitter: 0, loss: 0, random: mulberry32(30) });
+    const { racers } = setupRace("desert", ids.slice(0, 2), 14, w, { ready: false });
+    const [host, guest] = racers;
+    type Inner = { onMessage(m: unknown): void; lastStep: number };
+    const inner = guest.sync as unknown as Inner;
+    inner.lastStep = guest.clock.now() - 20_000; // its timer has not run for 20 s
+    inner.onMessage({ type: "go", from: host.id, in: 3000 });
+    check(guest.sync.goAt === null, "a green light handled right after a freeze was used");
+    guest.clock.advance(100);
+    inner.onMessage({ type: "go", from: host.id, in: 3000 });
+    check(guest.sync.goAt !== null, "a green light handled with the timer running was not used");
+    // Not ready when the host gave up waiting at 25 s, but healthy and told: it forgets that light when it becomes ready, and takes the host's answer.
+    const w2 = world({ latency: 20, jitter: 0, loss: 0, random: mulberry32(31) });
+    const t2 = setupRace("desert", ids.slice(0, 2), 15, w2, { ready: false });
+    startRun(w2, t2.racers, { strt0001: 500 }, 30_000);
+    const [h2, g2] = t2.racers;
+    check(g2.sync.goAt !== null && h2.sync.goAt !== null, "the host did not give the green light after the wait");
+    g2.sync.setReady();
+    check(g2.sync.goAt === null, "a game that becomes ready keeps a green light it heard before");
+    startRun(w2, t2.racers, { strt0001: 500, strt0002: 30_000 }, 31_000);
+    const fresh = greenOf(g2), hostGreen = greenOf(h2);
+    check(fresh !== null && hostGreen !== null && Math.abs(fresh - hostGreen) < 40, `after becoming ready the game's green light is ${fresh} ms, the host's ${hostGreen}`);
+    console.log("  start: a green light handled after a freeze is not trusted; a game that becomes ready asks again and takes the fresh one");
+  }
+
+  // (7) What the start costs the hosted service: a room of four counts messages sent plus delivered (about 100 a second is the free allowance).
+  {
+    const w = world({ latency: 40, jitter: 10, loss: 0, random: mulberry32(27) });
+    const { racers } = setupRace("desert", ids, 11, w, { ready: false });
+    let prev = 0, peak = 0;
+    startRun(w, racers, { strt0001: 800, strt0002: 1500, strt0003: 4000, strt0004: 2500 }, 12_000, (t) => {
+      if (t % 1000 === 0) {
+        const total = w.hub.stats.sent + w.hub.stats.delivered;
+        peak = Math.max(peak, total - prev);
+        prev = total;
+      }
+    });
+    check(peak <= 100, `the start of a room of four counts ${peak} messages in one second (about 100 a second is the free allowance)`);
+    console.log(`  start: ≤ ${peak} messages in the busiest second of a room of four's start (ready, go, trips measured)`);
   }
 }
 
