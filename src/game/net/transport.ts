@@ -191,8 +191,10 @@ export type HubOptions = {
   /** One-way delay (ms) of a message, and its random extra (0..jitter). */
   latency: number;
   jitter: number;
-  /** Share of messages lost (0..1): snapshots only; presence and start messages are never lost, as on a real connection that retries them. */
+  /** Share of messages lost (0..1): snapshots only unless `lossy` says more; presence and start messages are never lost, as on a real connection that retries them. */
   loss: number;
+  /** The kinds of message `loss` applies to. */
+  lossy: readonly string[];
   /** A seeded random source (tests replay). */
   random: () => number;
 };
@@ -208,10 +210,10 @@ export class MemoryHub {
   stats = { sent: 0, lost: 0, delivered: 0 };
   private seq = 0;
   private queue: { at: number; n: number; run: () => void }[] = [];
-  private rooms = new Map<string, Map<Channel, { meta: Member; h: ChannelHandlers }>>();
+  private rooms = new Map<string, Map<Channel, { meta: Member; h: ChannelHandlers; link: { out?: number; in?: number }; lastPresence: number }>>();
 
   constructor(opts: Partial<HubOptions> = {}) {
-    this.opts = { latency: 40, jitter: 20, loss: 0, random: Math.random, ...opts };
+    this.opts = { latency: 40, jitter: 20, loss: 0, lossy: ["snap"], random: Math.random, ...opts };
   }
 
   private later(delay: number, run: () => void) {
@@ -238,17 +240,25 @@ export class MemoryHub {
     this.now = end;
   }
 
+  private presenceSeq = 0;
   private presence(room: string) {
     const members = this.rooms.get(room);
     if (!members) return;
     const metas = [...members.values()].map((m) => m.meta);
+    const n = ++this.presenceSeq;
     for (const [, m] of members) {
       const copy = metas.map((x) => ({ ...x }));
-      this.later(this.delay(), () => m.h.onPresence(copy));
+      // As the real service does, a list that arrives after a newer one is dropped (presence is a state, not a stream).
+      this.later(this.delay(), () => {
+        if (n < m.lastPresence) return;
+        m.lastPresence = n;
+        m.h.onPresence(copy);
+      });
     }
   }
 
-  transport(): Transport {
+  /** A connection to the hub. `link` adds delay (ms) to what this machine sends (`out`) and to what it receives (`in`): a player far away, or one whose line is slower one way. */
+  transport(link: { out?: number; in?: number } = {}): Transport {
     return {
       join: (name, meta, h) => {
         let members = this.rooms.get(name);
@@ -257,15 +267,15 @@ export class MemoryHub {
         const ch: Channel = {
           send: (msg) => {
             this.stats.sent++;
-            const snap = msg.type === "snap";
+            const lossy = this.opts.lossy.includes(msg.type);
             for (const [other, m] of room) {
               if (other === ch) continue;
-              if (snap && this.opts.random() < this.opts.loss) {
+              if (lossy && this.opts.random() < this.opts.loss) {
                 this.stats.lost++;
                 continue;
               }
               const copy = JSON.parse(JSON.stringify(msg)) as unknown;
-              this.later(this.delay(), () => {
+              this.later(this.delay() + (link.out ?? 0) + (m.link.in ?? 0), () => {
                 if (!room.has(other)) return; // left meanwhile
                 this.stats.delivered++;
                 m.h.onMessage(copy);
@@ -282,7 +292,7 @@ export class MemoryHub {
             this.presence(name);
           },
         };
-        room.set(ch, { meta: { ...meta }, h });
+        room.set(ch, { meta: { ...meta }, h, link, lastPresence: 0 });
         this.later(this.delay(), () => h.onStatus("joined"));
         this.presence(name);
         return ch;

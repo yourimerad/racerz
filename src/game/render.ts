@@ -159,7 +159,7 @@ function drawMinimap(ctx: CanvasRenderingContext2D, race: Race, w: number): numb
   return oy + 8 + (b.maxY - b.minY) * s;
 }
 
-function drawHud(ctx: CanvasRenderingContext2D, race: Race, w: number, h: number) {
+function drawHud(ctx: CanvasRenderingContext2D, race: Race, w: number, h: number, countdown = true) {
   const player = race.cars[0];
   const order = standings(race);
   const pos = order.indexOf(player) + 1;
@@ -196,7 +196,7 @@ function drawHud(ctx: CanvasRenderingContext2D, race: Race, w: number, h: number
   ctx.strokeText("km/h", w - 22, h - 26);
   ctx.fillText("km/h", w - 22, h - 26);
 
-  if (race.phase === "countdown" || (race.time >= 0 && race.time < 0.8)) {
+  if (countdown && (race.phase === "countdown" || (race.time >= 0 && race.time < 0.8))) {
     const n = Math.ceil(-race.time);
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
@@ -313,6 +313,8 @@ export function render(ctx: CanvasRenderingContext2D, race: Race, w: number, h: 
 
 /** What the online mode adds to the HUD (the game passes it each frame; solo passes nothing). */
 export type OnlineHud = {
+  /** The green light has not been given yet: how many of the players are ready (their race built, their 3D up). Null once it has. */
+  lobby: { ready: number; total: number } | null;
   /** Seconds to the shared green light while the race has not begun running yet (> 3), else null. */
   startsIn: number | null;
   /** Names of the opponents still racing after the local player has finished. */
@@ -357,7 +359,13 @@ function drawOnline(ctx: CanvasRenderingContext2D, online: OnlineHud, w: number,
   ctx.lineWidth = 5;
   ctx.strokeStyle = "rgba(0,0,0,0.6)";
   ctx.fillStyle = "#fff";
-  if (online.startsIn !== null) {
+  if (online.lobby) {
+    // Nobody starts until every player is ready: the same green light for all.
+    ctx.font = "800 26px system-ui, sans-serif";
+    const text = `En attente des autres pilotes… ${online.lobby.ready}/${online.lobby.total} prêts`;
+    ctx.strokeText(text, w / 2, h / 2 - 80);
+    ctx.fillText(text, w / 2, h / 2 - 80);
+  } else if (online.startsIn !== null) {
     ctx.font = "800 26px system-ui, sans-serif";
     const text = `Départ avec les autres pilotes… ${Math.max(0, Math.ceil(online.startsIn - 3))}`;
     ctx.strokeText(text, w / 2, h / 2 - 80);
@@ -375,7 +383,8 @@ function drawOnline(ctx: CanvasRenderingContext2D, online: OnlineHud, w: number,
 function drawOverlay(ctx: CanvasRenderingContext2D, race: Race, w: number, h: number, online?: OnlineHud) {
   const player = race.cars[0];
   const mapBottom = drawMinimap(ctx, race, w);
-  drawHud(ctx, race, w, h);
+  // Online, the big 3-2-1 waits for the shared countdown (until then the race has not started running, the number would just sit there).
+  drawHud(ctx, race, w, h, !online || (!online.lobby && online.startsIn === null));
   if (race.cars.some((c) => c.remote)) drawLeaderboard(ctx, race, 190);
   if (online) drawOnline(ctx, online, w, h);
   race.boost.drawHud(ctx, player, w, h);

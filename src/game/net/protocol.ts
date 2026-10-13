@@ -16,8 +16,26 @@ export const NET = {
   EXTRAP_MAX: 0.3,
   MIN_PLAYERS: 2,
   MAX_PLAYERS: 4,
-  /** The green light comes this many seconds after the start message arrives (time for every game to build its 3D). */
-  START_IN: 6,
+  /** Once every game is ready (its race built, its 3D prepared) the host sets the green light this far ahead (ms): the 3 s countdown plus room for a slow message. */
+  GO_LEAD_MS: 4000,
+  /** The start waits for the slowest game at most this long (ms, from the start message): a game that never gets ready is left behind and joins the race where it is. */
+  READY_MAX_MS: 25_000,
+  /** After that, a host that has not even said it is ready is passed over: the next player on the list gives the green light. */
+  HOST_GRACE_MS: 3000,
+  /** A game that is ready says so again this often (ms) until it hears the green light (a message lost, or said before the others had joined). */
+  READY_REPEAT_MS: 1000,
+  /** The green light is said again this often (ms) for GO_REPEATS times, and to anyone who says "ready" after it. */
+  GO_REPEAT_MS: 250,
+  GO_REPEATS: 8,
+  /** A game that is waiting measures the round trip to the host: this often (ms) for the first PING_SAMPLES, then a third as often, keeping the shortest of the last twelve. Kept light: every message is also delivered to each of the others. */
+  PING_EVERY_MS: 500,
+  PING_SAMPLES: 4,
+  /** A player that has not joined the race channel at all (nor been heard) this long (ms) after the start never got the message: it is not waited for. */
+  JOIN_MAX_MS: 10_000,
+  /** A host that comes back ready after the wait is over first listens this long (ms): the next player may already have given the green light. */
+  LISTEN_MS: 1500,
+  /** A player gone from the race channel's presence this long (ms), and not heard from in that time, is out of the start (a blink of the list is not). */
+  ABSENT_MS: 4000,
   /** Quick match: the longest-waiting player starts the game with whoever is there once they have waited this long (ms), or at once with a full table. */
   QUEUE_WAIT_MS: 7000,
   /** An opponent we have heard nothing from for this long (ms) during a race has left. */
@@ -58,14 +76,24 @@ export type StartMsg = {
   mode: ThemeId;
   /** Shared seed: the track's hazards play out from the same dice in every game. */
   seed: number;
-  /** Seconds from receiving this message to the green light. */
-  startIn: number;
+  /** Who started the game: it gives the green light once everybody is ready (see `RaceSync`). Always one of the players. */
+  host: string;
   /** The grid, in order (the order fixes everyone's starting slot): the same list for everybody. */
   players: MultiPlayer[];
 };
 export type SnapMsg = { type: "snap"; from: string; snap: Snap };
 export type ByeMsg = { type: "bye"; from: string };
-export type Msg = StartMsg | SnapMsg | ByeMsg;
+/** "My game is built and my 3D is up": said by every player on the race channel, again and again until the green light is heard. */
+export type ReadyMsg = { type: "ready"; from: string };
+/**
+ * The green light, as a duration so that no clock is compared with another: `in` ms after the sender sent this (negative: it came that long
+ * ago, the race is already running). The receiver puts it on its own clock from when the message arrived, less the trip (see `RaceSync`).
+ */
+export type GoMsg = { type: "go"; from: string; in: number };
+/** A round trip to measure how long a message takes between two games: `ping` goes to `to`, who answers `pong` with the same number. */
+export type PingMsg = { type: "ping"; from: string; to: string; n: number };
+export type PongMsg = { type: "pong"; from: string; to: string; n: number };
+export type Msg = StartMsg | SnapMsg | ByeMsg | ReadyMsg | GoMsg | PingMsg | PongMsg;
 
 /**
  * Snapshots per second for a race of `players`: every message is also delivered to each of the others, so the load grows with the square of the
@@ -117,6 +145,10 @@ export function parseSnap(raw: unknown): Snap | null {
   return { s, x, y, vx, vy, a, z, hp, lap: Math.floor(lap), p, f, t, d: o.d === true, b: o.b === true };
 }
 
+/** How far from now a green light may be (ms): a minute ahead, or up to an hour ago for a game that joins a race already under way. */
+const MAX_AHEAD_MS = 60_000;
+const MAX_AGO_MS = 3_600_000;
+
 /** What arrives from the wire, as a message we understand — or null. Never throws. */
 export function parseMsg(raw: unknown): Msg | null {
   if (!raw || typeof raw !== "object") return null;
@@ -129,16 +161,31 @@ export function parseMsg(raw: unknown): Msg | null {
     const from = cleanId(o.from);
     return from ? { type: "bye", from } : null;
   }
+  if (o.type === "ready") {
+    const from = cleanId(o.from);
+    return from ? { type: "ready", from } : null;
+  }
+  if (o.type === "go") {
+    const from = cleanId(o.from), at = num(o.in, -MAX_AGO_MS, MAX_AHEAD_MS);
+    return from && at !== null ? { type: "go", from, in: at } : null;
+  }
+  if (o.type === "ping" || o.type === "pong") {
+    const from = cleanId(o.from), to = cleanId(o.to), n = num(o.n, 0, 1e9);
+    return from && to && n !== null ? { type: o.type, from, to, n: Math.floor(n) } : null;
+  }
   if (o.type === "start") {
-    const game = cleanId(o.game), seed = num(o.seed, 0, 2 ** 32 - 1), startIn = num(o.startIn, 0, 30);
-    if (!game || seed === null || startIn === null || !isThemeId(o.mode) || !Array.isArray(o.players)) return null;
+    const game = cleanId(o.game), seed = num(o.seed, 0, 2 ** 32 - 1);
+    if (!game || seed === null || !isThemeId(o.mode) || !Array.isArray(o.players)) return null;
     const players: MultiPlayer[] = [];
     for (const raw of o.players.slice(0, NET.MAX_PLAYERS)) {
       const p = parsePlayer(raw);
       if (p && !players.some((q) => q.id === p.id)) players.push(p);
     }
     if (players.length < NET.MIN_PLAYERS) return null;
-    return { type: "start", game, mode: o.mode, seed: Math.floor(seed), startIn, players };
+    // The host is one of the players; a message that names someone else (or nobody) falls back to the first on the grid.
+    const named = cleanId(o.host);
+    const host = named && players.some((p) => p.id === named) ? named : players[0].id;
+    return { type: "start", game, mode: o.mode, seed: Math.floor(seed), host, players };
   }
   return null;
 }

@@ -36,6 +36,7 @@ jeu, les mêmes 4 environnements, les mêmes gains.
 - Il utilise **Supabase Realtime** (diffusion + présence : aucune table, **aucun SQL à rejouer**) avec les mêmes deux
   variables `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` que les comptes. Sans elles, le bouton explique
   que le mode en ligne n'est pas activé. Le plan gratuit limite le débit (≈ 100 messages par seconde pour tout le projet, soit une seule course à quatre à la fois) : chaque joueur envoie 15 instantanés par seconde à deux, 10 à trois, 6 à quatre ; le plan Pro porte la limite à 500.
+- **Départ commun** : personne ne part avant que tous les pilotes soient prêts (course construite, 3D chargée : l'écran affiche « En attente des autres pilotes… 2/4 prêts »), puis l'hôte donne **un seul feu vert** à tout le monde. Il est envoyé comme une durée (« dans 4 s »), corrigée du temps de trajet mesuré, donc il ne dépend ni de l'heure des machines ni de leur vitesse de chargement : écart de quelques centièmes de seconde entre les départs. Un pilote trop lent n'est attendu que 25 s ; s'il arrive après, il rejoint la course là où elle en est. Hôte parti ou bloqué : le pilote suivant donne le feu vert.
 - Pour l'essayer sans serveur : ouvrir deux onglets d'un même navigateur sur `/?net=local` (les onglets se parlent par
   `BroadcastChannel`).
 - Limites : pas d'anti-triche (chaque jeu simule sa propre voiture et croit les autres), les dangers (ours, yéti, bombes

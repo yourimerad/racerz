@@ -68,6 +68,8 @@ export default function Game() {
   const glHostRef = useRef<HTMLDivElement>(null);
   const r3dRef = useRef<Renderer3D | null>(null);
   const r3dStatus = useRef<"loading" | "ready" | "failed">("loading");
+  // An online race: the link with the other players (null in a solo race), and whether this race is one.
+  const syncRef = useRef<RaceSync | null>(null);
   // Each new race is prepared (scene built, every shader compiled, one full frame drawn) before its countdown, never in the middle of it.
   const prepToken = useRef(0);
   const prepare3d = useCallback((race: Race) => {
@@ -76,13 +78,14 @@ export default function Game() {
     r3dStatus.current = "loading";
     const token = ++prepToken.current;
     void r.prepare(race).catch(() => undefined).finally(() => {
-      if (token === prepToken.current && r3dRef.current === r) r3dStatus.current = "ready";
+      if (token === prepToken.current && r3dRef.current === r) {
+        r3dStatus.current = "ready";
+        syncRef.current?.setReady(); // online: this game is ready to start (the host waits for every player)
+      }
     });
   }, []);
   const [notice3d, setNotice3d] = useState<string | null>(null);
   const raceRef = useRef<Race | null>(null);
-  // An online race: the link with the other players (null in a solo race), and whether this race is one.
-  const syncRef = useRef<RaceSync | null>(null);
   const [online, setOnline] = useState(false);
   const inputRef = useRef<Input>({ ...NO_INPUT });
   const [screen, setScreen] = useState<"menu" | "race" | "results">("menu");
@@ -284,6 +287,7 @@ export default function Game() {
       acc += Math.min(0.1, (now - last) / 1000);
       last = now;
       const sync = syncRef.current;
+      sync?.setReady(); // (already said when the 3D came up; a no-op then) every player has to be ready before the host gives the green light
       if (sync && !sync.live()) acc = 0; // an online race waits for the shared start, then runs on the clock every player shares
       else {
         sync?.startClock(race);
@@ -295,7 +299,7 @@ export default function Game() {
         sync?.sendSnapshot(race);
       }
       const onlineHud: OnlineHud | undefined = sync
-        ? { startsIn: sync.live() ? null : sync.secondsToGo(), waiting: race.phase === "finished" ? sync.waitingFor(race) : [] }
+        ? { lobby: sync.lobby(), startsIn: sync.live() || sync.goAt === null ? null : sync.secondsToGo(), waiting: race.phase === "finished" ? sync.waitingFor(race) : [] }
         : undefined;
       const r3 = r3dRef.current;
       if (r3) {
@@ -384,6 +388,7 @@ export default function Game() {
       if (cancelled) return;
       r3dStatus.current = "failed"; // the 2D drawing takes over
       setNotice3d(msg);
+      syncRef.current?.setReady(); // no 3D to wait for: online, this game is ready as it is
     };
     import("@/game/render3d")
       .then((m) => {
@@ -401,7 +406,10 @@ export default function Game() {
         }
         const token = ++prepToken.current;
         void r.prepare(waiting).catch(() => undefined).finally(() => {
-          if (!cancelled && token === prepToken.current && r3dRef.current === r) r3dStatus.current = "ready";
+          if (!cancelled && token === prepToken.current && r3dRef.current === r) {
+            r3dStatus.current = "ready";
+            syncRef.current?.setReady();
+          }
         });
       })
       .catch(() => fail("La 3D n'a pas pu se charger : le jeu s'affiche en 2D."));
